@@ -1,0 +1,40 @@
+# AI Chip Power Monitoring API - External Prometheus Setup
+# Host network mode as requested
+
+version: '3.8'
+
+services:
+  # FastAPI Application (External Prometheus)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: 3.12
+    container_name: power-monitor-api
+    network_mode: "host"
+    env_file:
+      - .env
+    environment:
+      # Override defaults at runtime if needed
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-https://prometheus.example.com}
+      PROMETHEUS_TIMEOUT: ${PROMETHEUS_TIMEOUT:-30}
+      API_AUTH_USERNAME: ${API_AUTH_USERNAME:-admin}
+      API_AUTH_PASSWORD: ${API_AUTH_PASSWORD:-changeme}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./app:/app/app:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+# Usage:
+# 1. Copy .env.example to .env and update PROMETHEUS_URL (and credentials if needed).
+# 2. Run: docker-compose up api
+# 3. Verify health: curl http://localhost:8000/api/v1/health -u admin:changeme
