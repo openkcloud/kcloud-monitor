@@ -27,6 +27,8 @@ COPY ./app ./app
 RUN chown -R app:app /app
 USER app
 
-# Expose port and run the application
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expose port (will be set by environment variable)
+EXPOSE ${PORT:-8000}
+
+# Run the application with environment variables
+CMD uvicorn app.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8000}
