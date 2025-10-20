@@ -1,8 +1,6 @@
 # AI Chip Power Monitoring API - External Prometheus Setup
 # Host network mode as requested
 
-version: '3.8'
-
 services:
   # FastAPI Application (External Prometheus)
   api:

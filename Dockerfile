@@ -1,12 +1,10 @@
 # Stage 1: Build stage to install dependencies
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install poetry and export requirements
-RUN pip install --no-cache-dir poetry
-COPY pyproject.toml poetry.lock* ./
-RUN poetry export -f requirements.txt --output requirements.txt --without-hashes
+# Copy requirements file
+COPY requirements.txt ./
 
 # Install dependencies to a target directory
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
