@@ -25,7 +25,7 @@ services:
     volumes:
       - ./app:/app/app:ro
     ports:
-      - "${PORT:-8000}:${PORT:-8000}"
+      - "0.0.0.0:${PORT:-8000}:${PORT:-8000}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8000}/api/v1/health"]
       interval: 30s

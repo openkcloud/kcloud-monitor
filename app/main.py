@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, status, WebSocket, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
@@ -29,6 +30,15 @@ app = FastAPI(
 # ============================================================================
 # Middleware
 # ============================================================================
+
+# CORS middleware - Allow all origins for public API access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Add metrics middleware for request tracking
 app.add_middleware(MetricsMiddleware)
