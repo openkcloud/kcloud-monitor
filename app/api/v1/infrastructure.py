@@ -11,7 +11,7 @@ This module provides endpoints for:
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from typing import Optional
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.infrastructure.nodes import (
     NodeInfo,
     NodeListResponse,
@@ -47,7 +47,6 @@ router = APIRouter()
 
 @router.get("/infrastructure/nodes",
            response_model=NodeListResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="List all nodes",
            description="Get list of all Kubernetes nodes with resource information.")
 async def list_nodes(
@@ -95,7 +94,6 @@ async def list_nodes(
 
 @router.get("/infrastructure/nodes/summary",
            response_model=NodeSummaryResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get nodes summary",
            description="Get summary statistics for all nodes.")
 async def get_nodes_summary(
@@ -129,7 +127,6 @@ async def get_nodes_summary(
 
 @router.get("/infrastructure/nodes/{node_name}",
            response_model=NodeDetailResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get node details",
            description="Get detailed information for a specific node.")
 async def get_node_detail(
@@ -190,7 +187,6 @@ async def get_node_detail(
 
 @router.get("/infrastructure/nodes/{node_name}/power",
            response_model=NodePowerResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get node power data",
            description="Get power consumption data for a specific node (Kepler-based).")
 async def get_node_power_endpoint(
@@ -236,7 +232,6 @@ async def get_node_power_endpoint(
 
 @router.get("/infrastructure/nodes/{node_name}/metrics",
            response_model=NodeMetricsResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get node metrics",
            description="Get resource usage metrics for a specific node.")
 async def get_node_metrics_endpoint(
@@ -281,7 +276,6 @@ async def get_node_metrics_endpoint(
 
 @router.get("/infrastructure/pods",
            response_model=PodListResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="List all pods",
            description="Get list of all pods with power consumption and resource information.")
 async def list_pods(
@@ -321,7 +315,6 @@ async def list_pods(
 
 @router.get("/infrastructure/pods/summary",
            response_model=PodSummaryResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get pods summary",
            description="Get summary statistics for all pods.")
 async def get_pods_summary(
@@ -353,7 +346,6 @@ async def get_pods_summary(
 
 @router.get("/infrastructure/pods/{namespace}/{pod_name}",
            response_model=PodDetailResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get pod details",
            description="Get detailed information and power data for a specific pod.")
 async def get_pod_detail(
@@ -398,7 +390,6 @@ async def get_pod_detail(
 
 @router.get("/infrastructure/pods/{namespace}/{pod_name}/power",
            response_model=PodPowerResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get pod power data",
            description="Get power consumption data for a specific pod with timeseries support.")
 async def get_pod_power(
@@ -446,7 +437,6 @@ async def get_pod_power(
 
 @router.get("/infrastructure/containers",
            response_model=ContainerListResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="List all containers",
            description="Get list of all containers with resource metrics (Kepler-based).")
 async def list_containers(
@@ -483,7 +473,6 @@ async def list_containers(
 
 @router.get("/infrastructure/containers/{container_id}",
            response_model=ContainerDetailResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get container details",
            description="Get detailed information for a specific container.")
 async def get_container_detail(
@@ -516,7 +505,6 @@ async def get_container_detail(
 
 @router.get("/infrastructure/containers/{container_id}/metrics",
            response_model=ContainerMetricsResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get container metrics",
            description="Get resource usage metrics for a specific container.")
 async def get_container_metrics(
@@ -554,7 +542,6 @@ async def get_container_metrics(
 # ============================================================================
 
 @router.get("/infrastructure/vms",
-           dependencies=[Depends(verify_credentials)],
            summary="List all VMs",
            description="Get list of all virtual machines (OpenStack-based).")
 async def list_vms(
@@ -580,7 +567,6 @@ async def list_vms(
 
 
 @router.get("/infrastructure/vms/summary",
-           dependencies=[Depends(verify_credentials)],
            summary="Get VMs summary",
            description="Get summary statistics for all virtual machines.")
 async def get_vms_summary(
@@ -602,7 +588,6 @@ async def get_vms_summary(
 
 
 @router.get("/infrastructure/vms/{vm_id}",
-           dependencies=[Depends(verify_credentials)],
            summary="Get VM details",
            description="Get detailed information for a specific virtual machine.")
 async def get_vm_detail(
@@ -622,7 +607,6 @@ async def get_vm_detail(
 
 
 @router.get("/infrastructure/vms/{vm_id}/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Get VM power data",
            description="Get power consumption data for a specific virtual machine.")
 async def get_vm_power(
@@ -646,7 +630,6 @@ async def get_vm_power(
 
 
 @router.get("/infrastructure/vms/{vm_id}/metrics",
-           dependencies=[Depends(verify_credentials)],
            summary="Get VM metrics",
            description="Get resource usage metrics for a specific virtual machine.")
 async def get_vm_metrics(

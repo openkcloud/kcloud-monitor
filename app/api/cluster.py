@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from typing import Optional
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.responses import (
     ClusterInfoResponse, PodPowerResponse, PodDetailResponse,
     ClusterTotalPowerResponse, ClusterPowerTimeSeriesResponse
@@ -13,8 +13,7 @@ from app import crud
 router = APIRouter()
 
 @router.get("/cluster/info",
-            response_model=ClusterInfoResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=ClusterInfoResponse)
 async def get_cluster_info():
     """Get cluster metadata including nodes, pods, and namespaces."""
     cache_key = "cluster_info"
@@ -27,8 +26,7 @@ async def get_cluster_info():
     return data
 
 @router.get("/power/pods",
-            response_model=PodPowerResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=PodPowerResponse)
 async def get_pod_power(params: PodQueryParams = Depends()):
     """Get power consumption data for all pods."""
     cache_key = f"pod_power_{params.namespace or 'all'}_{params.cluster or 'default'}_{params.min_power}_{params.max_power}"
@@ -41,8 +39,7 @@ async def get_pod_power(params: PodQueryParams = Depends()):
     return data
 
 @router.get("/power/pods/{namespace}/{pod_name}",
-            response_model=PodDetailResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=PodDetailResponse)
 async def get_pod_power_detail(
     namespace: str = Path(..., description="Pod namespace"),
     pod_name: str = Path(..., description="Pod name")
@@ -58,8 +55,7 @@ async def get_pod_power_detail(
     return data
 
 @router.get("/power/cluster/total",
-            response_model=ClusterTotalPowerResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=ClusterTotalPowerResponse)
 async def get_cluster_total_power(params: ClusterTotalQueryParams = Depends()):
     """Get total cluster power consumption with optional breakdown."""
     cache_key = f"cluster_total_{params.cluster or 'default'}_{params.breakdown_by}_{params.include_efficiency}"
@@ -72,8 +68,7 @@ async def get_cluster_total_power(params: ClusterTotalQueryParams = Depends()):
     return data
 
 @router.get("/power/cluster/timeseries",
-            response_model=ClusterPowerTimeSeriesResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=ClusterPowerTimeSeriesResponse)
 async def get_cluster_power_timeseries(params: ClusterTotalQueryParams = Depends()):
     """Get cluster power consumption over time with optional breakdown."""
 

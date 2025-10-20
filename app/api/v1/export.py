@@ -13,7 +13,7 @@ from typing import Optional
 from datetime import datetime
 import logging
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.queries import ExportQueryParams, GPUQueryParams
 from app.services import cache_service
 from app import crud
@@ -48,7 +48,6 @@ router = APIRouter()
 # ============================================================================
 
 @router.get("/export/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Export power data",
            description="Export power consumption data in various formats.")
 async def export_power_data(
@@ -156,7 +155,6 @@ async def export_power_data(
 # ============================================================================
 
 @router.get("/export/metrics",
-           dependencies=[Depends(verify_credentials)],
            summary="Export metrics data",
            description="Export performance metrics data in various formats.")
 async def export_metrics_data(
@@ -268,7 +266,6 @@ async def export_metrics_data(
 # ============================================================================
 
 @router.get("/export/report",
-           dependencies=[Depends(verify_credentials)],
            summary="Generate comprehensive report",
            description="Generate comprehensive reports with data aggregation and analysis.")
 async def generate_report(
@@ -404,7 +401,6 @@ async def generate_report(
 # ============================================================================
 
 @router.get("/export/formats",
-           dependencies=[Depends(verify_credentials)],
            summary="Get supported export formats",
            description="Get list of supported export formats and their capabilities.")
 async def get_export_formats():
@@ -497,7 +493,6 @@ async def get_export_formats():
 
 
 @router.get("/export/templates",
-           dependencies=[Depends(verify_credentials)],
            summary="Get report templates",
            description="Get list of available report templates.")
 async def get_report_templates():

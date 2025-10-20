@@ -1,16 +1,18 @@
-from fastapi import FastAPI, Request, status, WebSocket, Query
+from fastapi import FastAPI, Request, status, WebSocket, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from app.api.v1 import accelerators, infrastructure, hardware, clusters, monitoring, export, system
+from app.api.v1 import accelerators, infrastructure, hardware, clusters, monitoring, export, system, auth
 from app.api import system as legacy_system, power as legacy_power, cluster as legacy_cluster, gpu as legacy_gpu
 from app.models.responses import ErrorResponse, ErrorDetail
 from app.services.prometheus import PrometheusException
 from app.services.stream import power_stream_handler, metrics_stream_handler
 from app.middleware import MetricsMiddleware
+from app.auth import verify_token
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,7 +24,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Accelerator & Infrastructure Monitoring API",
-    description="Unified monitoring API for AI accelerators (GPU, NPU), infrastructure (Nodes, Pods, VMs), and hardware (IPMI)",
+    description="",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -65,36 +67,39 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # API v1 Routers (7-Domain Architecture)
 # ============================================================================
 
+# 0. Authentication - Login and token management (No auth required)
+app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
+
 # 1. Accelerators - GPU and NPU monitoring
-app.include_router(accelerators.router, prefix="/api/v1", tags=["Accelerators"])
+app.include_router(accelerators.router, prefix="/api/v1", tags=["Accelerators"], dependencies=[Depends(verify_token)])
 
 # 2. Infrastructure - Nodes, Pods, Containers, VMs
-app.include_router(infrastructure.router, prefix="/api/v1", tags=["Infrastructure"])
+app.include_router(infrastructure.router, prefix="/api/v1", tags=["Infrastructure"], dependencies=[Depends(verify_token)])
 
 # 3. Hardware - Physical hardware (IPMI)
-app.include_router(hardware.router, prefix="/api/v1", tags=["Hardware"])
+app.include_router(hardware.router, prefix="/api/v1", tags=["Hardware"], dependencies=[Depends(verify_token)])
 
 # 4. Clusters - Multi-cluster management
-app.include_router(clusters.router, prefix="/api/v1", tags=["Clusters"])
+app.include_router(clusters.router, prefix="/api/v1", tags=["Clusters"], dependencies=[Depends(verify_token)])
 
 # 5. Monitoring - Cross-domain monitoring (power, timeseries, streaming)
-app.include_router(monitoring.router, prefix="/api/v1", tags=["Monitoring"])
+app.include_router(monitoring.router, prefix="/api/v1", tags=["Monitoring"], dependencies=[Depends(verify_token)])
 
 # 6. Export - Data export and reporting
-app.include_router(export.router, prefix="/api/v1", tags=["Export"])
+app.include_router(export.router, prefix="/api/v1", tags=["Export"], dependencies=[Depends(verify_token)])
 
 # 7. System - Health, info, capabilities
-app.include_router(system.router, prefix="/api/v1", tags=["System"])
+app.include_router(system.router, prefix="/api/v1", tags=["System"], dependencies=[Depends(verify_token)])
 
 # ============================================================================
 # Legacy API Routers (Backward Compatibility - Deprecated)
 # ============================================================================
 # These will be removed in a future version. Use v1 routes instead.
 
-app.include_router(legacy_system.router, prefix="/api/v1", tags=["Legacy-System"])
-app.include_router(legacy_power.router, prefix="/api/v1", tags=["Legacy-Power"])
-app.include_router(legacy_cluster.router, prefix="/api/v1", tags=["Legacy-Cluster"])
-app.include_router(legacy_gpu.router, prefix="/api/v1", tags=["Legacy-GPU"])
+app.include_router(legacy_system.router, prefix="/api/v1", tags=["Legacy-System"], dependencies=[Depends(verify_token)])
+app.include_router(legacy_power.router, prefix="/api/v1", tags=["Legacy-Power"], dependencies=[Depends(verify_token)])
+app.include_router(legacy_cluster.router, prefix="/api/v1", tags=["Legacy-Cluster"], dependencies=[Depends(verify_token)])
+app.include_router(legacy_gpu.router, prefix="/api/v1", tags=["Legacy-GPU"], dependencies=[Depends(verify_token)])
 
 # ============================================================================
 # WebSocket Endpoints (Phase 7.3)
@@ -165,18 +170,22 @@ def read_root():
         "version": "2.0.0",
         "architecture": "7-Domain Structure",
         "docs": "/docs",
+        "authentication": {
+            "login": "POST /api/v1/auth/login",
+            "description": "Get JWT token with username and password"
+        },
         "domains": {
-            "accelerators": "/api/v1/accelerators/*",
-            "infrastructure": "/api/v1/infrastructure/*",
-            "hardware": "/api/v1/hardware/*",
-            "clusters": "/api/v1/clusters/*",
-            "monitoring": "/api/v1/monitoring/*",
-            "export": "/api/v1/export/*",
-            "system": "/api/v1/system/*"
+            "accelerators": "/api/v1/accelerators/* (requires auth)",
+            "infrastructure": "/api/v1/infrastructure/* (requires auth)",
+            "hardware": "/api/v1/hardware/* (requires auth)",
+            "clusters": "/api/v1/clusters/* (requires auth)",
+            "monitoring": "/api/v1/monitoring/* (requires auth)",
+            "export": "/api/v1/export/* (requires auth)",
+            "system": "/api/v1/system/* (requires auth)"
         },
         "legacy_endpoints": {
-            "power": "/api/v1/power/* (deprecated)",
-            "gpu": "/api/v1/gpu/* (deprecated)",
-            "cluster": "/api/v1/cluster/* (deprecated)"
+            "power": "/api/v1/power/* (deprecated, requires auth)",
+            "gpu": "/api/v1/gpu/* (deprecated, requires auth)",
+            "cluster": "/api/v1/cluster/* (deprecated, requires auth)"
         }
     }

@@ -13,7 +13,7 @@ from typing import Optional
 from datetime import datetime
 import logging
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.queries import TimeSeriesQueryParams, ClusterTotalQueryParams
 from app.models.responses import TimeSeriesResponse, ClusterTotalPowerResponse, ClusterPowerTimeSeriesResponse
 from app.services import cache_service
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 @router.get("/monitoring/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Get unified power consumption",
            description="Get total power consumption across all resource types.")
 async def get_unified_power(
@@ -94,7 +93,6 @@ async def get_unified_power(
 
 
 @router.get("/monitoring/power/accelerators",
-           dependencies=[Depends(verify_credentials)],
            summary="Get accelerator power only",
            description="Get power consumption from accelerators (GPUs + NPUs).")
 async def get_accelerator_power(
@@ -125,7 +123,6 @@ async def get_accelerator_power(
 
 
 @router.get("/monitoring/power/infrastructure",
-           dependencies=[Depends(verify_credentials)],
            summary="Get infrastructure power only",
            description="Get power consumption from infrastructure (Nodes + Pods + VMs).")
 async def get_infrastructure_power(
@@ -156,7 +153,6 @@ async def get_infrastructure_power(
 
 
 @router.get("/monitoring/power/breakdown",
-           dependencies=[Depends(verify_credentials)],
            summary="Get power breakdown",
            description="Get detailed power breakdown by various dimensions.")
 async def get_power_breakdown(
@@ -210,7 +206,6 @@ async def get_power_breakdown(
 
 
 @router.get("/monitoring/power/efficiency",
-           dependencies=[Depends(verify_credentials)],
            summary="Get power efficiency metrics",
            description="Get power efficiency metrics including PUE.")
 async def get_power_efficiency(
@@ -262,7 +257,6 @@ async def get_power_efficiency(
 # ============================================================================
 
 @router.get("/monitoring/timeseries/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Get power timeseries",
            description="Get power consumption timeseries data.")
 async def get_power_timeseries(
@@ -295,7 +289,6 @@ async def get_power_timeseries(
 
 
 @router.get("/monitoring/timeseries/metrics",
-           dependencies=[Depends(verify_credentials)],
            summary="Get metrics timeseries",
            description="Get performance metrics timeseries (utilization, temperature, etc.).")
 async def get_metrics_timeseries(
@@ -334,7 +327,6 @@ async def get_metrics_timeseries(
 
 
 @router.get("/monitoring/timeseries/temperature",
-           dependencies=[Depends(verify_credentials)],
            summary="Get temperature timeseries",
            description="Get temperature timeseries data across all monitored resources.")
 async def get_temperature_timeseries(
@@ -380,7 +372,6 @@ from starlette.responses import StreamingResponse
 from app.services.stream import power_events_generator
 
 @router.get("/monitoring/events/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Power events SSE stream",
            description="Server-Sent Events stream for power-related events.")
 async def power_events_stream(
@@ -430,7 +421,6 @@ async def power_events_stream(
 
 
 @router.get("/monitoring/stream/info",
-           dependencies=[Depends(verify_credentials)],
            summary="Get streaming info",
            description="Get information about available WebSocket/SSE streams.")
 async def get_streaming_info():

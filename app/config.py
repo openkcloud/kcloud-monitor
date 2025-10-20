@@ -7,8 +7,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     # API Authentication
-    API_AUTH_USERNAME: str = Field("admin", description="Basic Auth username")
-    API_AUTH_PASSWORD: str = Field("changeme", description="Basic Auth password")
+    API_AUTH_USERNAME: str = Field("admin", description="API username")
+    API_AUTH_PASSWORD: str = Field("changeme", description="API password")
+    JWT_SECRET_KEY: str = Field("change-this-secret-key", description="JWT secret key for token signing")
+    JWT_ALGORITHM: str = Field("HS256", description="JWT algorithm")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, description="JWT token expiration in minutes")
 
     # Prometheus (Single cluster - backward compatibility)
     PROMETHEUS_URL: str = Field("http://localhost:9090", description="URL of the Prometheus server")

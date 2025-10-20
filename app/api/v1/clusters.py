@@ -12,7 +12,7 @@ from typing import Optional
 from datetime import datetime
 import logging
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.responses import ClusterInfoResponse
 from app.models.queries import ClusterTotalQueryParams
 from app.services import cache_service
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 @router.get("/clusters",
-           dependencies=[Depends(verify_credentials)],
            summary="List all clusters",
            description="Get list of all monitored clusters.")
 async def list_clusters():
@@ -83,7 +82,6 @@ async def list_clusters():
 
 @router.get("/clusters/{cluster_name}",
            response_model=ClusterInfoResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get cluster details",
            description="Get detailed information for a specific cluster.")
 async def get_cluster_detail(
@@ -112,7 +110,6 @@ async def get_cluster_detail(
 
 
 @router.get("/clusters/{cluster_name}/summary",
-           dependencies=[Depends(verify_credentials)],
            summary="Get cluster summary",
            description="Get summary statistics for a specific cluster.")
 async def get_cluster_summary(
@@ -171,7 +168,6 @@ async def get_cluster_summary(
 
 
 @router.get("/clusters/{cluster_name}/topology",
-           dependencies=[Depends(verify_credentials)],
            summary="Get cluster topology",
            description="Get cluster topology showing node-pod relationships from Kubernetes metrics.")
 async def get_cluster_topology(
@@ -243,7 +239,6 @@ async def get_cluster_topology(
 
 
 @router.get("/clusters/{cluster_name}/power",
-           dependencies=[Depends(verify_credentials)],
            summary="Get cluster total power",
            description="Get total power consumption for a specific cluster.")
 async def get_cluster_power(

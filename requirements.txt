@@ -9,6 +9,7 @@ pytest==7.4.3
 pytest-asyncio==0.21.2
 pytest-httpx==0.26.0
 responses==0.24.1
+python-jose[cryptography]==3.3.0  # JWT token support
 
 # Export dependencies (Phase 8 - Optional packages)
 # Install based on export format requirements:

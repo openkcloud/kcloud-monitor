@@ -12,7 +12,7 @@ from typing import Optional
 from datetime import datetime
 import logging
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.hardware.ipmi import (
     IPMISensorListResponse,
     IPMIPowerResponse,
@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 @router.get("/hardware/ipmi/sensors",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMISensorListResponse,
            summary="Get all IPMI sensors",
            description="Get data from all IPMI sensors across all nodes.")
@@ -97,7 +96,6 @@ async def get_ipmi_sensors(
 
 
 @router.get("/hardware/ipmi/sensors/{node_name}",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMISensorListResponse,
            summary="Get IPMI sensors for node",
            description="Get all IPMI sensor data for a specific node.")
@@ -117,7 +115,6 @@ async def get_node_ipmi_sensors(
 
 
 @router.get("/hardware/ipmi/power",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMIPowerResponse,
            summary="Get IPMI power sensors",
            description="Get power consumption data from IPMI sensors.")
@@ -178,7 +175,6 @@ async def get_ipmi_power(
 
 
 @router.get("/hardware/ipmi/temperature",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMITemperatureResponse,
            summary="Get IPMI temperature sensors",
            description="Get temperature data from IPMI sensors.")
@@ -245,7 +241,6 @@ async def get_ipmi_temperature(
 
 
 @router.get("/hardware/ipmi/fans",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMIFanResponse,
            summary="Get IPMI fan sensors",
            description="Get fan speed data from IPMI sensors.")
@@ -315,7 +310,6 @@ async def get_ipmi_fans(
 
 
 @router.get("/hardware/ipmi/voltage",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMIVoltageResponse,
            summary="Get IPMI voltage sensors",
            description="Get voltage data from IPMI sensors.")
@@ -376,7 +370,6 @@ async def get_ipmi_voltage(
 
 
 @router.get("/hardware/ipmi/summary",
-           dependencies=[Depends(verify_credentials)],
            response_model=IPMISummaryResponse,
            summary="Get IPMI summary",
            description="Get summary statistics for all IPMI sensors.")

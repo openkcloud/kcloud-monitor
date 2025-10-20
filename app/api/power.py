@@ -3,7 +3,7 @@ from fastapi.responses import Response, JSONResponse
 from datetime import datetime
 from typing import Optional
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.queries import GPUQueryParams, TimeSeriesQueryParams, ExportQueryParams
 from app.models.responses import GPUPowerResponse, TimeSeriesResponse
 from app.services import cache_service
@@ -12,8 +12,7 @@ from app import crud
 router = APIRouter()
 
 @router.get("/power/gpu",
-            response_model=GPUPowerResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=GPUPowerResponse)
 async def get_gpu_power(
     params: GPUQueryParams = Depends(),
     include_dcgm: bool = Query(False, description="Include DCGM data integration (hybrid mode)")
@@ -33,8 +32,7 @@ async def get_gpu_power(
     return data
 
 @router.get("/power/gpu/{instance}",
-            response_model=GPUPowerResponse,
-            dependencies=[Depends(verify_credentials)])
+            response_model=GPUPowerResponse)
 async def get_gpu_power_for_instance(
     instance: str,
     params: GPUQueryParams = Depends(),
@@ -45,8 +43,7 @@ async def get_gpu_power_for_instance(
     return await get_gpu_power(params, include_dcgm)
 
 @router.get("/power/timeseries", 
-            response_model=TimeSeriesResponse, 
-            dependencies=[Depends(verify_credentials)])
+            response_model=TimeSeriesResponse)
 async def get_power_timeseries(params: TimeSeriesQueryParams = Depends()):
     cache_key = f"timeseries_{params.period.value}_{params.step}_{params.instance or 'all'}"
     cached_data = await cache_service.get(cache_key)
@@ -57,7 +54,7 @@ async def get_power_timeseries(params: TimeSeriesQueryParams = Depends()):
     await cache_service.set(cache_key, data, ttl=300) # Cache for 5 minutes
     return data
 
-@router.get("/power/export", dependencies=[Depends(verify_credentials)])
+@router.get("/power/export")
 async def export_power_data(params: ExportQueryParams = Depends()):
     gpu_params = GPUQueryParams(period=params.period, instance=params.instance)
     data = await crud.get_gpu_power_data(gpu_params)

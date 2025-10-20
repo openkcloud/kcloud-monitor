@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from typing import Optional
 from datetime import datetime
 
-from app.auth import verify_credentials
+# Authentication is handled at router level in main.py
 from app.models.accelerators.gpu import (
     GPUListResponse, GPUDetailResponse, GPUMetricsResponse, GPUPowerResponse,
     GPUTemperatureResponse, GPUSummaryResponse,
@@ -30,7 +30,6 @@ router = APIRouter()
 
 @router.get("/accelerators/gpus",
            response_model=GPUListResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="List all GPUs",
            description="Get a list of all GPUs with optional filtering by cluster, node, status, and vendor.")
 async def list_gpus(
@@ -162,7 +161,6 @@ async def list_gpus(
 
 @router.get("/accelerators/gpus/summary",
            response_model=GPUSummaryResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get GPU summary",
            description="Get summary statistics for all GPUs.")
 async def get_gpus_summary(
@@ -275,7 +273,6 @@ async def get_gpus_summary(
 @router.get("/accelerators/gpus/{gpu_id}",
            response_model=GPUDetailResponse,
            response_model_exclude_none=True,
-           dependencies=[Depends(verify_credentials)],
            summary="Get GPU details",
            description="Get detailed information for a specific GPU by ID or UUID.")
 async def get_gpu_detail(
@@ -388,7 +385,6 @@ async def get_gpu_detail(
 @router.get("/accelerators/gpus/{gpu_id}/metrics",
            response_model=GPUMetricsResponse,
            response_model_exclude_none=True,
-           dependencies=[Depends(verify_credentials)],
            summary="Get GPU metrics",
            description="Get real-time performance metrics for a specific GPU.")
 async def get_gpu_metrics(
@@ -470,7 +466,6 @@ async def get_gpu_metrics(
 
 @router.get("/accelerators/gpus/{gpu_id}/power",
            response_model=GPUPowerResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get GPU power data",
            description="Get power consumption data for a specific GPU.")
 async def get_gpu_power(
@@ -535,7 +530,6 @@ async def get_gpu_power(
 
 @router.get("/accelerators/gpus/{gpu_id}/temperature",
            response_model=GPUTemperatureResponse,
-           dependencies=[Depends(verify_credentials)],
            summary="Get GPU temperature",
            description="Get temperature monitoring data for a specific GPU.")
 async def get_gpu_temperature(
@@ -605,7 +599,6 @@ async def get_gpu_temperature(
 # ============================================================================
 
 @router.get("/accelerators/npus",
-           dependencies=[Depends(verify_credentials)],
            summary="List all NPUs",
            description="Get a list of all NPUs (Furiosa, Rebellions). NOTE: Placeholder until NPU exporters are configured.")
 async def list_npus(
@@ -735,7 +728,6 @@ async def list_npus(
 
 
 @router.get("/accelerators/npus/{npu_id}",
-           dependencies=[Depends(verify_credentials)],
            summary="Get NPU details",
            description="Get detailed information for a specific NPU by ID or UUID. NOTE: Placeholder until NPU exporters are configured.")
 async def get_npu_detail(
@@ -869,7 +861,6 @@ async def get_npu_detail(
 
 
 @router.get("/accelerators/npus/{npu_id}/metrics",
-           dependencies=[Depends(verify_credentials)],
            summary="Get NPU metrics",
            description="Get real-time performance metrics for a specific NPU. NOTE: Placeholder until NPU exporters are configured.")
 async def get_npu_metrics(
@@ -939,7 +930,6 @@ async def get_npu_metrics(
 
 
 @router.get("/accelerators/npus/{npu_id}/cores",
-           dependencies=[Depends(verify_credentials)],
            summary="Get NPU core status",
            description="Get core-level status for a specific NPU (Furiosa only). NOTE: Placeholder until NPU exporters are configured.")
 async def get_npu_cores(
@@ -1006,7 +996,6 @@ async def get_npu_cores(
 
 
 @router.get("/accelerators/npus/summary",
-           dependencies=[Depends(verify_credentials)],
            summary="Get NPU summary",
            description="Get summary statistics for all NPUs. NOTE: Placeholder until NPU exporters are configured.")
 async def get_npus_summary(
@@ -1161,7 +1150,6 @@ async def get_npus_summary(
 # ============================================================================
 
 @router.get("/accelerators/all",
-           dependencies=[Depends(verify_credentials)],
            summary="List all accelerators",
            description="Get unified list of all accelerators (GPUs + NPUs) with comprehensive statistics.")
 async def list_all_accelerators(
@@ -1293,7 +1281,6 @@ async def list_all_accelerators(
 
 
 @router.get("/accelerators/summary",
-           dependencies=[Depends(verify_credentials)],
            summary="Get accelerator summary",
            description="Get comprehensive summary statistics for all accelerators (GPUs + NPUs).")
 async def get_accelerators_summary(

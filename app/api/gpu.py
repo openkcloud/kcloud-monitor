@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional, List
 from datetime import datetime
 
-from app.auth import verify_credentials
+# Authentication handled at router level in main.py
 from app.models.responses import (
     DCGMGPUInfoResponse, DCGMGPUMetricsResponse, DCGMGPUInfo, DCGMGPUMetrics, DCGMGPUSummary,
     DCGMGPUTemperatureResponse, DCGMGPUTemperature
@@ -13,8 +13,7 @@ from app import crud
 router = APIRouter()
 
 @router.get("/gpu/info",
-           response_model=DCGMGPUInfoResponse,
-           dependencies=[Depends(verify_credentials)])
+           response_model=DCGMGPUInfoResponse)
 async def get_gpu_info(node: Optional[str] = Query(None, description="Filter by node hostname")):
     """Get basic GPU information from DCGM."""
     cache_key = f"dcgm_gpu_info_{node or 'all'}"
@@ -60,8 +59,7 @@ async def get_gpu_info(node: Optional[str] = Query(None, description="Filter by 
 
 
 @router.get("/gpu/metrics",
-           response_model=DCGMGPUMetricsResponse,
-           dependencies=[Depends(verify_credentials)])
+           response_model=DCGMGPUMetricsResponse)
 async def get_gpu_metrics(
     node: Optional[str] = Query(None, description="Filter by node hostname"),
     gpu_id: Optional[str] = Query(None, description="Filter by GPU device ID (e.g., nvidia0)")
@@ -136,8 +134,7 @@ async def get_gpu_metrics(
         raise HTTPException(status_code=500, detail=f"Failed to fetch GPU metrics: {str(e)}")
 
 
-@router.get("/gpu/summary",
-           dependencies=[Depends(verify_credentials)])
+@router.get("/gpu/summary")
 async def get_gpu_summary(node: Optional[str] = Query(None, description="Filter by node hostname")):
     """Get GPU summary statistics."""
     cache_key = f"dcgm_gpu_summary_{node or 'all'}"
@@ -215,8 +212,7 @@ async def get_gpu_summary(node: Optional[str] = Query(None, description="Filter 
 
 
 @router.get("/gpu/temperature",
-           response_model=DCGMGPUTemperatureResponse,
-           dependencies=[Depends(verify_credentials)])
+           response_model=DCGMGPUTemperatureResponse)
 async def get_gpu_temperature(
     node: Optional[str] = Query(None, description="Filter by node hostname"),
     gpu_id: Optional[str] = Query(None, description="Filter by GPU device ID (e.g., nvidia0)")
