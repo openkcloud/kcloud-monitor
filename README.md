@@ -109,122 +109,185 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/power/export?period=1h&form
 
 ## API 엔드포인트 (7-Domain Architecture)
 
+> **📋 상세 매핑 문서**: [docs/API_ENDPOINT_MAPPING.md](docs/API_ENDPOINT_MAPPING.md)
+> 
+> 모든 엔드포인트의 구현 상태, 데이터 소스, 필요한 Exporter 설정을 확인하세요.
+
 ### 공개 엔드포인트 (No Authentication)
 
-| 엔드포인트 | 메서드 | 설명 |
-|------------|--------|------|
-| `/` | GET | 기본 메시지 및 API 정보 |
-| `/api/v1/system/health` | GET | 시스템 건강상태 체크 |
-| `/api/v1/system/version` | GET | API 버전 및 의존성 정보 |
-| `/api/v1/system/capabilities` | GET | 지원 기능 목록 |
-| `/docs` | GET | FastAPI Swagger UI (API 문서) |
-| `/redoc` | GET | ReDoc API 문서 |
+| 엔드포인트 | 메서드 | 설명 | 구현 상태 |
+|------------|--------|------|-----------|
+| `/` | GET | 기본 메시지 및 API 정보 | ✅ |
+| `/api/v1/auth/login` | POST | JWT 토큰 발급 | ✅ |
+| `/api/v1/system/health` | GET | 시스템 건강상태 체크 | ✅ |
+| `/api/v1/system/version` | GET | API 버전 및 의존성 정보 | ✅ |
+| `/api/v1/system/capabilities` | GET | 지원 기능 목록 | ✅ |
+| `/docs` | GET | FastAPI Swagger UI (API 문서) | ✅ |
+| `/redoc` | GET | ReDoc API 문서 | ✅ |
 
 ### 1. Accelerators (가속기)
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/accelerators/gpus` | GPU 목록 조회 |
-| `GET /api/v1/accelerators/gpus/{gpu_id}` | GPU 상세 정보 |
-| `GET /api/v1/accelerators/gpus/{gpu_id}/metrics` | GPU 성능 메트릭 |
-| `GET /api/v1/accelerators/gpus/{gpu_id}/power` | GPU 전력 데이터 |
-| `GET /api/v1/accelerators/gpus/{gpu_id}/temperature` | GPU 온도 모니터링 |
-| `GET /api/v1/accelerators/gpus/summary` | GPU 전체 요약 |
-| `GET /api/v1/accelerators/npus` | NPU 목록 조회 |
-| `GET /api/v1/accelerators/npus/{npu_id}` | NPU 상세 정보 |
-| `GET /api/v1/accelerators/npus/{npu_id}/metrics` | NPU 성능 메트릭 |
-| `GET /api/v1/accelerators/npus/{npu_id}/cores` | NPU 코어 상태 (Furiosa) |
-| `GET /api/v1/accelerators/npus/summary` | NPU 전체 요약 |
-| `GET /api/v1/accelerators/all` | 모든 가속기 통합 조회 |
-| `GET /api/v1/accelerators/summary` | 가속기 전체 요약 |
+#### GPU 모니터링 (✅ 완료 - DCGM 기반)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/accelerators/gpus` | GPU 목록 조회 | DCGM + Kepler |
+| `GET /api/v1/accelerators/gpus/{gpu_id}` | GPU 상세 정보 | DCGM |
+| `GET /api/v1/accelerators/gpus/{gpu_id}/metrics` | GPU 성능 메트릭 | DCGM |
+| `GET /api/v1/accelerators/gpus/{gpu_id}/power` | GPU 전력 데이터 | DCGM |
+| `GET /api/v1/accelerators/gpus/{gpu_id}/temperature` | GPU 온도 모니터링 | DCGM |
+| `GET /api/v1/accelerators/gpus/summary` | GPU 전체 요약 | DCGM |
+
+#### NPU 모니터링 (⚠️ Placeholder - Exporter 설정 필요)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/accelerators/npus` | NPU 목록 조회 | NPU Exporter |
+| `GET /api/v1/accelerators/npus/{npu_id}` | NPU 상세 정보 | NPU Exporter |
+| `GET /api/v1/accelerators/npus/{npu_id}/metrics` | NPU 성능 메트릭 | NPU Exporter |
+| `GET /api/v1/accelerators/npus/{npu_id}/cores` | NPU 코어 상태 (Furiosa) | NPU Exporter |
+| `GET /api/v1/accelerators/npus/summary` | NPU 전체 요약 | NPU Exporter |
+
+#### 통합 가속기 (✅ 완료)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/accelerators/all` | 모든 가속기 통합 조회 | DCGM + NPU |
+| `GET /api/v1/accelerators/summary` | 가속기 전체 요약 | DCGM + NPU |
 
 ### 2. Infrastructure (인프라)
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/infrastructure/nodes` | 노드 목록 |
-| `GET /api/v1/infrastructure/nodes/{node_name}` | 노드 상세 |
-| `GET /api/v1/infrastructure/nodes/{node_name}/power` | 노드 전력 |
-| `GET /api/v1/infrastructure/nodes/{node_name}/metrics` | 노드 메트릭 |
-| `GET /api/v1/infrastructure/nodes/summary` | 노드 요약 |
-| `GET /api/v1/infrastructure/pods` | Pod 목록 |
-| `GET /api/v1/infrastructure/pods/{namespace}/{pod_name}` | Pod 상세 |
-| `GET /api/v1/infrastructure/pods/{namespace}/{pod_name}/power` | Pod 전력 |
-| `GET /api/v1/infrastructure/pods/summary` | Pod 요약 |
-| `GET /api/v1/infrastructure/containers` | 컨테이너 목록 |
-| `GET /api/v1/infrastructure/containers/{container_id}` | 컨테이너 상세 |
-| `GET /api/v1/infrastructure/containers/{container_id}/metrics` | 컨테이너 메트릭 |
-| `GET /api/v1/infrastructure/vms` | VM 목록 (OpenStack) |
-| `GET /api/v1/infrastructure/vms/{vm_id}` | VM 상세 |
+#### Nodes (✅ 완료 - Kepler 기반)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/infrastructure/nodes` | 노드 목록 | Kepler + kube_node_info |
+| `GET /api/v1/infrastructure/nodes/{node_name}` | 노드 상세 | Kepler + kube_node_info |
+| `GET /api/v1/infrastructure/nodes/{node_name}/power` | 노드 전력 | Kepler |
+| `GET /api/v1/infrastructure/nodes/{node_name}/metrics` | 노드 메트릭 | Kepler |
+| `GET /api/v1/infrastructure/nodes/summary` | 노드 요약 | Kepler |
+
+#### Pods (✅ 완료 - Kepler 기반)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/infrastructure/pods` | Pod 목록 | Kepler + kube_pod_info |
+| `GET /api/v1/infrastructure/pods/{namespace}/{pod_name}` | Pod 상세 | Kepler + kube_pod_info |
+| `GET /api/v1/infrastructure/pods/{namespace}/{pod_name}/power` | Pod 전력 | Kepler |
+| `GET /api/v1/infrastructure/pods/summary` | Pod 요약 | Kepler |
+
+#### Containers (✅ 완료 - Kepler 기반)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/infrastructure/containers` | 컨테이너 목록 | Kepler |
+| `GET /api/v1/infrastructure/containers/{container_id}` | 컨테이너 상세 | Kepler |
+| `GET /api/v1/infrastructure/containers/{container_id}/metrics` | 컨테이너 메트릭 | Kepler |
+
+#### VMs (❌ 미구현 - OpenStack 연동 필요)
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/infrastructure/vms` | VM 목록 | OpenStack |
+| `GET /api/v1/infrastructure/vms/{vm_id}` | VM 상세 | OpenStack |
+| `GET /api/v1/infrastructure/vms/{vm_id}/power` | VM 전력 | OpenStack |
+| `GET /api/v1/infrastructure/vms/{vm_id}/metrics` | VM 메트릭 | OpenStack |
 
 ### 3. Hardware (하드웨어)
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/hardware/ipmi/sensors` | 전체 IPMI 센서 |
-| `GET /api/v1/hardware/ipmi/sensors/{node_name}` | 노드별 센서 |
-| `GET /api/v1/hardware/ipmi/power` | IPMI 전력 센서 |
-| `GET /api/v1/hardware/ipmi/temperature` | IPMI 온도 센서 |
-| `GET /api/v1/hardware/ipmi/fans` | IPMI 팬 속도 |
-| `GET /api/v1/hardware/ipmi/voltage` | IPMI 전압 센서 |
-| `GET /api/v1/hardware/ipmi/summary` | IPMI 종합 요약 |
+#### IPMI 센서 (⚠️ API 완료 - Exporter 설정 필요)
 
-### 4. Clusters (클러스터)
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/hardware/ipmi/sensors` | 전체 IPMI 센서 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/sensors/{node_name}` | 노드별 센서 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/power` | IPMI 전력 센서 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/temperature` | IPMI 온도 센서 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/fans` | IPMI 팬 속도 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/voltage` | IPMI 전압 센서 | IPMI Exporter |
+| `GET /api/v1/hardware/ipmi/summary` | IPMI 종합 요약 | IPMI Exporter |
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/clusters` | 클러스터 목록 |
-| `GET /api/v1/clusters/{cluster_name}` | 클러스터 상세 |
-| `GET /api/v1/clusters/{cluster_name}/summary` | 클러스터 요약 |
-| `GET /api/v1/clusters/{cluster_name}/topology` | 클러스터 토폴로지 |
-| `GET /api/v1/clusters/{cluster_name}/accelerators` | 클러스터 가속기 |
-| `GET /api/v1/clusters/{cluster_name}/nodes` | 클러스터 노드 |
-| `GET /api/v1/clusters/{cluster_name}/pods` | 클러스터 Pod |
-| `GET /api/v1/clusters/{cluster_name}/power` | 클러스터 전력 |
+> **참고**: IPMI API는 구현되었으나, 각 노드에 IPMI Exporter 설치 및 Prometheus 연동이 필요합니다.
 
-### 5. Monitoring (통합 모니터링)
+### 4. Clusters (클러스터) - ✅ 완료
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/monitoring/power` | 통합 전력 소비 |
-| `GET /api/v1/monitoring/power/accelerators` | 가속기 전력 |
-| `GET /api/v1/monitoring/power/infrastructure` | 인프라 전력 |
-| `GET /api/v1/monitoring/power/breakdown` | 전력 분해 분석 |
-| `GET /api/v1/monitoring/power/efficiency` | 전력 효율성 (PUE) |
-| `GET /api/v1/monitoring/timeseries/power` | 전력 시계열 |
-| `GET /api/v1/monitoring/timeseries/metrics` | 메트릭 시계열 |
-| `GET /api/v1/monitoring/timeseries/temperature` | 온도 시계열 |
-| `WS /api/v1/monitoring/stream/power` | 전력 실시간 WebSocket |
-| `WS /api/v1/monitoring/stream/metrics` | 메트릭 실시간 WebSocket |
-| `GET /api/v1/monitoring/events/power` | 전력 이벤트 SSE |
-| `GET /api/v1/monitoring/stream/info` | 스트리밍 정보 |
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/clusters` | 클러스터 목록 | 환경 변수 |
+| `GET /api/v1/clusters/{cluster_name}` | 클러스터 상세 | Prometheus |
+| `GET /api/v1/clusters/{cluster_name}/summary` | 클러스터 요약 | Prometheus |
+| `GET /api/v1/clusters/{cluster_name}/topology` | 클러스터 토폴로지 | kube_* metrics |
+| `GET /api/v1/clusters/{cluster_name}/power` | 클러스터 전력 | Kepler + DCGM |
 
-### 6. Export (데이터 내보내기)
+> **참고**: 멀티 클러스터 사용 시 `PROMETHEUS_CLUSTERS` 환경 변수 설정 필요
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/export/power` | 전력 데이터 내보내기 (JSON, CSV, Parquet, Excel, PDF) |
-| `GET /api/v1/export/metrics` | 메트릭 데이터 내보내기 |
-| `GET /api/v1/export/report` | 종합 리포트 (Daily/Weekly/Monthly) |
+### 5. Monitoring (통합 모니터링) - ✅ 완료
 
-### 7. System (시스템 정보)
+#### 통합 전력 모니터링
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /api/v1/system/health` | 헬스체크 (공개) |
-| `GET /api/v1/system/info` | 시스템 정보 |
-| `GET /api/v1/system/version` | 버전 정보 (공개) |
-| `GET /api/v1/system/capabilities` | 지원 기능 목록 (공개) |
-| `GET /api/v1/system/metrics` | API 서버 메트릭 (Prometheus 형식) |
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/monitoring/power` | 통합 전력 소비 | Kepler + DCGM |
+| `GET /api/v1/monitoring/power/accelerators` | 가속기 전력 | DCGM + NPU |
+| `GET /api/v1/monitoring/power/infrastructure` | 인프라 전력 | Kepler |
+| `GET /api/v1/monitoring/power/breakdown` | 전력 분해 분석 | Kepler + DCGM |
+| `GET /api/v1/monitoring/power/efficiency` | 전력 효율성 (PUE) | Kepler + IPMI |
+
+#### 시계열 데이터
+
+| 엔드포인트 | 설명 | 데이터 소스 |
+|------------|------|-------------|
+| `GET /api/v1/monitoring/timeseries/power` | 전력 시계열 | Prometheus |
+| `GET /api/v1/monitoring/timeseries/metrics` | 메트릭 시계열 | Prometheus |
+| `GET /api/v1/monitoring/timeseries/temperature` | 온도 시계열 | Prometheus |
+
+#### 실시간 스트리밍
+
+| 엔드포인트 | 프로토콜 | 설명 | 데이터 소스 |
+|------------|----------|------|-------------|
+| `/api/v1/monitoring/stream/power` | WebSocket | 전력 실시간 스트림 | Prometheus |
+| `/api/v1/monitoring/stream/metrics` | WebSocket | 메트릭 실시간 스트림 | Prometheus |
+| `/api/v1/monitoring/events/power` | SSE | 전력 이벤트 스트림 | Prometheus |
+| `GET /api/v1/monitoring/stream/info` | HTTP | 스트리밍 정보 | - |
+
+### 6. Export (데이터 내보내기) - ✅ 완료
+
+| 엔드포인트 | 설명 | 지원 포맷 |
+|------------|------|-----------|
+| `GET /api/v1/export/power` | 전력 데이터 내보내기 | JSON, CSV, Parquet, Excel, PDF |
+| `GET /api/v1/export/metrics` | 메트릭 데이터 내보내기 | JSON, CSV, Parquet, Excel, PDF |
+| `GET /api/v1/export/report` | 종합 리포트 생성 | PDF, Excel |
+| `GET /api/v1/export/formats` | 지원 포맷 목록 | - |
+| `GET /api/v1/export/templates` | 리포트 템플릿 목록 | - |
+
+**지원 포맷**: JSON (기본), CSV, Parquet (pyarrow), Excel (openpyxl), PDF (reportlab)
+**리포트 템플릿**: Daily, Weekly, Monthly, Custom
+
+### 7. System (시스템 정보) - ✅ 완료
+
+| 엔드포인트 | 설명 | 인증 필요 |
+|------------|------|-----------|
+| `GET /api/v1/system/health` | 헬스체크 | ❌ |
+| `GET /api/v1/system/info` | 시스템 정보 | ✅ |
+| `GET /api/v1/system/version` | 버전 정보 | ❌ |
+| `GET /api/v1/system/capabilities` | 지원 기능 목록 | ❌ |
+| `GET /api/v1/system/metrics` | API 서버 메트릭 (Prometheus) | ❌ |
+| `GET /api/v1/system/status` | 종합 상태 | ❌ |
 
 ### Legacy Endpoints (하위 호환성, 향후 제거 예정)
 
-| 엔드포인트 | 새 엔드포인트 |
-|------------|-------------|
-| `GET /api/v1/power/gpu` | `/api/v1/monitoring/power?resource_type=gpus` |
-| `GET /api/v1/gpu/info` | `/api/v1/accelerators/gpus` |
-| `GET /api/v1/power/pods` | `/api/v1/infrastructure/pods` |
-| `GET /api/v1/cluster/info` | `/api/v1/clusters/{cluster_name}` |
+> **⚠️ Deprecated**: 이 엔드포인트들은 하위 호환성을 위해 유지되지만, 향후 버전에서 제거될 예정입니다.
+
+| Legacy 엔드포인트 | 새 엔드포인트 | 상태 |
+|-------------------|---------------|------|
+| `GET /api/v1/gpu/info` | `/api/v1/accelerators/gpus` | ⚠️ Deprecated |
+| `GET /api/v1/gpu/metrics` | `/api/v1/accelerators/gpus/{gpu_id}/metrics` | ⚠️ Deprecated |
+| `GET /api/v1/gpu/summary` | `/api/v1/accelerators/gpus/summary` | ⚠️ Deprecated |
+| `GET /api/v1/power/gpu` | `/api/v1/monitoring/power?resource_type=gpus` | ⚠️ Deprecated |
+| `GET /api/v1/power/pods` | `/api/v1/infrastructure/pods` | ⚠️ Deprecated |
+| `GET /api/v1/cluster/info` | `/api/v1/clusters/{cluster_name}` | ⚠️ Deprecated |
+| `GET /api/v1/power/cluster/total` | `/api/v1/monitoring/power` | ⚠️ Deprecated |
+| `GET /api/v1/health` | `/api/v1/system/health` | ⚠️ Deprecated |
 
 ### 응답 예시
 
@@ -580,16 +643,83 @@ curl http://127.0.0.1:8001/api/v1/health
   - Kubernetes 배포 YAML
   - CI/CD 파이프라인
 
-### Placeholder 기능 (Exporter 설정 필요)
-- **NPU 모니터링**: Furiosa AI / Rebellions NPU Exporter 연동 필요
-- **IPMI 센서**: IPMI Exporter 설정 및 Prometheus 연동 필요
-- **OpenStack VMs**: Telegraf 또는 OpenStack Exporter 연동 필요
+### 구현 상태별 분류
+
+#### ✅ 완전 구현 (데이터 소스 구성됨)
+- **Authentication**: JWT 토큰 기반 인증
+- **Accelerators - GPU**: DCGM 기반 완전 구현
+- **Infrastructure - Nodes/Pods/Containers**: Kepler 기반 완전 구현
+- **Clusters**: 멀티 클러스터 프레임워크 완전 구현
+- **Monitoring**: 통합 전력, 시계열, 실시간 스트리밍 완전 구현
+- **Export**: 모든 포맷 (JSON, CSV, Parquet, Excel, PDF) 완전 구현
+- **System**: 헬스체크, 메트릭, 버전 정보 완전 구현
+
+#### ⚠️ API 완료, Exporter 설정 필요
+- **Accelerators - NPU**: Furiosa AI / Rebellions NPU Exporter 연동 필요
+- **Hardware - IPMI**: IPMI Exporter 설정 및 Prometheus 연동 필요
+
+#### ❌ 미구현 (향후 계획)
+- **Infrastructure - VMs**: OpenStack 연동 필요 (Telegraf 또는 OpenStack Exporter)
+
+## 데이터 소스 및 Exporter 설정
+
+### 구성된 데이터 소스 (✅)
+
+| 데이터 소스 | 용도 | 상태 | Prometheus URL |
+|-------------|------|------|----------------|
+| **DCGM Exporter** | NVIDIA GPU 모니터링 | ✅ 구성됨 | http://101.79.0.107:30090 |
+| **Kepler** | 노드/Pod/컨테이너 전력 분해 | ✅ 구성됨 | http://101.79.0.107:30090 |
+| **Kubernetes Metrics** | 클러스터 메타데이터 | ✅ 구성됨 | http://101.79.0.107:30090 |
+
+### 설정 필요한 데이터 소스 (⚠️)
+
+| 데이터 소스 | 용도 | 상태 | 설정 가이드 |
+|-------------|------|------|-------------|
+| **IPMI Exporter** | 물리 서버 센서 (전력, 온도, 팬) | ⚠️ 설정 필요 | [PROMETHEUS_DCGM_SETUP.md](docs/PROMETHEUS_DCGM_SETUP.md) |
+| **Furiosa NPU Exporter** | Furiosa AI NPU 모니터링 | ⚠️ 설정 필요 | [PROMETHEUS_DCGM_SETUP.md](docs/PROMETHEUS_DCGM_SETUP.md) |
+| **Rebellions NPU Exporter** | Rebellions NPU 모니터링 | ⚠️ 설정 필요 | [PROMETHEUS_DCGM_SETUP.md](docs/PROMETHEUS_DCGM_SETUP.md) |
+
+### 향후 계획 (❌)
+
+| 데이터 소스 | 용도 | 상태 | 비고 |
+|-------------|------|------|------|
+| **OpenStack Exporter** | VM 모니터링 | ❌ 미구현 | Phase 4.4 (향후) |
+| **Telegraf + OpenStack** | VM 메트릭 수집 | ❌ 미구현 | Phase 4.4 (향후) |
+
+### Exporter 설정 빠른 가이드
+
+#### IPMI Exporter 설정
+```bash
+# 각 노드에 IPMI Exporter 설치
+# 1. BMC 접근 권한 확인
+ipmitool sensor list
+
+# 2. IPMI Exporter 설치 (Docker)
+docker run -d --name ipmi-exporter \
+  --net=host \
+  -v /etc/ipmi_exporter:/config \
+  prometheuscommunity/ipmi-exporter
+
+# 3. Prometheus scrape 설정 추가
+# 참고: docs/PROMETHEUS_DCGM_SETUP.md
+```
+
+#### NPU Exporter 설정
+```bash
+# Furiosa AI NPU Exporter 설치
+# 1. Furiosa SDK 설치
+# 2. NPU Exporter 설치
+# 3. Prometheus scrape 설정 추가
+# 참고: docs/PROMETHEUS_DCGM_SETUP.md
+```
 
 ## 관련 문서
 
+- **API 엔드포인트 매핑**: [docs/API_ENDPOINT_MAPPING.md](docs/API_ENDPOINT_MAPPING.md) - 전체 엔드포인트 구현 상태 및 데이터 소스
 - **API 명세서**: [spec/API_SPECIFICATION.md](spec/API_SPECIFICATION.md) - 전체 엔드포인트 상세 문서
 - **아키텍처 문서**: [spec/ARCHITECTURE.md](spec/ARCHITECTURE.md) - 7-도메인 설계 철학 및 구조
 - **데이터 모델**: [spec/DATA_MODELS.md](spec/DATA_MODELS.md) - Pydantic 모델 명세
+- **Prometheus 설정**: [docs/PROMETHEUS_DCGM_SETUP.md](docs/PROMETHEUS_DCGM_SETUP.md) - Exporter 설정 가이드
 - **작업 진행표**: [spec/tasks.md](spec/tasks.md) - Phase별 체크리스트
 - **개발 가이드**: [CLAUDE.md](CLAUDE.md) - Claude Code 개발 가이드
 
@@ -603,8 +733,57 @@ curl http://127.0.0.1:8001/api/v1/health
 
 ---
 
+## 빠른 참조
+
+### 📚 주요 문서
+
+| 문서 | 설명 | 링크 |
+|------|------|------|
+| **API 엔드포인트 매핑** | 전체 엔드포인트 구현 상태 및 데이터 소스 | [API_ENDPOINT_MAPPING.md](docs/API_ENDPOINT_MAPPING.md) |
+| **API 구현 상태 요약** | 도메인별 구현 상태 및 필요 작업 (한글) | [API_구현상태_요약.md](docs/API_구현상태_요약.md) |
+| **API 명세서** | 전체 엔드포인트 상세 문서 | [API_SPECIFICATION.md](spec/API_SPECIFICATION.md) |
+| **아키텍처 문서** | 7-도메인 설계 철학 및 구조 | [ARCHITECTURE.md](spec/ARCHITECTURE.md) |
+| **Prometheus 설정** | Exporter 설정 가이드 | [PROMETHEUS_DCGM_SETUP.md](docs/PROMETHEUS_DCGM_SETUP.md) |
+
+### 🎯 구현 상태 요약
+
+| 도메인 | 엔드포인트 수 | 구현 상태 | 데이터 소스 |
+|--------|---------------|-----------|-------------|
+| **Authentication** | 3 | ✅ 100% | 환경 변수 |
+| **Accelerators - GPU** | 6 | ✅ 100% | DCGM |
+| **Accelerators - NPU** | 5 | ⚠️ API 완료 | NPU Exporter 필요 |
+| **Infrastructure - Nodes** | 5 | ✅ 100% | Kepler |
+| **Infrastructure - Pods** | 4 | ✅ 100% | Kepler |
+| **Infrastructure - Containers** | 3 | ✅ 100% | Kepler |
+| **Infrastructure - VMs** | 5 | ❌ 미구현 | OpenStack 필요 |
+| **Hardware - IPMI** | 7 | ⚠️ API 완료 | IPMI Exporter 필요 |
+| **Clusters** | 5 | ✅ 100% | Prometheus |
+| **Monitoring** | 12 | ✅ 100% | Prometheus |
+| **Export** | 5 | ✅ 100% | - |
+| **System** | 6 | ✅ 100% | - |
+| **Legacy API** | 13 | ✅ 100% (Deprecated) | - |
+
+**전체 구현률**: ~90% (85% 완전 구현 + 5% API 완료)
+
+### 🔧 필요한 작업
+
+1. **IPMI Exporter 설정** (우선순위: 높음)
+   - 물리 서버 센서 모니터링 활성화
+   - 예상 소요 시간: 2-4시간
+
+2. **NPU Exporter 설정** (우선순위: 중간)
+   - Furiosa AI / Rebellions NPU 모니터링 활성화
+   - 예상 소요 시간: 4-8시간
+
+3. **OpenStack VM 모니터링** (우선순위: 낮음, 향후 계획)
+   - VM 모니터링 구현
+   - 예상 소요 시간: 8-16시간
+
+---
+
 **프로젝트**: AI Accelerator & Infrastructure Monitoring API
 **API 버전**: 2.0.0
 **아키텍처**: 7-Domain Design
 **개발 상태**: Phase 10 진행 중 (테스트 및 문서화)
-**마지막 업데이트**: 2025-01-17
+**전체 구현률**: ~90%
+**마지막 업데이트**: 2025-01-20
