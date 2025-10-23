@@ -1,26 +1,18 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
-requests==2.31.0
-python-multipart==0.0.6
-httpx==0.25.2
-pytest==7.4.3
-pytest-asyncio==0.21.2
-pytest-httpx==0.26.0
-responses==0.24.1
-python-jose[cryptography]==3.3.0  # JWT token support
+fastapi==0.119.1
+uvicorn==0.38.0
+pydantic==2.12.3
+pydantic-settings==2.11.0
+requests==2.32.5
+python-multipart==0.0.20
+httpx==0.28.1
+pytest==8.4.2
+pytest-asyncio==1.2.0
+pytest-httpx==0.35.0
+responses==0.25.8
+python-jose[cryptography]==3.5.0
+python-dotenv==1.1.1
 
-# Export dependencies (Phase 8 - Optional packages)
-# Install based on export format requirements:
-# - CSV: Built-in (no additional packages)
-# - Parquet: pip install pyarrow
-# - Excel: pip install openpyxl
-# - PDF: pip install reportlab
-
-pyarrow>=14.0.0          # Apache Parquet export (optional)
-openpyxl>=3.1.0          # Excel export (optional)
-reportlab>=4.0.0         # PDF report generation (optional)
-
-# Metrics exposure (Phase 9)
-prometheus-client>=0.19.0  # API metrics in Prometheus format
+pyarrow>=21.0.0
+openpyxl>=3.1.0
+reportlab>=4.0.0
+prometheus-client>=0.21.0

@@ -24,8 +24,8 @@ from app.middleware import get_metrics_text, get_metrics_content_type
 router = APIRouter()
 
 # API version (should be read from package metadata in production)
-API_VERSION = "2.0.0"
-API_BUILD_DATE = "2024-10-15"
+API_VERSION = "0.1.0"
+API_BUILD_DATE = "2025-01-23"
 
 # ============================================================================
 # Health Check
@@ -106,15 +106,15 @@ async def get_version():
     **Example Response:**
     ```json
     {
-      "api_version": "2.0.0",
-      "build_date": "2024-10-15",
+      "api_version": "0.1.0",
+      "build_date": "2025-01-23",
       "git_commit": "unknown",
       "python_version": "3.12.1",
       "dependencies": {
-        "fastapi": "0.104.1",
-        "pydantic": "2.5.0",
-        "requests": "2.31.0",
-        "prometheus_client": "0.19.0"
+        "fastapi": "0.119.1",
+        "pydantic": "2.12.3",
+        "requests": "2.32.5",
+        "prometheus_client": "0.23.1"
       }
     }
     ```
@@ -128,14 +128,14 @@ async def get_version():
         "git_commit": "unknown",  # TODO: Add from CI/CD environment variables
         "python_version": python_version,
         "dependencies": {
-            "fastapi": "0.104.1",
-            "pydantic": "2.5.0",
-            "requests": "2.31.0",
-            "httpx": "0.25.2",
-            "prometheus_client": "0.19.0",
-            "pyarrow": "14.0.0+",
-            "openpyxl": "3.1.0+",
-            "reportlab": "4.0.0+"
+            "fastapi": "0.119.1",
+            "pydantic": "2.12.3",
+            "requests": "2.32.5",
+            "httpx": "0.28.1",
+            "prometheus_client": "0.23.1",
+            "pyarrow": "21.0.0+",
+            "openpyxl": "3.1.5+",
+            "reportlab": "4.4.4+"
         }
     }
 
@@ -152,8 +152,8 @@ async def get_capabilities():
     **Example Response:**
     ```json
     {
-      "timestamp": "2024-10-15T12:00:00Z",
-      "api_version": "2.0.0",
+      "timestamp": "2025-01-23T12:00:00Z",
+      "api_version": "0.1.0",
       "supported_features": {
         "accelerators": ["gpu", "npu"],
         "infrastructure": ["nodes", "pods", "containers"],

@@ -17,7 +17,7 @@ from app.auth import verify_token
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("AI Accelerator & Infrastructure Monitoring API - Starting up")
-    print("API Version: 2.0.0 (7-Domain Architecture)")
+    print("API Version: 0.1.0")
     print("Metrics middleware enabled - Prometheus metrics available at /api/v1/system/metrics")
     yield
     print("Application shutdown")
@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Accelerator & Infrastructure Monitoring API",
     description="",
-    version="2.0.0",
+    version="0.1.0",
     lifespan=lifespan
 )
 
@@ -167,7 +167,7 @@ async def websocket_metrics_stream(
 def read_root():
     return {
         "message": "AI Accelerator & Infrastructure Monitoring API",
-        "version": "2.0.0",
+        "version": "0.1.0",
         "architecture": "7-Domain Structure",
         "docs": "/docs",
         "authentication": {

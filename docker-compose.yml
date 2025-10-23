@@ -1,15 +1,15 @@
-# AI Chip Power Monitoring API - External Prometheus Setup
+# KCloud Monitor - External Prometheus Setup
 # Host network mode as requested
 
 services:
-  # FastAPI Application (External Prometheus)
+  # KCloud Monitor API
   api:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         PYTHON_VERSION: 3.12
-    container_name: power-monitor-api
+    container_name: kcloud-monitor-api
     env_file:
       - .env
     environment:
@@ -27,7 +27,7 @@ services:
     ports:
       - "0.0.0.0:${PORT:-8000}:${PORT:-8000}"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8000}/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8000}/api/v1/system/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -35,5 +35,5 @@ services:
 
 # Usage:
 # 1. Copy .env.example to .env and update PROMETHEUS_URL (and credentials if needed).
-# 2. Run: docker-compose up api
-# 3. Verify health: curl http://localhost:8000/api/v1/health -u admin:changeme
+# 2. Run: docker-compose up -d
+# 3. Verify health: curl http://localhost:8000/api/v1/system/health
