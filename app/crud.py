@@ -3003,7 +3003,7 @@ async def get_node_metrics(node_name: str) -> Dict[str, Any]:
         Dictionary with node CPU, memory, disk, network metrics
     """
     # Don't escape dots in node_name for Prometheus regex matching
-    # IP addresses like 101.79.0.108 should work as-is in regex
+    # IP addresses like 192.168.1.100 should work as-is in regex
     node_regex = node_name
 
     cpu_query = f'100 - (avg by (instance) (rate(node_cpu_seconds_total{{mode="idle",instance=~".*{node_regex}.*"}}[5m])) * 100)'

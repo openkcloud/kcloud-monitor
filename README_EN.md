@@ -128,7 +128,7 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&form
 | **System** | `/api/v1/system/health` | - | ✅ |
 
 > 📖 **Detailed API Documentation**: [spec/API_SPECIFICATION.md](spec/API_SPECIFICATION.md)
-> 📋 **Endpoint Mapping**: [docs/API_ENDPOINT_MAPPING.md](docs/API_ENDPOINT_MAPPING.md)
+> 📋 **Endpoint Mapping**: [docs/API_ENDPOINT_MAPPING.md](tests/test_docs/API_ENDPOINT_MAPPING.md)
 
 ## System Architecture
 
@@ -200,14 +200,14 @@ Key environment variables:
 
 ```bash
 # Prometheus connection
-PROMETHEUS_URL=http://101.79.0.107:30090
+PROMETHEUS_URL=http://prometheus-server:9090
 
 # Authentication
 API_AUTH_USERNAME=admin
 API_AUTH_PASSWORD=changeme
 
 # Multi-cluster (optional)
-# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom1:9090"}]'
+# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
 ```
 
 > 📖 **Detailed Configuration Guide**: [spec/PROMETHEUS_SETUP.md](spec/PROMETHEUS_SETUP.md)
@@ -223,7 +223,7 @@ API_AUTH_PASSWORD=changeme
 | [Data Models](spec/DATA_MODELS.md) | Pydantic data model specifications |
 | [Prometheus Setup](spec/PROMETHEUS_SETUP.md) | Exporter setup and integration guide |
 | [Developer Guide](CLAUDE.md) | Detailed guide for developers |
-| [Endpoint Mapping](docs/API_ENDPOINT_MAPPING.md) | Implementation status by endpoint |
+| [Endpoint Mapping](tests/test_docs/API_ENDPOINT_MAPPING.md) | Implementation status by endpoint |
 
 ### 🔧 Tech Stack
 

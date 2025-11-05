@@ -124,7 +124,7 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&form
 | **System** | `/api/v1/system/health` | - | ✅ |
 
 > 📖 **상세 API 문서**: [spec/API_SPECIFICATION.md](spec/API_SPECIFICATION.md)
-> 📋 **엔드포인트 매핑**: [docs/API_ENDPOINT_MAPPING.md](docs/API_ENDPOINT_MAPPING.md)
+> 📋 **엔드포인트 매핑**: [docs/API_ENDPOINT_MAPPING.md](tests/test_docs/API_ENDPOINT_MAPPING.md)
 
 ## 시스템 아키텍처
 
@@ -196,14 +196,14 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&form
 
 ```bash
 # Prometheus 연결
-PROMETHEUS_URL=http://101.79.0.107:30090
+PROMETHEUS_URL=http://prometheus-server:9090
 
 # 인증
 API_AUTH_USERNAME=admin
 API_AUTH_PASSWORD=changeme
 
 # 멀티 클러스터 (옵션)
-# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom1:9090"}]'
+# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
 ```
 
 > 📖 **상세 설정 가이드**: [spec/PROMETHEUS_SETUP.md](spec/PROMETHEUS_SETUP.md)
@@ -219,7 +219,7 @@ API_AUTH_PASSWORD=changeme
 | [데이터 모델](spec/DATA_MODELS.md) | Pydantic 데이터 모델 명세 |
 | [Prometheus 설정](spec/PROMETHEUS_SETUP.md) | Exporter 설정 및 연동 가이드 |
 | [개발 가이드](CLAUDE.md) | 개발자를 위한 상세 가이드 |
-| [엔드포인트 매핑](docs/API_ENDPOINT_MAPPING.md) | 엔드포인트별 구현 상태 |
+| [엔드포인트 매핑](tests/test_docs/API_ENDPOINT_MAPPING.md) | 엔드포인트별 구현 상태 |
 
 ### 🔧 기술 스택
 
