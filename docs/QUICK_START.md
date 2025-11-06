@@ -159,7 +159,7 @@ curl -u admin:changeme "http://localhost:8001/api/v1/export/report?template=dail
 ### WebSocket
 
 ```javascript
-// 전력 데이터 실시간 수트리밍
+// 전력 데이터 실시간 스트리밍
 const ws = new WebSocket('ws://localhost:8001/api/v1/monitoring/stream/power?interval=5');
 
 ws.onopen = () => {
