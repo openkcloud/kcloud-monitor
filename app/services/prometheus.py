@@ -3,6 +3,14 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, Union
 
 from app.config import Settings
+from app.utils.prometheus_validation import (
+    sanitize_label_value,
+    sanitize_metric_name,
+    build_label_matcher,
+    build_label_filter,
+    validate_step,
+    PromQLValidationError
+)
 
 # Updated to use available Kepler metrics instead of nvidia-smi
 PROMETHEUS_QUERIES = {
@@ -96,19 +104,49 @@ class PrometheusClient:
                 return "disconnected"
 
     def build_query(self, metric_name: str, instance: Optional[str] = None) -> str:
-        """Builds a PromQL query with an optional instance filter."""
+        """
+        Builds a secure PromQL query with an optional instance filter.
+
+        This method prevents PromQL injection by validating all user inputs
+        before constructing the query string.
+
+        Args:
+            metric_name: The metric name (must be in PROMETHEUS_QUERIES)
+            instance: Optional instance/node filter (will be sanitized)
+
+        Returns:
+            A safe PromQL query string
+
+        Raises:
+            ValueError: If metric_name is not found
+            PromQLValidationError: If instance contains invalid characters
+        """
         query = PROMETHEUS_QUERIES.get(metric_name)
         if not query:
             raise ValueError(f"Metric '{metric_name}' not found in PROMETHEUS_QUERIES mapping.")
 
         if instance:
+            # Sanitize the instance value to prevent PromQL injection
+            try:
+                safe_instance = sanitize_label_value(instance)
+            except PromQLValidationError as e:
+                raise ValueError(f"Invalid instance value: {e}") from e
+
+            # Build a safe label matcher
+            label_filter = build_label_matcher("exported_instance", safe_instance)
+
             # For Kepler metrics, we need to filter by exported_instance inside the query
             # Handle both simple metrics and complex expressions like rate()
             if "rate(" in query:
                 # Insert the filter inside the rate() function
-                query = query.replace("kepler_node_platform_joules_total", f'kepler_node_platform_joules_total{{exported_instance="{instance}"}}')
+                # Example: rate(kepler_node_platform_joules_total[5m])
+                #       -> rate(kepler_node_platform_joules_total{exported_instance="node-01"}[5m])
+                query = query.replace("kepler_node_platform_joules_total",
+                                    f'kepler_node_platform_joules_total{{{label_filter}}}')
             else:
                 # Simple metric, just append the filter
-                query += f'{{exported_instance="{instance}"}}'
+                # Example: kepler_node_gpu_utilization
+                #       -> kepler_node_gpu_utilization{exported_instance="node-01"}
+                query += f'{{{label_filter}}}'
 
         return query

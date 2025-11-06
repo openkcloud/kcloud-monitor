@@ -8,6 +8,13 @@ import re
 import logging
 from collections import defaultdict
 
+from app.utils.prometheus_validation import (
+    sanitize_label_value,
+    build_label_matcher,
+    build_label_filter,
+    PromQLValidationError
+)
+
 logger = logging.getLogger(__name__)
 
 from app.models.responses import (
@@ -187,20 +194,26 @@ async def get_timeseries_data(params: TimeSeriesQueryParams) -> TimeSeriesRespon
         start_time = end_time - period_map.get(period_value, timedelta(hours=1))
         period_str = period_value
 
-    # Build Kepler query with filters
+    # Build Kepler query with filters (secure version)
     base_query = "sum(rate(kepler_node_platform_joules_total[5m]))"
 
     if params.instance or params.cluster or params.node:
-        filters = []
-        if params.instance:
-            filters.append(f'exported_instance="{params.instance}"')
-        if params.cluster:
-            filters.append(f'cluster="{params.cluster}"')
-        if params.node:
-            filters.append(f'node="{params.node}"')
+        # Build filters using secure validation
+        filter_dict = {}
+        try:
+            if params.instance:
+                filter_dict['exported_instance'] = sanitize_label_value(params.instance)
+            if params.cluster:
+                filter_dict['cluster'] = sanitize_label_value(params.cluster)
+            if params.node:
+                filter_dict['node'] = sanitize_label_value(params.node)
+        except PromQLValidationError as e:
+            logger.error(f"Invalid filter value: {e}")
+            raise ValueError(f"Invalid filter parameter: {e}")
 
-        filter_str = ",".join(filters)
-        query = f"sum(rate(kepler_node_platform_joules_total{{{filter_str}}}[5m]))"
+        # Build safe label filter
+        label_filter = build_label_filter(filter_dict)
+        query = f"sum(rate(kepler_node_platform_joules_total{label_filter}[5m]))"
     else:
         query = base_query
 
@@ -442,12 +455,18 @@ async def get_pod_list(
             continue
         container_names_map[(namespace, pod)].append(container)
 
-    power_filters = []
-    if namespace_filter:
-        power_filters.append(f'container_namespace="{namespace_filter}"')
-    if node_filter:
-        power_filters.append(f'node="{node_filter}"')
-    power_selector = "{" + ",".join(power_filters) + "}" if power_filters else ""
+    # Build power query filters (secure version)
+    filter_dict = {}
+    try:
+        if namespace_filter:
+            filter_dict['container_namespace'] = sanitize_label_value(namespace_filter)
+        if node_filter:
+            filter_dict['node'] = sanitize_label_value(node_filter)
+    except PromQLValidationError as e:
+        logger.error(f"Invalid filter value in get_pod_list: {e}")
+        raise ValueError(f"Invalid filter parameter: {e}")
+
+    power_selector = build_label_filter(filter_dict)
     power_query = f'sum(rate(kepler_container_package_joules_total{power_selector}[5m])) by (container_namespace, pod_name)'
     power_result = prometheus_client.query(power_query).get('data', {}).get('result', [])
     power_map = _map_namespace_pod(power_result, namespace_label="container_namespace", pod_label="pod_name")
@@ -1509,8 +1528,15 @@ async def get_dcgm_gpu_info(node: Optional[str] = None) -> List[Dict[str, Any]]:
     - Kubernetes Pod allocation: Use Kepler (pod power)
     - VM passthrough: Use DCGM (VM power)
     """
+    # Build DCGM query (secure version)
     if node:
-        query = f'DCGM_FI_DEV_GPU_UTIL{{Hostname="{node}"}}'
+        try:
+            safe_node = sanitize_label_value(node)
+            label_matcher = build_label_matcher("Hostname", safe_node)
+            query = f'DCGM_FI_DEV_GPU_UTIL{{{label_matcher}}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in get_dcgm_gpu_info: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
     else:
         query = 'DCGM_FI_DEV_GPU_UTIL'
 
@@ -1802,25 +1828,43 @@ async def get_kepler_gpu_info(node: Optional[str] = None) -> List[Dict[str, Any]
     
     Note: This provides node-level aggregated data, not per-GPU details.
     """
-    # Get node information from Kepler
+    # Get node information from Kepler (secure version)
     node_info_query = 'kepler_node_info'
     if node:
-        node_info_query = f'kepler_node_info{{instance=~".*{node}.*"}}'
-    
+        try:
+            safe_node = sanitize_label_value(node)
+            # Use regex matcher for partial matching
+            node_info_query = f'kepler_node_info{{instance=~".*{safe_node}.*"}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in get_kepler_gpu_info: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
+
     node_info_result = prometheus_client.query(node_info_query).get('data', {}).get('result', [])
-    
-    # Get power data from Kepler
+
+    # Get power data from Kepler (secure version)
     if node:
-        power_query = f'rate(kepler_node_platform_joules_total{{exported_instance="{node}"}}[5m])'
+        try:
+            safe_node = sanitize_label_value(node)
+            label_matcher = build_label_matcher("exported_instance", safe_node)
+            power_query = f'rate(kepler_node_platform_joules_total{{{label_matcher}}}[5m])'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in power query: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
     else:
         power_query = 'rate(kepler_node_platform_joules_total[5m])'
-    
+
     power_result = prometheus_client.query(power_query).get('data', {}).get('result', [])
-    
-    # Get temperature from node_exporter hwmon
+
+    # Get temperature from node_exporter hwmon (secure version)
     temp_query = 'node_hwmon_temp_celsius{sensor=~"temp.*"}'
     if node:
-        temp_query = f'node_hwmon_temp_celsius{{instance=~".*{node}.*",sensor=~"temp.*"}}'
+        try:
+            safe_node = sanitize_label_value(node)
+            # Use regex matcher for partial matching with sensor filter
+            temp_query = f'node_hwmon_temp_celsius{{instance=~".*{safe_node}.*",sensor=~"temp.*"}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in temperature query: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
     
     temp_result = prometheus_client.query(temp_query).get('data', {}).get('result', [])
     
@@ -1927,23 +1971,41 @@ async def get_kepler_gpu_metrics(node: Optional[str] = None) -> List[Dict[str, A
     2. Node exporter hwmon temperature
     3. Node exporter hwmon power sensors
     """
-    # Build filter for queries
-    filter_str = f'{{exported_instance="{node}"}}' if node else ''
+    # Build filter for queries (secure version)
+    filter_str = ''
+    if node:
+        try:
+            safe_node = sanitize_label_value(node)
+            label_matcher = build_label_matcher("exported_instance", safe_node)
+            filter_str = f'{{{label_matcher}}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in get_node_metrics: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
 
     # Query Kepler power metrics
     power_query = f'rate(kepler_node_platform_joules_total{filter_str}[5m])'
     power_result = prometheus_client.query(power_query).get('data', {}).get('result', [])
 
-    # Query node_exporter temperature
+    # Query node_exporter temperature (secure version)
     temp_query = 'node_hwmon_temp_celsius{sensor=~"temp.*"}'
     if node:
-        temp_query = f'node_hwmon_temp_celsius{{instance=~".*{node}.*",sensor=~"temp.*"}}'
+        try:
+            safe_node = sanitize_label_value(node)
+            temp_query = f'node_hwmon_temp_celsius{{instance=~".*{safe_node}.*",sensor=~"temp.*"}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in temperature query: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
     temp_result = prometheus_client.query(temp_query).get('data', {}).get('result', [])
 
-    # Query node_exporter power sensors
+    # Query node_exporter power sensors (secure version)
     hwmon_power_query = 'node_hwmon_power_average_watt'
     if node:
-        hwmon_power_query = f'node_hwmon_power_average_watt{{instance=~".*{node}.*"}}'
+        try:
+            safe_node = sanitize_label_value(node)
+            hwmon_power_query = f'node_hwmon_power_average_watt{{instance=~".*{safe_node}.*"}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in hwmon power query: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
     hwmon_power_result = prometheus_client.query(hwmon_power_query).get('data', {}).get('result', [])
 
     gpu_metrics = {}
@@ -2883,7 +2945,15 @@ async def get_node_detail(node_name: str) -> Dict[str, Any]:
     if not node_info:
         raise ValueError(f"Node {node_name} not found")
 
-    detail_query = f'kepler_node_info{{node="{node_name}"}}'
+    # Build detail query (secure version)
+    try:
+        safe_node_name = sanitize_label_value(node_name)
+        label_matcher = build_label_matcher("node", safe_node_name)
+        detail_query = f'kepler_node_info{{{label_matcher}}}'
+    except PromQLValidationError as e:
+        logger.error(f"Invalid node_name in get_node_detail: {e}")
+        raise ValueError(f"Invalid node_name parameter: {e}")
+
     detail_result = prometheus_client.query(detail_query).get('data', {}).get('result', [])
 
     if detail_result:
@@ -3948,10 +4018,16 @@ async def get_cluster_topology(
         connections = []
         
         if include_pods:
-            # Query kube_pod_info
+            # Query kube_pod_info (secure version)
             pod_query = 'kube_pod_info'
             if namespace:
-                pod_query = f'kube_pod_info{{namespace="{namespace}"}}'
+                try:
+                    safe_namespace = sanitize_label_value(namespace)
+                    label_matcher = build_label_matcher("namespace", safe_namespace)
+                    pod_query = f'kube_pod_info{{{label_matcher}}}'
+                except PromQLValidationError as e:
+                    logger.error(f"Invalid namespace in get_cluster_summary: {e}")
+                    raise ValueError(f"Invalid namespace parameter: {e}")
             
             pod_result = prometheus_client.query(pod_query)
             

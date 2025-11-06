@@ -31,4 +31,7 @@ USER app
 EXPOSE ${PORT:-8000}
 
 # Run the application with environment variables
-CMD uvicorn app.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8000}
+# WARNING: Multi-worker mode (UVICORN_WORKERS>1) requires Redis for shared cache
+# Current in-memory cache does NOT sync across workers
+# For production: Use UVICORN_WORKERS=1 OR implement Redis cache
+CMD uvicorn app.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-1}

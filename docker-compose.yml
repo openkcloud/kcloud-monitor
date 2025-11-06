@@ -16,6 +16,10 @@ services:
       # Override defaults at runtime if needed
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
+      # WARNING: Multi-worker (>1) requires Redis for shared cache
+      # Current in-memory cache does NOT sync across workers
+      # Use UVICORN_WORKERS=1 for single worker or setup Redis
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
       PROMETHEUS_URL: ${PROMETHEUS_URL:-https://prometheus.example.com}
       PROMETHEUS_TIMEOUT: ${PROMETHEUS_TIMEOUT:-30}
       API_AUTH_USERNAME: ${API_AUTH_USERNAME:-admin}
