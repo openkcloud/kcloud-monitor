@@ -88,8 +88,8 @@ app.include_router(monitoring.router, prefix="/api/v1", tags=["Monitoring"], dep
 # 6. Export - Data export and reporting
 app.include_router(export.router, prefix="/api/v1", tags=["Export"], dependencies=[Depends(verify_token)])
 
-# 7. System - Health, info, capabilities
-app.include_router(system.router, prefix="/api/v1", tags=["System"], dependencies=[Depends(verify_token)])
+# 7. System - Health, info, capabilities (public endpoints for health/metrics)
+app.include_router(system.router, prefix="/api/v1", tags=["System"])
 
 # ============================================================================
 # Legacy API Routers (Backward Compatibility - Deprecated)
