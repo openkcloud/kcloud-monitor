@@ -6,6 +6,7 @@ This module defines common response models used across all API endpoints.
 
 from typing import Optional, Any, List, TypeVar, Generic
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel, Field
 
 
@@ -37,6 +38,10 @@ class BaseResponse(BaseModel):
         default_factory=list,
         description="Auxiliary sources that failed when status is 'partial' (design_contracts §6)",
     )
+    request_id: Optional[str] = Field(
+        None,
+        description="Correlation id for this request; populated by middleware (design_contracts §6)",
+    )
 
 
 class SuccessResponse(BaseResponse):
@@ -54,14 +59,26 @@ class SuccessResponse(BaseResponse):
 # Error Response Models
 # ============================================================================
 
+class ErrorCode(str, Enum):
+    """Standard error codes (design_contracts §6)."""
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    NOT_FOUND = "NOT_FOUND"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    PROMETHEUS_QUERY_FAILED = "PROMETHEUS_QUERY_FAILED"
+    PROMETHEUS_UNAVAILABLE = "PROMETHEUS_UNAVAILABLE"
+    UPSTREAM_TIMEOUT = "UPSTREAM_TIMEOUT"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
 class ErrorDetail(BaseModel):
     """
     Detailed error information.
 
-    Provides structured error data with code, message, and optional details.
+    Provides structured error data with code, message, retryable flag, and optional details.
     """
-    code: str = Field(..., description="Error code (e.g., PROMETHEUS_ERROR, VALIDATION_ERROR)")
+    code: str = Field(..., description="Error code (see ErrorCode, e.g. PROMETHEUS_QUERY_FAILED)")
     message: str = Field(..., description="Human-readable error message")
+    retryable: bool = Field(False, description="Whether the client may retry the request (design_contracts §6)")
     details: Optional[str] = Field(None, description="Additional error details or context")
     field: Optional[str] = Field(None, description="Field name (for validation errors)")
 
@@ -72,6 +89,7 @@ class ErrorResponse(BaseResponse):
 
     Provides consistent error structure across all endpoints.
     """
+    status: str = Field("error", description="Operation status")
     error: ErrorDetail = Field(..., description="Error details")
 
 
