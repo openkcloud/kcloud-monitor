@@ -11,7 +11,7 @@ from app.api import system as legacy_system, power as legacy_power, cluster as l
 from app.models.responses import ErrorResponse, ErrorDetail
 from app.services.prometheus import PrometheusException
 from app.services.stream import power_stream_handler, metrics_stream_handler
-from app.middleware import MetricsMiddleware
+from app.middleware import MetricsMiddleware, RequestIDMiddleware
 from app.auth import verify_token
 
 @asynccontextmanager
@@ -44,6 +44,9 @@ app.add_middleware(
 
 # Add metrics middleware for request tracking
 app.add_middleware(MetricsMiddleware)
+
+# Request ID middleware (outermost) - correlation id on every request/response
+app.add_middleware(RequestIDMiddleware)
 
 # ============================================================================
 # Exception Handlers

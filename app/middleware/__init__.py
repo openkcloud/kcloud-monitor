@@ -2,9 +2,11 @@
 Middleware package for FastAPI application.
 
 Contains:
+- RequestIDMiddleware: Per-request correlation id (X-Request-ID)
 - MetricsMiddleware: Request tracking and Prometheus metrics
 """
 
+from app.middleware.request_id import RequestIDMiddleware, REQUEST_ID_HEADER
 from app.middleware.metrics import (
     MetricsMiddleware,
     get_metrics_text,
@@ -18,6 +20,8 @@ from app.middleware.metrics import (
 )
 
 __all__ = [
+    "RequestIDMiddleware",
+    "REQUEST_ID_HEADER",
     "MetricsMiddleware",
     "get_metrics_text",
     "get_metrics_content_type",
