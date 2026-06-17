@@ -17,9 +17,26 @@ class BaseResponse(BaseModel):
     """
     Base response model for all API responses.
 
-    Provides a common timestamp field.
+    Provides common metadata shared by every response (design_contracts §6):
+    timestamp, observed_at, is_stale, warnings[], partial_sources[].
     """
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp (UTC)")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response generation time (UTC)")
+    observed_at: Optional[datetime] = Field(
+        None,
+        description="Time the underlying data was observed (UTC); None if not time-based",
+    )
+    is_stale: bool = Field(
+        False,
+        description="True if the underlying data exceeds the staleness threshold (design_contracts §6)",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Non-fatal warning codes (e.g. STALE_DATA, FACILITY_DATA_EXTERNAL)",
+    )
+    partial_sources: List[str] = Field(
+        default_factory=list,
+        description="Auxiliary sources that failed when status is 'partial' (design_contracts §6)",
+    )
 
 
 class SuccessResponse(BaseResponse):
