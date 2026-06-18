@@ -14,9 +14,11 @@ from app.services.stream import power_stream_handler, metrics_stream_handler
 from app.middleware import MetricsMiddleware, RequestIDMiddleware, RateLimitMiddleware
 from app.auth import verify_token
 from app.config import settings
+from app.logging_config import configure_logging
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging(settings.LOG_LEVEL)
     print("AI Accelerator & Infrastructure Monitoring API - Starting up")
     print("API Version: 0.1.0")
     print("Metrics middleware enabled - Prometheus metrics available at /api/v1/system/metrics")

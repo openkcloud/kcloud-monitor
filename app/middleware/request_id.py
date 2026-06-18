@@ -13,6 +13,8 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.logging_config import request_id_var
+
 REQUEST_ID_HEADER = "X-Request-ID"
 
 # Inbound header is a trust boundary: only reflect safe ids, else generate a new one.
@@ -26,6 +28,11 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         incoming = request.headers.get(REQUEST_ID_HEADER, "")
         request_id = incoming if _SAFE_REQUEST_ID.match(incoming) else uuid.uuid4().hex
         request.state.request_id = request_id
-        response = await call_next(request)
-        response.headers[REQUEST_ID_HEADER] = request_id
-        return response
+        # Expose to logging for the duration of the request (design_contracts §6).
+        token = request_id_var.set(request_id)
+        try:
+            response = await call_next(request)
+            response.headers[REQUEST_ID_HEADER] = request_id
+            return response
+        finally:
+            request_id_var.reset(token)
