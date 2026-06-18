@@ -2404,6 +2404,55 @@ def _npu_identity_key(labels: Dict[str, str]) -> str:
     )
 
 
+def _chip_for_npu(npu: Dict[str, Any]) -> Optional[str]:
+    """Best-effort hwmon chip name for an NPU (rngd<device-index>)."""
+    dev = npu.get("device")
+    if dev is not None and str(dev).isdigit():
+        return f"rngd{dev}"
+    return None
+
+
+def _apply_npu_hwmon_fallback(collector, node: Optional[str], metrics_by_id: Dict[str, Dict[str, Any]]) -> None:
+    """Fill missing temperature/power from node_hwmon_* when the exporter omits them (#19).
+
+    ponytail: chip↔device matching is best-effort (device index, or single-NPU host).
+    """
+    fields = ("temperature_celsius", "board_temperature_celsius", "power_usage_watts")
+    if not any(m[f] is None for m in metrics_by_id.values() for f in fields):
+        return
+
+    from app.services.collectors.furiosa import NODE_LABEL, HWMON_SENSOR_PEAK, HWMON_SENSOR_AMBIENT
+
+    def _index(series_list):
+        out = {}
+        for s in series_list:
+            lbls = s.get("metric", {})
+            host = lbls.get(NODE_LABEL) or lbls.get("node") or lbls.get("instance")
+            out[(host, lbls.get("chip"))] = _safe_float(s.get("value", [0, None])[1])
+        return out
+
+    peak = _index(collector.hwmon_temperature(node, sensor=HWMON_SENSOR_PEAK))
+    ambient = _index(collector.hwmon_temperature(node, sensor=HWMON_SENSOR_AMBIENT))
+    power = _index(collector.hwmon_power(node))
+
+    per_host: Dict[Any, int] = {}
+    for m in metrics_by_id.values():
+        per_host[m["hostname"]] = per_host.get(m["hostname"], 0) + 1
+
+    for m in metrics_by_id.values():
+        host = m["hostname"]
+        chip = _chip_for_npu(m)
+        if chip is None and per_host.get(host) == 1:
+            chip = next((c for (h, c) in peak if h == host), None) \
+                or next((c for (h, c) in power if h == host), None)
+        if m["temperature_celsius"] is None:
+            m["temperature_celsius"] = peak.get((host, chip))
+        if m["board_temperature_celsius"] is None:
+            m["board_temperature_celsius"] = ambient.get((host, chip))
+        if m["power_usage_watts"] is None:
+            m["power_usage_watts"] = power.get((host, chip))
+
+
 async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = None, vendor: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Fetch Furiosa NPU metrics from the Furiosa Metrics Exporter.
@@ -2465,6 +2514,9 @@ async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = No
     for key, (total, count) in util_acc.items():
         if count:
             metrics_by_id[key]["utilization_percent"] = round(total / count, 2)
+
+    # hwmon fallback for values the exporter did not provide (#19).
+    _apply_npu_hwmon_fallback(collector, node, metrics_by_id)
 
     results = list(metrics_by_id.values())
     if npu_id:
