@@ -2524,30 +2524,43 @@ async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = No
     return results
 
 
+_NPU_CORE_LABELS = ("core", "pe", "core_id")
+
+
 async def get_npu_core_status(node: Optional[str] = None, npu_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Fetch Furiosa NPU core-level status.
+    Fetch Furiosa NPU per-core/PE status from `furiosa_npu_core_utilization`.
 
-    NOTE: This is Furiosa-specific functionality for multi-core NPUs.
-    Returns detailed information about individual NPU cores including:
-    - Core state (idle/running/error)
-    - Core utilization
-    - Core temperature
-    - Process information running on each core
+    caveat: the exporter provides per-core utilization only. Temperature is exposed
+    per-chip (peak/ambient), not per-PE; power is chip-total (no per-PE power). So
+    per-core temperature is None and power is reported as whole-device elsewhere.
 
     Args:
         node: Optional node hostname filter
         npu_id: Optional NPU device ID filter
 
     Returns:
-        List of NPU core status dictionaries
+        List of per-core status dictionaries
     """
-    # Placeholder: Return empty list
-    # Real implementation would query Furiosa-specific metrics:
-    #   - furiosa_npu_core_state{npu_id="...", core_id="..."}
-    #   - furiosa_npu_core_utilization_percent{...}
-    #   - furiosa_npu_core_temperature_celsius{...}
-    return []
+    from app.services.collectors.furiosa import FuriosaNPUCollector
+
+    collector = FuriosaNPUCollector(prometheus_client)
+    cores: List[Dict[str, Any]] = []
+    for series in collector.core_utilization(node):
+        labels = series.get("metric", {})
+        key = _npu_identity_key(labels)
+        if npu_id and key != npu_id:
+            continue
+        util = _safe_float(series.get("value", [0, None])[1])
+        cores.append({
+            "npu_id": key,
+            "core_id": _npu_pick_label(labels, _NPU_CORE_LABELS),
+            "utilization_percent": util,
+            "state": "running" if (util or 0) > 0 else "idle",
+            "temperature_celsius": None,        # per-PE temp not exposed by exporter (caveat)
+            "power_source": "chip_total_only",  # no per-PE power (caveat)
+        })
+    return cores
 
 
 # ============================================================================
