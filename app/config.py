@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     CACHE_TTL_GPU_TIMESERIES: int = Field(300, description="Cache TTL for GPU time-series data")
     CACHE_TTL_POWER_SUMMARY: int = Field(60, description="Cache TTL for power summary data")
 
+    # Power efficiency (facility-level power is external; see open_issues D-4)
+    PUE_COOLING_FACTOR: float = Field(
+        0.35, ge=0,
+        description="Cooling/overhead power as a fraction of IT power for PUE estimation. "
+                    "Facility data is external (BMS/PDU); replace when integrated (design D-4).",
+    )
+
     # Logging
     LOG_LEVEL: str = Field("INFO", description="Logging level")
 
