@@ -25,9 +25,25 @@ async def lifespan(app: FastAPI):
     yield
     print("Application shutdown")
 
+API_DESCRIPTION = """
+**AI Accelerator & Infrastructure Monitoring API** — 7-domain (Accelerators, Infrastructure, Hardware, Clusters, Monitoring, Export, System).
+
+## 응답 정책 (design_contracts §6)
+- `status`: `success` | `partial` | `error`. `partial`은 `warnings[]`·`partial_sources[]` 포함.
+- 모든 응답에 `observed_at`, `is_stale`(지연 시 `STALE_DATA`), `request_id` 및 `X-Request-ID` 헤더.
+- 에러 스키마: `{status, error:{code, message, retryable}, request_id, observed_at}`.
+
+## 성능 목표 (NFR, design_contracts §2)
+- 일반 조회 P95 ≤ 2초, 무거운 집계(토폴로지/대형 summary) P95 ≤ 5초.
+- SSE 첫 이벤트 ≤ 5초(heartbeat 또는 데이터), 이후 15초 heartbeat. 실시간 메트릭 지연 ≤ 60초.
+
+## 인증
+- JWT Bearer (`POST /api/v1/auth/login`). System 도메인 헬스/메트릭은 공개.
+"""
+
 app = FastAPI(
     title="AI Accelerator & Infrastructure Monitoring API",
-    description="",
+    description=API_DESCRIPTION,
     version="0.1.0",
     lifespan=lifespan
 )
