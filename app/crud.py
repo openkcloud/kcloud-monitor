@@ -2337,27 +2337,60 @@ async def get_enhanced_gpu_power_data(params: GPUQueryParams) -> GPUPowerRespons
 # NPU Monitoring Functions (Placeholder - Phase 3.2)
 # ============================================================================
 
+# Candidate exporter label names (ponytail: confirm against the installed exporter).
+_NPU_SERIAL_LABELS = ("serial", "device_sn")
+_NPU_BDF_LABELS = ("bdf", "pci_bdf")
+_NPU_UUID_LABELS = ("uuid", "device_uuid")
+_NPU_DEVICE_LABELS = ("device", "npu", "index")
+
+
+def _npu_pick_label(labels: Dict[str, str], candidates) -> Optional[str]:
+    """Return the first present non-empty label value among candidates."""
+    for name in candidates:
+        if labels.get(name):
+            return labels[name]
+    return None
+
+
 async def get_npu_info(node: Optional[str] = None, vendor: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Fetch NPU information from NPU-specific Prometheus exporters.
+    Fetch Furiosa NPU inventory from the Furiosa Metrics Exporter (`furiosa_npu_alive`).
 
-    NOTE: This is a placeholder implementation. Actual implementation will require:
-    - Furiosa AI NPU Exporter setup and metrics
-    - Rebellions NPU Exporter setup and metrics
-    - Proper metric name mapping for each vendor
+    Identifier preference: serial -> pci_bdf -> uuid (device_uuid reboot stability
+    is unverified, open_issues G-1). Rebellions NPU is not yet supported.
 
     Args:
         node: Optional node hostname filter
-        vendor: Optional vendor filter (furiosa/rebellions)
+        vendor: Optional vendor filter (furiosa)
 
     Returns:
         List of NPU information dictionaries
     """
-    # Placeholder: Return empty list since NPU exporters are not yet configured
-    # Real implementation would query Prometheus metrics like:
-    # - furiosa_npu_info{...}
-    # - rebellions_npu_info{...}
-    return []
+    if vendor and vendor.lower() != "furiosa":
+        return []
+
+    from app.services.collectors.furiosa import FuriosaNPUCollector, NODE_LABEL
+
+    collector = FuriosaNPUCollector(prometheus_client)
+    npus: List[Dict[str, Any]] = []
+    for series in collector.alive(node):
+        labels = series.get("metric", {})
+        serial = _npu_pick_label(labels, _NPU_SERIAL_LABELS)
+        bdf = _npu_pick_label(labels, _NPU_BDF_LABELS)
+        uuid = _npu_pick_label(labels, _NPU_UUID_LABELS)
+        device = _npu_pick_label(labels, _NPU_DEVICE_LABELS)
+        npus.append({
+            "npu_id": serial or bdf or uuid or device or "unknown",
+            "serial": serial,
+            "pci_bdf": bdf,
+            "uuid": uuid,
+            "device": device,
+            "model_name": labels.get("modelname") or labels.get("model") or "Furiosa RNGD",
+            "vendor": "furiosa",
+            "hostname": labels.get(NODE_LABEL) or labels.get("node") or labels.get("instance"),
+            "alive": _safe_float(series.get("value", [0, "0"])[1]) == 1.0,
+        })
+    return npus
 
 
 async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = None, vendor: Optional[str] = None) -> List[Dict[str, Any]]:
