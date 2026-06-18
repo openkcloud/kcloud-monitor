@@ -2574,6 +2574,36 @@ async def get_npu_core_status(node: Optional[str] = None, npu_id: Optional[str] 
     return cores
 
 
+async def get_npu_summary(node: Optional[str] = None, vendor: Optional[str] = None) -> Dict[str, Any]:
+    """Aggregate per-NPU metrics into a summary (defines the previously-missing helper).
+
+    Includes caller-compat keys (total_power_watts, total_npus, avg_power_watts) used by
+    get_unified_power / get_accelerator_power.
+    """
+    metrics = await get_npu_metrics(node=node, vendor=vendor)
+    total = len(metrics)
+    utils = [m["npu_utilization_percent"] for m in metrics if m.get("npu_utilization_percent") is not None]
+    temps = [m["npu_temperature_celsius"] for m in metrics if m.get("npu_temperature_celsius") is not None]
+    powers = [m["power_usage_watts"] for m in metrics if m.get("power_usage_watts") is not None]
+    active = sum(1 for m in metrics if (m.get("npu_utilization_percent") or 0) > 0)
+    total_power = sum(powers) if powers else 0.0
+    return {
+        "total_npus": total,
+        "active_npus": active,
+        "idle_npus": total - active,
+        "error_npus": sum(1 for m in metrics if not m.get("alive", True)),
+        "furiosa_count": sum(1 for m in metrics if m.get("vendor") == "furiosa"),
+        "rebellions_count": 0,
+        "avg_npu_utilization_percent": round(sum(utils) / len(utils), 2) if utils else 0.0,
+        "max_npu_utilization_percent": round(max(utils), 2) if utils else 0.0,
+        "avg_temperature_celsius": round(sum(temps) / len(temps), 2) if temps else 0.0,
+        "max_temperature_celsius": round(max(temps), 2) if temps else 0.0,
+        "total_power_watts": round(total_power, 2),
+        "avg_power_watts": round(total_power / len(powers), 2) if powers else 0.0,
+        "max_power_watts": round(max(powers), 2) if powers else 0.0,
+    }
+
+
 # ============================================================================
 # Node Monitoring Functions (Phase 4.1)
 # ============================================================================
