@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = Field(False, description="Enable API rate limiting")
     RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, description="Requests per minute per client when rate limiting is enabled")
 
+    # CORS (Phase 11.2 - restrict origins in production)
+    CORS_ALLOW_ORIGINS: str = Field("*", description="Comma-separated allowed origins, or * for all")
+
     # IPMI hardware sensors (open_issues H-1; local ipmitool + node_exporter textfile via Prometheus)
     IPMI_ENABLED: bool = Field(False, description="Enable IPMI hardware sensor endpoints")
 

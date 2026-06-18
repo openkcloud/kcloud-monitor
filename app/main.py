@@ -13,6 +13,7 @@ from app.services.prometheus import PrometheusException
 from app.services.stream import power_stream_handler, metrics_stream_handler
 from app.middleware import MetricsMiddleware, RequestIDMiddleware
 from app.auth import verify_token
+from app.config import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,10 +34,11 @@ app = FastAPI(
 # Middleware
 # ============================================================================
 
-# CORS middleware - Allow all origins for public API access
+# CORS middleware - origins configurable for production via CORS_ALLOW_ORIGINS (default "*")
+cors_allow_origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
     allow_headers=["*"],  # Allow all headers
