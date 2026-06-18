@@ -2385,6 +2385,7 @@ async def get_npu_info(node: Optional[str] = None, vendor: Optional[str] = None)
             "pci_bdf": bdf,
             "uuid": uuid,
             "device": device,
+            "memory_total_mb": _bytes_to_mb(_safe_float(_npu_pick_label(labels, ("memory_total_bytes", "memory_total")))),
             "model_name": labels.get("modelname") or labels.get("model") or "Furiosa RNGD",
             "vendor": "furiosa",
             "hostname": labels.get(NODE_LABEL) or labels.get("node") or labels.get("instance"),
@@ -2417,7 +2418,7 @@ def _apply_npu_hwmon_fallback(collector, node: Optional[str], metrics_by_id: Dic
 
     ponytail: chip↔device matching is best-effort (device index, or single-NPU host).
     """
-    fields = ("temperature_celsius", "board_temperature_celsius", "power_usage_watts")
+    fields = ("npu_temperature_celsius", "board_temperature_celsius", "power_usage_watts")
     if not any(m[f] is None for m in metrics_by_id.values() for f in fields):
         return
 
@@ -2445,8 +2446,8 @@ def _apply_npu_hwmon_fallback(collector, node: Optional[str], metrics_by_id: Dic
         if chip is None and per_host.get(host) == 1:
             chip = next((c for (h, c) in peak if h == host), None) \
                 or next((c for (h, c) in power if h == host), None)
-        if m["temperature_celsius"] is None:
-            m["temperature_celsius"] = peak.get((host, chip))
+        if m["npu_temperature_celsius"] is None:
+            m["npu_temperature_celsius"] = peak.get((host, chip))
         if m["board_temperature_celsius"] is None:
             m["board_temperature_celsius"] = ambient.get((host, chip))
         if m["power_usage_watts"] is None:
@@ -2486,10 +2487,14 @@ async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = No
             "vendor": "furiosa",
             "hostname": labels.get(NODE_LABEL) or labels.get("node") or labels.get("instance"),
             "alive": _safe_float(series.get("value", [0, "0"])[1]) == 1.0,
-            "utilization_percent": None,
-            "temperature_celsius": None,
+            "npu_utilization_percent": None,
+            "npu_temperature_celsius": None,
             "board_temperature_celsius": None,
             "power_usage_watts": None,
+            "active_cores": None,
+            "idle_cores": None,
+            "memory_used_mb": None,
+            "memory_free_mb": None,
         }
 
     def _apply(series_list, field):
@@ -2499,11 +2504,12 @@ async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = No
                 metrics_by_id[key][field] = _safe_float(s.get("value", [0, None])[1])
 
     _apply(collector.power(node), "power_usage_watts")
-    _apply(collector.temperature(node, label="peak"), "temperature_celsius")
+    _apply(collector.temperature(node, label="peak"), "npu_temperature_celsius")
     _apply(collector.temperature(node, label="ambient"), "board_temperature_celsius")
 
-    # Per-core utilization -> average per NPU (granularity normalization).
+    # Per-core utilization -> average + active/idle core counts per NPU (granularity §1).
     util_acc: Dict[str, List[float]] = {}
+    core_counts: Dict[str, List[int]] = {}
     for s in collector.core_utilization(node):
         key = _npu_identity_key(s.get("metric", {}))
         value = _safe_float(s.get("value", [0, None])[1])
@@ -2511,9 +2517,14 @@ async def get_npu_metrics(node: Optional[str] = None, npu_id: Optional[str] = No
             acc = util_acc.setdefault(key, [0.0, 0.0])
             acc[0] += value
             acc[1] += 1
+            counts = core_counts.setdefault(key, [0, 0])  # [active, idle]
+            counts[0 if value > 0 else 1] += 1
     for key, (total, count) in util_acc.items():
         if count:
-            metrics_by_id[key]["utilization_percent"] = round(total / count, 2)
+            metrics_by_id[key]["npu_utilization_percent"] = round(total / count, 2)
+    for key, (active, idle) in core_counts.items():
+        metrics_by_id[key]["active_cores"] = active
+        metrics_by_id[key]["idle_cores"] = idle
 
     # hwmon fallback for values the exporter did not provide (#19).
     _apply_npu_hwmon_fallback(collector, node, metrics_by_id)
