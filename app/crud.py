@@ -5,6 +5,7 @@ import json
 import io
 import csv
 import re
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -2231,9 +2232,11 @@ async def get_enhanced_gpu_power_data(params: GPUQueryParams) -> GPUPowerRespons
     kepler_data = await get_gpu_power_data(params)
 
     try:
-        # Get DCGM data for the same instance/node
-        dcgm_metrics = await get_dcgm_gpu_metrics(params.instance)
-        dcgm_info = await get_dcgm_gpu_info(params.instance)
+        # Get DCGM data for the same instance/node (parallel - independent queries, Phase 11.1)
+        dcgm_metrics, dcgm_info = await asyncio.gather(
+            get_dcgm_gpu_metrics(params.instance),
+            get_dcgm_gpu_info(params.instance),
+        )
 
         # Create lookup dictionaries for DCGM data
         dcgm_metrics_map = {}
@@ -3761,14 +3764,16 @@ async def get_power_efficiency(cluster: Optional[str] = None) -> Dict[str, Any]:
     from Prometheus. This implementation provides estimated values.
     """
     from datetime import datetime
+    from app.config import settings
 
     # Get IT power (compute equipment)
     unified_power = await get_unified_power(cluster)
     it_power = unified_power['data']['total_power_watts']
 
-    # Estimate cooling and overhead power (typically 30-50% of IT power)
-    # This should be replaced with actual facility power metrics
-    cooling_factor = 0.35  # 35% overhead estimate
+    # Estimate cooling and overhead power as a fraction of IT power.
+    # Facility-level power is external (BMS/PDU); see open_issues D-4. The factor
+    # is a configurable setting until real facility metrics are integrated.
+    cooling_factor = settings.PUE_COOLING_FACTOR
     cooling_power = it_power * cooling_factor
     total_facility_power = it_power + cooling_power
 
@@ -3791,6 +3796,7 @@ async def get_power_efficiency(cluster: Optional[str] = None) -> Dict[str, Any]:
 
     return {
         'timestamp': datetime.utcnow(),
+        'warnings': ['FACILITY_DATA_EXTERNAL'],
         'data': {
             'pue': round(pue, 2),
             'it_power_watts': it_power,

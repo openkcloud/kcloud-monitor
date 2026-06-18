@@ -33,6 +33,32 @@ class Settings(BaseSettings):
     CACHE_TTL_GPU_TIMESERIES: int = Field(300, description="Cache TTL for GPU time-series data")
     CACHE_TTL_POWER_SUMMARY: int = Field(60, description="Cache TTL for power summary data")
 
+    # Power efficiency (facility-level power is external; see open_issues D-4)
+    PUE_COOLING_FACTOR: float = Field(
+        0.35, ge=0,
+        description="Cooling/overhead power as a fraction of IT power for PUE estimation. "
+                    "Facility data is external (BMS/PDU); replace when integrated (design D-4).",
+    )
+
+    # Redis (Phase 11.1 - shared cache for multi-worker/K8s; unset = in-memory cache)
+    REDIS_URL: Optional[str] = Field(None, description="Redis URL for shared cache (e.g. redis://host:6379/0); unset uses in-memory cache")
+
+    # Rate limiting (Phase 11.2)
+    RATE_LIMIT_ENABLED: bool = Field(False, description="Enable API rate limiting")
+    RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, description="Requests per minute per client when rate limiting is enabled")
+
+    # CORS (Phase 11.2 - restrict origins in production)
+    CORS_ALLOW_ORIGINS: str = Field("*", description="Comma-separated allowed origins, or * for all")
+
+    # IPMI hardware sensors (open_issues H-1; local ipmitool + node_exporter textfile via Prometheus)
+    IPMI_ENABLED: bool = Field(False, description="Enable IPMI hardware sensor endpoints")
+
+    # OpenStack (Phase 4.4 - VM collector; unset = VM data disabled)
+    OPENSTACK_AUTH_URL: Optional[str] = Field(None, description="OpenStack Keystone auth URL (e.g. http://host:5000/v3)")
+    OPENSTACK_USERNAME: Optional[str] = Field(None, description="OpenStack username")
+    OPENSTACK_PASSWORD: Optional[str] = Field(None, description="OpenStack password")
+    OPENSTACK_PROJECT_NAME: Optional[str] = Field(None, description="OpenStack project name")
+
     # Logging
     LOG_LEVEL: str = Field("INFO", description="Logging level")
 
