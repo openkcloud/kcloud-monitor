@@ -287,6 +287,14 @@ async def metrics_stream_handler(
 # SSE (Server-Sent Events) Handlers
 # ============================================================================
 
+SSE_HEARTBEAT_SECONDS = 15  # design_contracts §7: heartbeat every 15s
+
+
+def _sse_heartbeat() -> str:
+    """SSE-formatted heartbeat event (design_contracts §7)."""
+    return f"event: heartbeat\ndata: {json.dumps({'timestamp': datetime.utcnow().isoformat()})}\n\n"
+
+
 async def power_events_generator(
     cluster: Optional[str] = None,
     resource_type: Optional[str] = None,
@@ -306,6 +314,10 @@ async def power_events_generator(
     logger.info(f"Starting SSE power events stream (cluster={cluster}, threshold={threshold_watts}W)")
 
     previous_power = 0.0
+
+    # Initial heartbeat so the client receives an event within the SSE
+    # first-event latency target (design_contracts §2).
+    yield _sse_heartbeat()
 
     while True:
         try:
@@ -344,8 +356,10 @@ async def power_events_generator(
 
             previous_power = current_power
 
-            # Periodic update (every 30 seconds)
-            await asyncio.sleep(30)
+            # Heartbeat every 15s while waiting for the next 30s data poll (§7).
+            for _ in range(2):
+                await asyncio.sleep(SSE_HEARTBEAT_SECONDS)
+                yield _sse_heartbeat()
 
         except Exception as e:
             logger.error(f"Error generating power events: {e}")
@@ -355,4 +369,5 @@ async def power_events_generator(
                 'error': str(e)
             }
             yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
-            await asyncio.sleep(30)
+            await asyncio.sleep(SSE_HEARTBEAT_SECONDS)
+            yield _sse_heartbeat()
