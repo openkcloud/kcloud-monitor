@@ -11,7 +11,7 @@ from app.api import system as legacy_system, power as legacy_power, cluster as l
 from app.models.responses import ErrorResponse, ErrorDetail
 from app.services.prometheus import PrometheusException
 from app.services.stream import power_stream_handler, metrics_stream_handler
-from app.middleware import MetricsMiddleware, RequestIDMiddleware
+from app.middleware import MetricsMiddleware, RequestIDMiddleware, RateLimitMiddleware
 from app.auth import verify_token
 from app.config import settings
 
@@ -46,6 +46,9 @@ app.add_middleware(
 
 # Add metrics middleware for request tracking
 app.add_middleware(MetricsMiddleware)
+
+# Rate limiting (Phase 11.2) - no-op unless RATE_LIMIT_ENABLED is set
+app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.RATE_LIMIT_PER_MINUTE)
 
 # Request ID middleware (outermost) - correlation id on every request/response
 app.add_middleware(RequestIDMiddleware)
