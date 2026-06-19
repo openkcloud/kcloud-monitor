@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = Field("change-this-secret-key", description="JWT secret key for token signing")
     JWT_ALGORITHM: str = Field("HS256", description="JWT algorithm")
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, description="JWT token expiration in minutes")
+    API_KEY: Optional[str] = Field(None, description="Optional API key for X-API-Key header auth (parallel to JWT); unset disables")
 
     # Prometheus (Single cluster - backward compatibility)
     PROMETHEUS_URL: str = Field("http://localhost:9090", description="URL of the Prometheus server")
