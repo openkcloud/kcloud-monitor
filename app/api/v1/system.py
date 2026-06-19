@@ -10,7 +10,7 @@ This module provides endpoints for:
 """
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from datetime import datetime
 import sys
 
@@ -57,6 +57,23 @@ async def health_check(settings: Settings = Depends(get_settings)):
             status="active",
             entries=cache_size
         )
+    )
+
+
+@router.get("/system/livez")
+async def liveness():
+    """Liveness probe (K8s): process is up; no dependency checks."""
+    return {"status": "alive"}
+
+
+@router.get("/system/readyz")
+async def readiness():
+    """Readiness probe (K8s): 503 when upstream (Prometheus) is unreachable."""
+    prometheus_status = prometheus_client.check_health()
+    ready = prometheus_status == "connected"
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "prometheus": prometheus_status},
     )
 
 
