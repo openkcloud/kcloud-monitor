@@ -48,7 +48,8 @@ class NPUInfo(BaseModel):
 
     # Identifiers
     npu_id: str = Field(..., description="NPU identifier (e.g., npu0, furiosa0)")
-    uuid: Optional[str] = Field(None, description="NPU UUID (vendor-specific)")
+    uuid: Optional[str] = Field(None, description="NPU UUID (vendor-specific; reboot stability unverified, open_issues G-1)")
+    serial: Optional[str] = Field(None, description="HW serial (device_sn); preferred identifier (open_issues G-1)")
     device_index: Optional[int] = Field(None, ge=0, description="NPU device index")
 
     # Hardware information
@@ -67,6 +68,7 @@ class NPUInfo(BaseModel):
     memory_total_mb: Optional[int] = Field(None, ge=0, description="Total NPU memory in megabytes")
     cores_total: Optional[int] = Field(None, ge=0, description="Total number of NPU cores (Furiosa)")
     pe_count: Optional[int] = Field(None, ge=0, description="Processing element count (Furiosa)")
+    slice_id: Optional[str] = Field(None, description="NPU slice/partition id (common name 'npu-slice'; partitioning unverified)")
 
     # Status
     status: NPUStatus = Field(NPUStatus.ACTIVE, description="NPU operational status")
@@ -111,6 +113,9 @@ class NPUMetrics(BaseModel):
     # Error metrics
     error_count: Optional[int] = Field(None, ge=0, description="Total error count")
     timeout_count: Optional[int] = Field(None, ge=0, description="Timeout error count")
+
+    # Throttle (deferred: exporter 미제공 → aux collector/recording rule로 도출)
+    throttled: Optional[bool] = Field(None, description="Throttle active (deferred; derived from throttle_reason via aux collector)")
 
 
 class NPUCoreStatus(BaseModel):
