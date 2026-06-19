@@ -73,6 +73,10 @@ class NPUInfo(BaseModel):
     # Status
     status: NPUStatus = Field(NPUStatus.ACTIVE, description="NPU operational status")
 
+    # Source of Truth (design_contracts §3)
+    data_source: Optional[str] = Field(None, description="Metric source (e.g., furiosa_exporter, hwmon)")
+    confidence: Optional[float] = Field(None, ge=0, le=1, description="Allocation/identity confidence (0~1); tenant-masked (§9)")
+
 
 class NPUMetrics(BaseModel):
     """

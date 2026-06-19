@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 from typing import Optional
+import asyncio
 
 from app.api.v1 import accelerators, infrastructure, hardware, clusters, monitoring, export, system, auth
 from app.api import system as legacy_system, power as legacy_power, cluster as legacy_cluster, gpu as legacy_gpu
@@ -12,9 +13,10 @@ from app.models.responses import ErrorResponse, ErrorDetail
 from app.services.prometheus import PrometheusException
 from app.services.stream import power_stream_handler, metrics_stream_handler
 from app.middleware import MetricsMiddleware, RequestIDMiddleware, RateLimitMiddleware
-from app.auth import verify_token
+from app.auth import verify_token, verify_token_or_api_key
 from app.config import settings
 from app.logging_config import configure_logging
+from app.services.warmup import warmup_cache
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +24,8 @@ async def lifespan(app: FastAPI):
     print("AI Accelerator & Infrastructure Monitoring API - Starting up")
     print("API Version: 0.1.0")
     print("Metrics middleware enabled - Prometheus metrics available at /api/v1/system/metrics")
+    # Non-blocking cache warmup (Phase 11.1); failures never affect startup.
+    app.state.warmup_task = asyncio.create_task(warmup_cache())
     yield
     print("Application shutdown")
 
@@ -97,22 +101,22 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
 
 # 1. Accelerators - GPU and NPU monitoring
-app.include_router(accelerators.router, prefix="/api/v1", tags=["Accelerators"], dependencies=[Depends(verify_token)])
+app.include_router(accelerators.router, prefix="/api/v1", tags=["Accelerators"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 2. Infrastructure - Nodes, Pods, Containers, VMs
-app.include_router(infrastructure.router, prefix="/api/v1", tags=["Infrastructure"], dependencies=[Depends(verify_token)])
+app.include_router(infrastructure.router, prefix="/api/v1", tags=["Infrastructure"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 3. Hardware - Physical hardware (IPMI)
-app.include_router(hardware.router, prefix="/api/v1", tags=["Hardware"], dependencies=[Depends(verify_token)])
+app.include_router(hardware.router, prefix="/api/v1", tags=["Hardware"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 4. Clusters - Multi-cluster management
-app.include_router(clusters.router, prefix="/api/v1", tags=["Clusters"], dependencies=[Depends(verify_token)])
+app.include_router(clusters.router, prefix="/api/v1", tags=["Clusters"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 5. Monitoring - Cross-domain monitoring (power, timeseries, streaming)
-app.include_router(monitoring.router, prefix="/api/v1", tags=["Monitoring"], dependencies=[Depends(verify_token)])
+app.include_router(monitoring.router, prefix="/api/v1", tags=["Monitoring"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 6. Export - Data export and reporting
-app.include_router(export.router, prefix="/api/v1", tags=["Export"], dependencies=[Depends(verify_token)])
+app.include_router(export.router, prefix="/api/v1", tags=["Export"], dependencies=[Depends(verify_token_or_api_key)])
 
 # 7. System - Health, info, capabilities (public endpoints for health/metrics)
 app.include_router(system.router, prefix="/api/v1", tags=["System"])
@@ -122,10 +126,10 @@ app.include_router(system.router, prefix="/api/v1", tags=["System"])
 # ============================================================================
 # These will be removed in a future version. Use v1 routes instead.
 
-app.include_router(legacy_system.router, prefix="/api/v1", tags=["Legacy-System"], dependencies=[Depends(verify_token)])
-app.include_router(legacy_power.router, prefix="/api/v1", tags=["Legacy-Power"], dependencies=[Depends(verify_token)])
-app.include_router(legacy_cluster.router, prefix="/api/v1", tags=["Legacy-Cluster"], dependencies=[Depends(verify_token)])
-app.include_router(legacy_gpu.router, prefix="/api/v1", tags=["Legacy-GPU"], dependencies=[Depends(verify_token)])
+app.include_router(legacy_system.router, prefix="/api/v1", tags=["Legacy-System"], dependencies=[Depends(verify_token_or_api_key)])
+app.include_router(legacy_power.router, prefix="/api/v1", tags=["Legacy-Power"], dependencies=[Depends(verify_token_or_api_key)])
+app.include_router(legacy_cluster.router, prefix="/api/v1", tags=["Legacy-Cluster"], dependencies=[Depends(verify_token_or_api_key)])
+app.include_router(legacy_gpu.router, prefix="/api/v1", tags=["Legacy-GPU"], dependencies=[Depends(verify_token_or_api_key)])
 
 # ============================================================================
 # WebSocket Endpoints (Phase 7.3)
