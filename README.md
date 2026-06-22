@@ -123,8 +123,7 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&form
 | **Export** | `/api/v1/export/power?format=csv` | - | ✅ |
 | **System** | `/api/v1/system/health` | - | ✅ |
 
-> 📖 **상세 API 문서**: [spec/API_SPECIFICATION.md](spec/API_SPECIFICATION.md)
-> 📋 **엔드포인트 매핑**: [docs/API_ENDPOINT_MAPPING.md](tests/test_docs/API_ENDPOINT_MAPPING.md)
+> 📖 **상세 API 문서**: [docs/API_GUIDE.md](docs/API_GUIDE.md)
 
 ## 시스템 아키텍처
 
@@ -206,7 +205,7 @@ API_AUTH_PASSWORD=changeme
 # PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
 ```
 
-> 📖 **상세 설정 가이드**: [spec/PROMETHEUS_SETUP.md](spec/PROMETHEUS_SETUP.md)
+> 📖 **상세 설정 가이드**: [docs/PROMETHEUS_NPU_SETUP.md](docs/PROMETHEUS_NPU_SETUP.md)
 
 ## 문서
 
@@ -214,12 +213,10 @@ API_AUTH_PASSWORD=changeme
 
 | 문서 | 설명 |
 |------|------|
-| [API 명세서](spec/API_SPECIFICATION.md) | 전체 API 엔드포인트 상세 문서 |
-| [아키텍처 설계](spec/ARCHITECTURE.md) | 도메인 기반 아키텍처 설계 철학 |
-| [데이터 모델](spec/DATA_MODELS.md) | Pydantic 데이터 모델 명세 |
-| [Prometheus 설정](spec/PROMETHEUS_SETUP.md) | Exporter 설정 및 연동 가이드 |
-| [개발 가이드](CLAUDE.md) | 개발자를 위한 상세 가이드 |
-| [엔드포인트 매핑](tests/test_docs/API_ENDPOINT_MAPPING.md) | 엔드포인트별 구현 상태 |
+| [API 가이드](docs/API_GUIDE.md) | API 엔드포인트 사용 가이드 |
+| [아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md) | 도메인 기반 아키텍처 |
+| [Prometheus NPU 설정](docs/PROMETHEUS_NPU_SETUP.md) | NPU 수집 설정(Furiosa exporter + hwmon) |
+| [빠른 시작](docs/QUICK_START.md) | 빠른 시작 가이드 |
 
 ### 🔧 기술 스택
 

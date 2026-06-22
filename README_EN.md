@@ -127,8 +127,7 @@ curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&form
 | **Export** | `/api/v1/export/power?format=csv` | - | ✅ |
 | **System** | `/api/v1/system/health` | - | ✅ |
 
-> 📖 **Detailed API Documentation**: [spec/API_SPECIFICATION.md](spec/API_SPECIFICATION.md)
-> 📋 **Endpoint Mapping**: [docs/API_ENDPOINT_MAPPING.md](tests/test_docs/API_ENDPOINT_MAPPING.md)
+> 📖 **Detailed API Documentation**: [docs/API_GUIDE.md](docs/API_GUIDE.md)
 
 ## System Architecture
 
@@ -210,7 +209,7 @@ API_AUTH_PASSWORD=changeme
 # PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
 ```
 
-> 📖 **Detailed Configuration Guide**: [spec/PROMETHEUS_SETUP.md](spec/PROMETHEUS_SETUP.md)
+> 📖 **Detailed Configuration Guide**: [docs/PROMETHEUS_NPU_SETUP.md](docs/PROMETHEUS_NPU_SETUP.md)
 
 ## Documentation
 
@@ -218,12 +217,10 @@ API_AUTH_PASSWORD=changeme
 
 | Document | Description |
 |----------|-------------|
-| [API Specification](spec/API_SPECIFICATION.md) | Complete API endpoint documentation |
-| [Architecture Design](spec/ARCHITECTURE.md) | Domain-based architecture philosophy |
-| [Data Models](spec/DATA_MODELS.md) | Pydantic data model specifications |
-| [Prometheus Setup](spec/PROMETHEUS_SETUP.md) | Exporter setup and integration guide |
-| [Developer Guide](CLAUDE.md) | Detailed guide for developers |
-| [Endpoint Mapping](tests/test_docs/API_ENDPOINT_MAPPING.md) | Implementation status by endpoint |
+| [API Guide](docs/API_GUIDE.md) | API endpoint usage guide |
+| [Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md) | Domain-based architecture |
+| [Prometheus NPU Setup](docs/PROMETHEUS_NPU_SETUP.md) | NPU metric collection (Furiosa exporter + hwmon) |
+| [Quick Start](docs/QUICK_START.md) | Quick start guide |
 
 ### 🔧 Tech Stack
 
