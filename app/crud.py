@@ -1550,22 +1550,34 @@ async def get_dcgm_gpu_info(node: Optional[str] = None) -> List[Dict[str, Any]]:
             .get('data', {}).get('result', [])
         )
     
-    # Query for memory total
-    memory_query = 'DCGM_FI_DEV_FB_TOTAL'
-    memory_result = prometheus_client.query(memory_query).get('data', {}).get('result', [])
-    
+    # Memory total: DCGM_FI_DEV_FB_TOTAL is not exposed on this cluster.
+    # Derive per-device total as FB_USED + FB_FREE; keep FB_TOTAL as fallback. (B2)
+    fb_used_result = prometheus_client.query('DCGM_FI_DEV_FB_USED').get('data', {}).get('result', [])
+    fb_free_result = prometheus_client.query('DCGM_FI_DEV_FB_FREE').get('data', {}).get('result', [])
+    fb_total_result = prometheus_client.query('DCGM_FI_DEV_FB_TOTAL').get('data', {}).get('result', [])
+
     # Query for compute capability
     compute_query = 'DCGM_FI_DEV_CUDA_COMPUTE_CAPABILITY'
     compute_result = prometheus_client.query(compute_query).get('data', {}).get('result', [])
     
     # Build maps by device
+    used_map = {}
+    for res in fb_used_result:
+        used_map[res.get('metric', {}).get('device', 'unknown')] = _safe_float(res.get('value', [0, '0'])[1])
+    free_map = {}
+    for res in fb_free_result:
+        free_map[res.get('metric', {}).get('device', 'unknown')] = _safe_float(res.get('value', [0, '0'])[1])
+
     memory_map = {}
-    for res in memory_result:
-        labels = res.get('metric', {})
-        device = labels.get('device', 'unknown')
-        memory_mb = _safe_float(res.get('value', [0, '0'])[1])
-        memory_map[device] = memory_mb
-    
+    for device in set(used_map) | set(free_map):
+        memory_map[device] = used_map.get(device, 0.0) + free_map.get(device, 0.0)
+    # FB_TOTAL fallback where actually exposed
+    for res in fb_total_result:
+        device = res.get('metric', {}).get('device', 'unknown')
+        total = _safe_float(res.get('value', [0, '0'])[1])
+        if total > 0:
+            memory_map[device] = total
+
     compute_map = {}
     for res in compute_result:
         labels = res.get('metric', {})
