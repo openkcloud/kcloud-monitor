@@ -1673,6 +1673,75 @@ async def get_dcgm_gpu_info(node: Optional[str] = None) -> List[Dict[str, Any]]:
     return gpus
 
 
+def _parse_mig_instance_utilization(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Map DCGM_FI_PROF_GR_ENGINE_ACTIVE series to per-MIG-instance utilization. (G2)
+
+    MIG-enabled GPUs (worker-2) expose no DCGM_FI_DEV_GPU_UTIL; their per-instance
+    load comes from GR_ENGINE_ACTIVE (graphics-engine active fraction, 0..1).
+    Only series carrying a GPU_I_ID label are MIG instances — non-MIG GPUs
+    (worker-3) also report GR_ENGINE_ACTIVE but without GPU_I_ID and are skipped
+    (their utilization comes from GPU_UTIL). The UUID label is the parent physical
+    GPU's UUID, shared across that GPU's MIG instances (parent+child model).
+
+    >>> rows = [
+    ...   {'metric': {'Hostname': 'worker-2', 'device': 'nvidia0', 'gpu': '0',
+    ...               'GPU_I_ID': '3', 'GPU_I_PROFILE': '1g.6gb',
+    ...               'UUID': 'GPU-404f'}, 'value': [0, '0.42']},
+    ...   {'metric': {'Hostname': 'worker-3', 'device': 'nvidia0', 'gpu': '0',
+    ...               'UUID': 'GPU-8a67'}, 'value': [0, '0.9']},
+    ... ]
+    >>> out = _parse_mig_instance_utilization(rows)
+    >>> len(out)
+    1
+    >>> out[0]['parent_uuid'], out[0]['gpu_instance_id'], out[0]['profile']
+    ('GPU-404f', 3, '1g.6gb')
+    >>> round(out[0]['utilization_percent'], 1)
+    42.0
+    """
+    instances = []
+    for res in results:
+        labels = res.get('metric', {})
+        if labels.get('GPU_I_ID') is None:
+            continue  # not a MIG instance
+        active = _safe_float(res.get('value', [0, '0'])[1]) or 0.0
+        instances.append({
+            'parent_uuid': labels.get('UUID', 'unknown'),
+            'parent_device': labels.get('device', 'unknown'),
+            'hostname': labels.get('Hostname', 'unknown'),
+            'gpu_index': _safe_int(labels.get('gpu')) or 0,
+            'gpu_instance_id': _safe_int(labels.get('GPU_I_ID')),
+            'profile': labels.get('GPU_I_PROFILE'),
+            'utilization_percent': active * 100.0,
+        })
+    return instances
+
+
+async def get_mig_instance_utilization(node: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch per-MIG-instance utilization from DCGM_FI_PROF_GR_ENGINE_ACTIVE. (G2)
+
+    Args:
+        node: Optional hostname filter (validated via sanitize_label_value).
+
+    Returns one entry per MIG instance, identified by parent physical GPU UUID +
+    gpu_instance_id (GPU_I_ID). See _parse_mig_instance_utilization for the mapping.
+    """
+    label_suffix = ''
+    if node:
+        try:
+            safe_node = sanitize_label_value(node)
+            label_matcher = build_label_matcher("Hostname", safe_node)
+            label_suffix = f'{{{label_matcher}}}'
+        except PromQLValidationError as e:
+            logger.error(f"Invalid node value in get_mig_instance_utilization: {e}")
+            raise ValueError(f"Invalid node parameter: {e}")
+
+    results = (
+        prometheus_client.query(f'DCGM_FI_PROF_GR_ENGINE_ACTIVE{label_suffix}')
+        .get('data', {}).get('result', [])
+    )
+    return _parse_mig_instance_utilization(results)
+
+
 def _infer_gpu_architecture(model_name: str) -> Optional[str]:
     """Infer GPU architecture from model name."""
     model_upper = model_name.upper()
