@@ -1529,19 +1529,26 @@ async def get_dcgm_gpu_info(node: Optional[str] = None) -> List[Dict[str, Any]]:
     - Kubernetes Pod allocation: Use Kepler (pod power)
     - VM passthrough: Use DCGM (VM power)
     """
-    # Build DCGM query (secure version)
+    # Build optional node label filter (secure version)
+    label_suffix = ''
     if node:
         try:
             safe_node = sanitize_label_value(node)
             label_matcher = build_label_matcher("Hostname", safe_node)
-            query = f'DCGM_FI_DEV_GPU_UTIL{{{label_matcher}}}'
+            label_suffix = f'{{{label_matcher}}}'
         except PromQLValidationError as e:
             logger.error(f"Invalid node value in get_dcgm_gpu_info: {e}")
             raise ValueError(f"Invalid node parameter: {e}")
-    else:
-        query = 'DCGM_FI_DEV_GPU_UTIL'
 
-    result = prometheus_client.query(query).get('data', {}).get('result', [])
+    # Enumerate GPUs by metrics present on ALL physical GPUs (incl. MIG parents).
+    # DCGM_FI_DEV_GPU_UTIL is absent on MIG-enabled GPUs (worker-2) → physical GPUs
+    # were dropped. Use GPU_TEMP/POWER_USAGE and union (UUID-deduped below). (B1)
+    result = []
+    for base_metric in ('DCGM_FI_DEV_GPU_TEMP', 'DCGM_FI_DEV_POWER_USAGE'):
+        result.extend(
+            prometheus_client.query(f'{base_metric}{label_suffix}')
+            .get('data', {}).get('result', [])
+        )
     
     # Query for memory total
     memory_query = 'DCGM_FI_DEV_FB_TOTAL'
