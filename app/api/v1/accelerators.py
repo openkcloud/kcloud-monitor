@@ -24,6 +24,21 @@ from app import crud
 
 router = APIRouter()
 
+
+def _ambiguous_gpu_detail(gpu_id: str, matches: list) -> str:
+    """Build the 409 detail when a device-id gpu_id resolves to multiple nodes. (B3)
+
+    A device id (e.g. 'nvidia0') is not unique across nodes, so a per-GPU lookup
+    without ?node= (or a UUID) could silently return another node's GPU.
+
+    >>> _ambiguous_gpu_detail('nvidia0', [{'hostname': 'worker-3'}, {'hostname': 'worker-2'}])
+    "GPU id 'nvidia0' is ambiguous across nodes ['worker-2', 'worker-3']; specify ?node= or use the GPU UUID"
+    """
+    nodes = sorted({m.get('hostname', 'unknown') for m in matches})
+    return (f"GPU id '{gpu_id}' is ambiguous across nodes {nodes}; "
+            f"specify ?node= or use the GPU UUID")
+
+
 # ============================================================================
 # GPU Endpoints
 # ============================================================================
@@ -308,15 +323,18 @@ async def get_gpu_detail(
         if not gpu_data:
             raise HTTPException(status_code=404, detail=f"GPU '{gpu_id}' not found")
 
-        # Find GPU by ID or UUID
-        gpu_info = None
-        for gpu in gpu_data:
-            if gpu.get('gpu_id') == gpu_id or gpu.get('uuid') == gpu_id:
-                gpu_info = gpu
-                break
+        # Find GPU by device id or UUID. A device id (e.g. 'nvidia0') repeats
+        # across nodes, so collect all matches and reject ambiguity — a UUID
+        # gpu_id is globally unique and resolves to exactly one. (B3)
+        matches = [g for g in gpu_data if g.get('gpu_id') == gpu_id or g.get('uuid') == gpu_id]
 
-        if not gpu_info:
+        if not matches:
             raise HTTPException(status_code=404, detail=f"GPU '{gpu_id}' not found")
+
+        if len(matches) > 1:
+            raise HTTPException(status_code=409, detail=_ambiguous_gpu_detail(gpu_id, matches))
+
+        gpu_info = matches[0]
 
         gpu_model = GPUInfo(
             gpu_id=gpu_info.get('gpu_id', 'unknown'),
@@ -385,6 +403,10 @@ async def get_gpu_detail(
         await cache_service.set(cache_key, response, ttl=ttl)
         return response
 
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch GPU details: {str(e)}")
 
@@ -416,6 +438,9 @@ async def get_gpu_metrics(
 
         if not metrics_data or len(metrics_data) == 0:
             raise HTTPException(status_code=404, detail=f"No metrics found for GPU '{gpu_id}'")
+
+        if len(metrics_data) > 1:
+            raise HTTPException(status_code=409, detail=_ambiguous_gpu_detail(gpu_id, metrics_data))
 
         metric = metrics_data[0]
 
@@ -467,6 +492,10 @@ async def get_gpu_metrics(
         await cache_service.set(cache_key, response, ttl=30)
         return response
 
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch GPU metrics: {str(e)}")
 
@@ -504,11 +533,15 @@ async def get_gpu_power(
         if not metrics_data or len(metrics_data) == 0:
             raise HTTPException(status_code=404, detail=f"No power data found for GPU '{gpu_id}'")
 
+        if len(metrics_data) > 1:
+            raise HTTPException(status_code=409, detail=_ambiguous_gpu_detail(gpu_id, metrics_data))
+
         metric = metrics_data[0]
         current_power = crud._safe_float(metric.get('power_usage_watts')) or 0
-        
-        # Get power statistics over the period
-        power_stats = await crud.get_gpu_power_stats(gpu_id, period)
+
+        # Get power statistics over the period (pass resolved node so a device-id
+        # gpu_id does not aggregate power across nodes). (B3)
+        power_stats = await crud.get_gpu_power_stats(gpu_id, period, node=metric.get('hostname'))
 
         power_data = GPUPowerData(
             gpu_id=metric.get('gpu_id', 'unknown'),
@@ -531,6 +564,10 @@ async def get_gpu_power(
         await cache_service.set(cache_key, response, ttl=30)
         return response
 
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch GPU power data: {str(e)}")
 
@@ -561,6 +598,9 @@ async def get_gpu_temperature(
 
         if not temp_data or len(temp_data) == 0:
             raise HTTPException(status_code=404, detail=f"No temperature data found for GPU '{gpu_id}'")
+
+        if len(temp_data) > 1:
+            raise HTTPException(status_code=409, detail=_ambiguous_gpu_detail(gpu_id, temp_data))
 
         temp_info = temp_data[0]
 
@@ -595,6 +635,10 @@ async def get_gpu_temperature(
         await cache_service.set(cache_key, response, ttl=30)
         return response
 
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch GPU temperature: {str(e)}")
 

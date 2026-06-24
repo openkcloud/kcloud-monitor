@@ -13,6 +13,7 @@ from app.utils.prometheus_validation import (
     sanitize_label_value,
     build_label_matcher,
     build_label_filter,
+    validate_step,
     PromQLValidationError
 )
 
@@ -1801,27 +1802,50 @@ def _decode_compute_capability(encoded_value: float) -> Optional[str]:
     except (ValueError, TypeError):
         return None
 
+def _build_gpu_label_filter(node: Optional[str], gpu_id: Optional[str]) -> str:
+    """Build a sanitized DCGM label filter for per-GPU queries. (B3)
+
+    A gpu_id starting with 'GPU-' is a globally-unique UUID (node-independent);
+    any other value is a device id (e.g. 'nvidia0') which repeats across nodes,
+    so it must be paired with node to avoid matching another node's GPU. All
+    inputs pass sanitize_label_value (via build_label_filter) — raw f-string
+    interpolation here was both a PromQL-injection vector and the B3 bug source.
+
+    >>> _build_gpu_label_filter('worker-2', 'GPU-404f')
+    '{Hostname="worker-2",UUID="GPU-404f"}'
+    >>> _build_gpu_label_filter(None, 'GPU-404f')
+    '{UUID="GPU-404f"}'
+    >>> _build_gpu_label_filter('worker-3', 'nvidia0')
+    '{Hostname="worker-3",device="nvidia0"}'
+    >>> _build_gpu_label_filter(None, None)
+    ''
+    """
+    filters: Dict[str, str] = {}
+    if node:
+        filters['Hostname'] = node
+    if gpu_id:
+        if gpu_id.startswith('GPU-'):
+            filters['UUID'] = gpu_id
+        else:
+            filters['device'] = gpu_id
+    try:
+        return build_label_filter(filters)
+    except PromQLValidationError as e:
+        logger.error(f"Invalid GPU filter (node={node!r}, gpu_id={gpu_id!r}): {e}")
+        raise ValueError(f"Invalid GPU filter parameter: {e}")
+
+
 async def get_dcgm_gpu_metrics(node: Optional[str] = None, gpu_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch comprehensive GPU metrics from DCGM.
-    
+
     Args:
         node: Filter by hostname
         gpu_id: Filter by device ID (e.g., 'nvidia0') or UUID (e.g., 'GPU-xxx')
     """
 
-    # Build filter for queries
-    filters = []
-    if node:
-        filters.append(f'Hostname="{node}"')
-    
-    # Check if gpu_id is a UUID (starts with 'GPU-') or device ID
-    if gpu_id:
-        if gpu_id.startswith('GPU-'):
-            filters.append(f'UUID="{gpu_id}"')
-        else:
-            filters.append(f'device="{gpu_id}"')
-
-    filter_str = "{" + ",".join(filters) + "}" if filters else ""
+    # Sanitized filter; device-id is node-ambiguous so callers must pair it
+    # with node (or use a UUID) to avoid cross-node collisions. (B3)
+    filter_str = _build_gpu_label_filter(node, gpu_id)
 
     # Define DCGM metric queries (only include metrics that are actually available)
     metrics_queries = {
@@ -2189,19 +2213,9 @@ async def get_dcgm_gpu_temperatures(node: Optional[str] = None, gpu_id: Optional
         gpu_id: Filter by device ID (e.g., 'nvidia0') or UUID (e.g., 'GPU-xxx')
     """
 
-    # Build filter for queries
-    filters = []
-    if node:
-        filters.append(f'Hostname="{node}"')
-    
-    # Check if gpu_id is a UUID (starts with 'GPU-') or device ID
-    if gpu_id:
-        if gpu_id.startswith('GPU-'):
-            filters.append(f'UUID="{gpu_id}"')
-        else:
-            filters.append(f'device="{gpu_id}"')
-
-    filter_str = "{" + ",".join(filters) + "}" if filters else ""
+    # Sanitized filter; device-id is node-ambiguous so callers must pair it
+    # with node (or use a UUID) to avoid cross-node collisions. (B3)
+    filter_str = _build_gpu_label_filter(node, gpu_id)
 
     # Define temperature metric queries
     temp_queries = {
@@ -2273,23 +2287,24 @@ async def get_dcgm_gpu_temperatures(node: Optional[str] = None, gpu_id: Optional
     return list(gpu_temperatures.values())
 
 
-async def get_gpu_power_stats(gpu_id: str, period: str = "5m") -> Dict[str, Optional[float]]:
+async def get_gpu_power_stats(gpu_id: str, period: str = "5m", node: Optional[str] = None) -> Dict[str, Optional[float]]:
     """
     Get GPU power statistics over a time period.
-    
+
     Args:
         gpu_id: GPU identifier (device ID or UUID)
         period: Time period (e.g., '5m', '1h', '24h')
-    
+        node: Optional hostname; required to disambiguate a device-id gpu_id
+              across nodes (a UUID gpu_id is already globally unique). (B3)
+
     Returns:
         Dictionary with avg_power, max_power, min_power
     """
-    # Build filter for UUID or device ID
-    if gpu_id.startswith('GPU-'):
-        filter_str = f'{{UUID="{gpu_id}"}}'
-    else:
-        filter_str = f'{{device="{gpu_id}"}}'
-    
+    # Sanitized filter (device-id needs node to avoid cross-node collision) and
+    # validated range selector — both were raw-interpolated user input. (B3)
+    filter_str = _build_gpu_label_filter(node, gpu_id)
+    period = validate_step(period)
+
     # Query Prometheus for power statistics over the period
     queries = {
         'avg': f'avg_over_time(DCGM_FI_DEV_POWER_USAGE{filter_str}[{period}])',
