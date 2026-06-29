@@ -124,15 +124,77 @@ curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus?include_m
 }
 ```
 
-### 1.2 GPU 상세 정보
+### 1.2 GPU 인벤토리
+
+**엔드포인트**: `GET /api/v1/accelerators/gpus/inventory`
+
+**설명**: 물리 GPU + MIG 인스턴스(자식) + K8s 광고 용량(passthrough 포함). GPU "개수"의 세 관점을 한 응답에서 조정한다.
+- `physical_gpus`: DCGM이 보고하는 물리/passthrough GPU(부모)
+- `mig_instances`: 부모 UUID로 묶인 MIG 인스턴스 자식 수
+- `k8s_advertised_gpus`: Kubernetes에 광고된 `nvidia.com/gpu` capacity 합
+- 디바이스 수 정의: `total_devices = physical_gpus + mig_instances`
+
+**쿼리 파라미터**:
+- `cluster`: 클러스터 필터
+- `node`: 노드 필터
+
+**예시**:
+```bash
+curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/inventory
+```
+
+**응답**:
+```json
+{
+  "timestamp": "2024-01-01T12:00:00Z",
+  "cluster": "default",
+  "node": null,
+  "summary": {
+    "physical_gpus": 2,
+    "mig_instances": 4,
+    "total_devices": 6,
+    "passthrough_gpus": 1,
+    "kubernetes_gpus": 1,
+    "k8s_advertised_gpus": 5
+  },
+  "nodes": [
+    {
+      "hostname": "worker2",
+      "physical_gpus": 1,
+      "mig_instances": 4,
+      "k8s_advertised_gpus": 4,
+      "gpus": [
+        {
+          "gpu_id": "nvidia0",
+          "uuid": "GPU-404f...",
+          "model_name": "NVIDIA A30",
+          "memory_total_mb": 24576,
+          "allocation": "kubernetes",
+          "is_vm_gpu": false,
+          "mig_enabled": true,
+          "children": [
+            {"gpu_instance_id": 3, "profile": "1g.6gb", "utilization_percent": 42.0}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 1.3 GPU 상세 정보
 
 **엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}`
 
 **설명**: 특정 GPU의 상세 정보
 
+**식별자/모호성**: `gpu_id`는 device id(`nvidia0`) 또는 UUID. device id는 노드 간 중복되므로 여러 노드에 매칭되면 **409**(모호) 반환 — `?node=`로 노드를 지정하거나 전역 유일한 UUID 사용(per-GPU metrics/power/temperature 라우트 공통). UUID는 정확히 1개로 해석된다.
+
 **예시**:
 ```bash
 curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0
+# device id가 노드 간 중복일 때 노드 지정
+curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus/nvidia0/metrics?node=worker2"
 ```
 
 **응답**:
@@ -162,7 +224,7 @@ curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0
 }
 ```
 
-### 1.3 GPU 메트릭
+### 1.4 GPU 메트릭
 
 **엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}/metrics`
 
@@ -213,7 +275,7 @@ curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus/nvidia0/m
 }
 ```
 
-### 1.4 GPU 전력
+### 1.5 GPU 전력
 
 **엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}/power`
 
@@ -244,7 +306,7 @@ curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0/po
 }
 ```
 
-### 1.5 GPU 요약
+### 1.6 GPU 요약
 
 **엔드포인트**: `GET /api/v1/accelerators/gpus/summary`
 
@@ -276,7 +338,7 @@ curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/summary
 }
 ```
 
-### 1.6 NPU (Placeholder)
+### 1.7 NPU (Placeholder)
 
 **엔드포인트**: `GET /api/v1/accelerators/npus`
 
