@@ -1743,6 +1743,125 @@ async def get_mig_instance_utilization(node: Optional[str] = None) -> List[Dict[
     return _parse_mig_instance_utilization(results)
 
 
+def _build_gpu_inventory(
+    gpus: List[Dict[str, Any]],
+    mig_instances: List[Dict[str, Any]],
+    k8s_capacity_map: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Group physical GPUs + MIG children per node into an inventory. (G3)
+
+    A physical GPU (from get_dcgm_gpu_info, includes passthrough/VM GPUs) is the
+    parent; MIG instances sharing its UUID become children (parent+child model).
+    The documented GPU "count" is physical_gpus + mig_instances. k8s_capacity_map
+    is node -> advertised nvidia.com/gpu (device-plugin view, may differ when MIG
+    advertises per-instance or a GPU is passthrough and not K8s-managed).
+
+    >>> gpus = [
+    ...   {'gpu_id': 'nvidia0', 'uuid': 'GPU-404f', 'hostname': 'worker-2',
+    ...    'model_name': 'A30', 'memory_total_mb': 24576,
+    ...    'gpu_allocation': 'kubernetes', 'is_vm_gpu': False},
+    ...   {'gpu_id': 'nvidia0', 'uuid': 'GPU-8a67', 'hostname': 'worker-1',
+    ...    'model_name': 'A30', 'memory_total_mb': 24576,
+    ...    'gpu_allocation': 'passthrough', 'is_vm_gpu': True},
+    ... ]
+    >>> migs = [
+    ...   {'parent_uuid': 'GPU-404f', 'gpu_instance_id': 3, 'profile': '1g.6gb',
+    ...    'utilization_percent': 42.0},
+    ...   {'parent_uuid': 'GPU-404f', 'gpu_instance_id': 5, 'profile': '1g.6gb',
+    ...    'utilization_percent': 0.0},
+    ... ]
+    >>> inv = _build_gpu_inventory(gpus, migs, {'worker-2': 4, 'worker-1': 1})
+    >>> inv['summary']['physical_gpus'], inv['summary']['mig_instances']
+    (2, 2)
+    >>> inv['summary']['total_devices']
+    4
+    >>> inv['summary']['passthrough_gpus'], inv['summary']['kubernetes_gpus']
+    (1, 1)
+    >>> inv['summary']['k8s_advertised_gpus']
+    5
+    >>> w2 = [n for n in inv['nodes'] if n['hostname'] == 'worker-2'][0]
+    >>> w2['mig_instances'], len(w2['gpus'][0]['children'])
+    (2, 2)
+    >>> w2['gpus'][0]['mig_enabled']
+    True
+    """
+    children_by_parent: Dict[str, List[Dict[str, Any]]] = {}
+    for inst in mig_instances:
+        children_by_parent.setdefault(inst.get('parent_uuid'), []).append({
+            'gpu_instance_id': inst.get('gpu_instance_id'),
+            'profile': inst.get('profile'),
+            'utilization_percent': inst.get('utilization_percent'),
+        })
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    physical_gpus = 0
+    passthrough_gpus = 0
+    kubernetes_gpus = 0
+    for gpu in gpus:
+        physical_gpus += 1
+        allocation = gpu.get('gpu_allocation')
+        is_passthrough = allocation == 'passthrough' or gpu.get('is_vm_gpu') is True
+        if is_passthrough:
+            passthrough_gpus += 1
+        elif allocation == 'kubernetes':
+            kubernetes_gpus += 1
+
+        children = children_by_parent.get(gpu.get('uuid'), [])
+        hostname = gpu.get('hostname', 'unknown')
+        node = nodes.setdefault(hostname, {
+            'hostname': hostname,
+            'physical_gpus': 0,
+            'mig_instances': 0,
+            'k8s_advertised_gpus': _safe_int(k8s_capacity_map.get(hostname)),
+            'gpus': [],
+        })
+        node['physical_gpus'] += 1
+        node['mig_instances'] += len(children)
+        node['gpus'].append({
+            'gpu_id': gpu.get('gpu_id'),
+            'uuid': gpu.get('uuid'),
+            'model_name': gpu.get('model_name'),
+            'memory_total_mb': gpu.get('memory_total_mb'),
+            'allocation': allocation,
+            'is_vm_gpu': gpu.get('is_vm_gpu'),
+            'mig_enabled': len(children) > 0,
+            'children': children,
+        })
+
+    mig_count = sum(len(v) for v in children_by_parent.values())
+    k8s_advertised = sum(
+        v for v in (_safe_int(x) for x in k8s_capacity_map.values()) if v is not None
+    )
+    return {
+        'summary': {
+            'physical_gpus': physical_gpus,
+            'mig_instances': mig_count,
+            'total_devices': physical_gpus + mig_count,
+            'passthrough_gpus': passthrough_gpus,
+            'kubernetes_gpus': kubernetes_gpus,
+            'k8s_advertised_gpus': k8s_advertised,
+        },
+        'nodes': sorted(nodes.values(), key=lambda n: n['hostname']),
+    }
+
+
+async def get_gpu_inventory(node: Optional[str] = None) -> Dict[str, Any]:
+    """Build a GPU inventory: physical GPUs + MIG children + K8s capacity. (G3)
+
+    Composes get_dcgm_gpu_info (parents, incl. passthrough), get_mig_instance_utilization
+    (children), and kube_node_status_capacity{resource="nvidia.com/gpu"} (advertised).
+    node is validated downstream by the composed functions / sanitize_label_value.
+    """
+    gpus = await get_dcgm_gpu_info(node)
+    mig_instances = await get_mig_instance_utilization(node)
+    k8s_capacity_map = _query_metric_map(
+        ['sum(kube_node_status_capacity{resource="nvidia.com/gpu"}) by (node)'],
+        value_transform=_safe_int,
+        stop_on_first_success=False,
+    )
+    return _build_gpu_inventory(gpus, mig_instances, k8s_capacity_map)
+
+
 def _infer_gpu_architecture(model_name: str) -> Optional[str]:
     """Infer GPU architecture from model name."""
     model_upper = model_name.upper()

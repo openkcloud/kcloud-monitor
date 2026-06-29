@@ -292,6 +292,52 @@ async def get_gpus_summary(
         raise HTTPException(status_code=500, detail=f"Failed to generate GPU summary: {str(e)}")
 
 
+@router.get("/accelerators/gpus/inventory",
+           summary="GPU inventory",
+           description="Physical GPUs + MIG instance children + K8s advertised capacity (passthrough included).")
+async def get_gpu_inventory(
+    cluster: Optional[str] = Query(None, description="Filter by cluster name"),
+    node: Optional[str] = Query(None, description="Filter by node hostname")
+):
+    """
+    GPU inventory across the cluster. (G3)
+
+    Reconciles three views of "how many GPUs":
+    - **physical_gpus**: physical/passthrough GPUs reported by DCGM (parents).
+    - **mig_instances**: MIG instance children grouped under their parent UUID.
+    - **k8s_advertised_gpus**: `nvidia.com/gpu` capacity advertised to Kubernetes.
+
+    The documented device count is `physical_gpus + mig_instances` (`total_devices`).
+
+    **Query Parameters:**
+    - `cluster`: Filter by cluster name (multi-cluster support)
+    - `node`: Filter by node hostname
+
+    **Returns:** Per-node inventory with parent GPUs, MIG children, and a summary.
+    """
+    cache_key = f"gpu_inventory_{cluster or 'all'}_{node or 'all'}"
+    cached_data = await cache_service.get(cache_key)
+    if cached_data:
+        return cached_data
+
+    try:
+        inventory = await crud.get_gpu_inventory(node)
+        response = {
+            "timestamp": datetime.utcnow(),
+            "cluster": cluster or "default",
+            "node": node,
+            **inventory,
+        }
+        # Static inventory (hardware topology) — cache 1 hour.
+        await cache_service.set(cache_key, response, ttl=3600)
+        return response
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to build GPU inventory: {str(e)}")
+
+
 @router.get("/accelerators/gpus/{gpu_id}",
            response_model=GPUDetailResponse,
            response_model_exclude_none=True,
