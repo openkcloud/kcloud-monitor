@@ -1,67 +1,60 @@
-from pydantic import Field, field_validator
+"""
+KCloud Monitor v2 설정.
+
+스캐폴드 단계에서 실제로 사용되는 키는 인증/운영 그룹뿐이다.
+"v2 데이터소스" 그룹은 구현 시 사용할 자리(placeholder)로,
+data_source_v1_to_v2.md §4(v1→v2 config 전환표)를 따른다.
+"""
+from typing import Optional
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional, Dict, Any
-import json
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # API Authentication
+    # ── 인증 (API Gateway 도입 전 개발용 단일 계정 + API Key) ─────────────
     API_AUTH_USERNAME: str = Field("admin", description="API username")
     API_AUTH_PASSWORD: str = Field("changeme", description="API password")
-    JWT_SECRET_KEY: str = Field("change-this-secret-key", description="JWT secret key for token signing")
+    JWT_SECRET_KEY: str = Field("change-this-secret-key", description="JWT signing secret")
     JWT_ALGORITHM: str = Field("HS256", description="JWT algorithm")
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, description="JWT token expiration in minutes")
-    API_KEY: Optional[str] = Field(None, description="Optional API key for X-API-Key header auth (parallel to JWT); unset disables")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, description="JWT expiration (minutes)")
+    API_KEY: Optional[str] = Field(
+        None, description="X-API-Key 병행 인증 키. 미설정 시 JWT만 허용"
+    )
 
-    # Prometheus (Single cluster - backward compatibility)
-    PROMETHEUS_URL: str = Field("http://localhost:9090", description="URL of the Prometheus server")
-    PROMETHEUS_TIMEOUT: int = Field(30, description="Timeout in seconds for Prometheus queries")
-    PROMETHEUS_USERNAME: Optional[str] = Field(None, description="Username for Prometheus basic auth")
-    PROMETHEUS_PASSWORD: Optional[str] = Field(None, description="Password for Prometheus basic auth")
-    PROMETHEUS_CA_BUNDLE: Optional[str] = Field(None, description="Path to a CA bundle for verifying Prometheus TLS")
+    # ── 운영 ──────────────────────────────────────────────────────────────
+    CORS_ALLOW_ORIGINS: str = Field("*", description="허용 오리진(콤마 구분) 또는 *")
+    RATE_LIMIT_ENABLED: bool = Field(False, description="레이트리밋 활성화")
+    RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, description="클라이언트당 분당 요청 수")
+    LOG_LEVEL: str = Field("INFO", description="로그 레벨")
 
-    # Multi-cluster Prometheus Configuration (Phase 6)
-    PROMETHEUS_CLUSTERS: Optional[str] = Field(
+    # ── v2 데이터소스 (스캐폴드 단계 미사용 — 구현 시 활성화) ─────────────
+    MIMIR_URL: Optional[str] = Field(
         None,
-        description="JSON string with cluster configurations. Example: "
-        '[{"name":"cluster1","url":"http://prom1:9090","region":"us-east"},{"name":"cluster2","url":"http://prom2:9090","region":"us-west"}]'
+        description="중앙 메트릭 백엔드 URL(PromQL 호환). 전환기에는 기존 Prometheus URL 지정 가능",
     )
-    DEFAULT_CLUSTER: str = Field("default", description="Default cluster name when PROMETHEUS_CLUSTERS is not set")
-
-    # Cache
-    CACHE_TTL_GPU_CURRENT: int = Field(30, description="Cache TTL for current GPU data")
-    CACHE_TTL_GPU_TIMESERIES: int = Field(300, description="Cache TTL for GPU time-series data")
-    CACHE_TTL_POWER_SUMMARY: int = Field(60, description="Cache TTL for power summary data")
-
-    # Power efficiency (facility-level power is external; see open_issues D-4)
-    PUE_COOLING_FACTOR: float = Field(
-        0.35, ge=0,
-        description="Cooling/overhead power as a fraction of IT power for PUE estimation. "
-                    "Facility data is external (BMS/PDU); replace when integrated (design D-4).",
+    MIMIR_TENANT_ID: Optional[str] = Field(
+        None, description="Mimir X-Scope-OrgID (MVP는 단일 테넌트 + 라벨 필터)"
     )
-
-    # Redis (Phase 11.1 - shared cache for multi-worker/K8s; unset = in-memory cache)
-    REDIS_URL: Optional[str] = Field(None, description="Redis URL for shared cache (e.g. redis://host:6379/0); unset uses in-memory cache")
-
-    # Rate limiting (Phase 11.2)
-    RATE_LIMIT_ENABLED: bool = Field(False, description="Enable API rate limiting")
-    RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, description="Requests per minute per client when rate limiting is enabled")
-
-    # CORS (Phase 11.2 - restrict origins in production)
-    CORS_ALLOW_ORIGINS: str = Field("*", description="Comma-separated allowed origins, or * for all")
-
-    # IPMI hardware sensors (open_issues H-1; local ipmitool + node_exporter textfile via Prometheus)
-    IPMI_ENABLED: bool = Field(False, description="Enable IPMI hardware sensor endpoints")
-
-    # OpenStack (Phase 4.4 - VM collector; unset = VM data disabled)
-    OPENSTACK_AUTH_URL: Optional[str] = Field(None, description="OpenStack Keystone auth URL (e.g. http://host:5000/v3)")
-    OPENSTACK_USERNAME: Optional[str] = Field(None, description="OpenStack username")
-    OPENSTACK_PASSWORD: Optional[str] = Field(None, description="OpenStack password")
-    OPENSTACK_PROJECT_NAME: Optional[str] = Field(None, description="OpenStack project name")
-
-    # Logging
-    LOG_LEVEL: str = Field("INFO", description="Logging level")
+    DATABASE_URL: Optional[str] = Field(
+        None, description="PostgreSQL — resource-map 원장 (예: postgresql://user:pw@host:5432/kcloud)"
+    )
+    REDIS_URL: Optional[str] = Field(
+        None, description="Redis — 캐시 + Streams 이벤트 버스 (예: redis://host:6379/0)"
+    )
+    OPENSTACK_AUTH_URL: Optional[str] = Field(
+        None, description="Keystone auth URL (예: http://host:5000/v3)"
+    )
+    OPENSTACK_USERNAME: Optional[str] = Field(None, description="OpenStack 계정(admin/system-reader 필요)")
+    OPENSTACK_PASSWORD: Optional[str] = Field(None, description="OpenStack 비밀번호")
+    OPENSTACK_PROJECT_NAME: Optional[str] = Field(None, description="OpenStack 프로젝트")
+    CLUSTER_REGISTRY: Optional[str] = Field(
+        None,
+        description="클러스터 레지스트리 JSON — 관리/서비스 구분·접속 정보. "
+        '예: [{"name":"mgmt","type":"management"},{"name":"svc-1","type":"service"}]',
+    )
 
 
 settings = Settings()
