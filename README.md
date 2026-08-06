@@ -91,10 +91,12 @@ curl -H "Authorization: Bearer <TOKEN>" \
 
 | 문서 | 설명 |
 |------|------|
-| `docs/temp/04-reference/sample_api.md` | v2 API 카탈로그·예제 응답 (경로 SoT) |
-| `docs/temp/02-decisions/design_contracts.md` | 설계 계약(응답 정책·NFR·SoT 우선순위) |
-| `docs/temp/00-architecture/` | 시스템/자원매핑 아키텍처 |
-| `docs/temp/01-domain-plans/` | 도메인별 설계(전력 귀속, Ceph 등) |
+| [빠른 시작](docs/QUICK_START.md) | 설치·실행·로그인·스텁 호출·테스트 |
+| [API 가이드](docs/API_GUIDE.md) | 전체 106 라우트 표·인증·공통 파라미터·응답 정책·SSE |
+| [아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md) | 6계층 자원 모델·데이터소스·전력 계층 P1~P8·resource-map |
+| [NPU 수집 설정](docs/PROMETHEUS_NPU_SETUP.md) | Furiosa exporter + hwmon 수집 환경 |
+
+> 상세 설계 SoT(설계서·의사결정 기록)는 내부 문서 `docs/temp/`(git 미추적)에서 관리하며, 확정 내용만 `docs/`로 반영합니다.
 
 ### 🔧 기술 스택
 

@@ -1,1244 +1,244 @@
-# API 사용 가이드
+# API 사용 가이드 (v2)
 
-KCloud Monitor API의 핵심 엔드포인트 상세 가이드입니다.
+KCloud Monitor v2 API 가이드입니다. 현재는 **스캐폴드 단계**로, 라우팅·인증·경로 구조가 확정되어 있고 모든 엔드포인트가 스텁 응답을 반환합니다.
 
 ## 목차
 - [기본 정보](#기본-정보)
-- [1. Accelerators API](#1-accelerators-api)
-- [2. Infrastructure API](#2-infrastructure-api)
-- [3. Hardware API](#3-hardware-api)
-- [4. Monitoring API](#4-monitoring-api)
-- [5. Export API](#5-export-api)
-- [6. Clusters API](#6-clusters-api)
-- [7. System API](#7-system-api)
+- [인증](#인증)
+- [공통 파라미터](#공통-파라미터)
+- [공통 응답 정책](#공통-응답-정책)
+- [스텁 응답 형태](#스텁-응답-형태)
+- [엔드포인트 전체 목록](#엔드포인트-전체-목록)
+- [SSE 스트리밍](#sse-스트리밍)
 
 ## 기본 정보
 
-### Base URL
 ```
-Development: http://localhost:8001/api/v1
-Production:  https://api.example.com/api/v1
+Base URL: http://localhost:8000/api/v2
+Swagger:  http://localhost:8000/docs
 ```
 
-### 인증
+- 경로 약어: `{c}` = cluster, `{n}` = node, `{id}` = accelerator ID, `{pid}` = partition ID, `{ns}` = namespace
+- 네이밍: URL 경로 kebab-case(`gpu-passthrough`), 쿼리/JSON 필드 snake_case(`sort_by`, `power_watts`), 단위 접미사(`_watts`, `_percent`, `_celsius`)
+
+## 인증
+
+JWT Bearer 또는 `X-API-Key` 병행 인증입니다. System(`/system/*`)과 Auth(`/auth/*`)만 공개입니다.
+
 ```bash
-# Basic Authentication
-curl -u username:password [URL]
+# 1) 로그인 → JWT 발급
+curl -X POST http://localhost:8000/api/v2/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme"}'
 
-# 또는 헤더로 직접
-curl -H "Authorization: Basic <base64(username:password)>" [URL]
+# 2) Bearer 토큰으로 호출
+curl -H "Authorization: Bearer <TOKEN>" http://localhost:8000/api/v2/clusters
+
+# (대안) API Key — .env에 API_KEY 설정 시
+curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
 ```
 
-### 공통 응답 구조
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `POST /auth/login` | JSON 계정으로 JWT 발급 |
+| `POST /auth/token` | HTTP Basic으로 JWT 발급 |
+| `GET /auth/verify` | 토큰 유효성 확인 |
+
+> 목표 구조는 API Gateway가 발급하는 JWT(RBAC/테넌트 클레임) + service-to-service JWT입니다. 현재 라우터는 Gateway 도입 전 개발용입니다.
+
+## 공통 파라미터
+
+**목록형 API** (`limit`/`offset` 페이징 + 라벨 필터):
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `limit` | `100` | 최대 반환 수 (max `1000`) |
+| `offset` | `0` | 페이징 오프셋 |
+| `sort_by` / `sort_order` | - / `asc` | 정렬 |
+| `project` | - | OpenStack 프로젝트 필터 |
+| `namespace` | - | K8s 네임스페이스 필터 |
+| `service_name` | - | 논리 서비스 필터 |
+| `workload_type` | - | `deployment`, `statefulset`, `job` 등 |
+| `status` / `search` | - | 상태 필터 / 텍스트 검색 |
+| `cluster` | - | 전역 목록(`/workloads/*`)에서만 — 클러스터 범위 경로에서는 경로 파라미터 |
+
+**시계열 API**:
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `period` | `1h` | 조회 기간 (`start` 미지정 시) |
+| `start` / `end` | - / now | ISO 8601 |
+| `step` | `5m` | 데이터 포인트 간격 |
+| `aggregation` | `avg` | `avg` / `min` / `max` / `sum` |
+
+## 공통 응답 정책
+
+모든 응답(REST, SSE data 이벤트)에 데이터 신선도 필드가 포함됩니다.
+
+| 필드 | 설명 |
+|------|------|
+| `status` | `success` \| `partial` \| `error` (스텁 단계: `not_implemented`) |
+| `observed_at` | 데이터 수집 시각 (ISO 8601) |
+| `is_stale` | 메트릭 2분 / resource-map 10분 초과 시 `true` |
+| `warnings[]` | `STALE_DATA`, `PARTIAL_SOURCE`, `ESTIMATED_POWER` 등 (정상 시 생략) |
+| `partial_sources[]` | 일부 데이터소스 장애 시 실패 소스 목록 |
+
+에러 스키마:
+
 ```json
 {
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu",
-  "data": { ... },
-  "metadata": {
-    "query_time_ms": 45,
-    "cache_hit": true,
-    "data_source": "dcgm"
-  }
+  "status": "error",
+  "error": {"code": "VALIDATION_ERROR", "message": "...", "retryable": false},
+  "request_id": "req-...",
+  "observed_at": "2026-08-06T00:00:00Z"
 }
 ```
 
-### 공통 쿼리 파라미터
+전력 응답에는 신뢰도 필드가 추가됩니다: `source`(kepler|dcgm|ipmi|derived), `power_estimation`(direct|attributed|proportional), `attribution.method`.
 
-| 파라미터 | 타입 | 설명 | 예시 |
-|---------|------|------|------|
-| `cluster` | string | 클러스터 필터 | `?cluster=prod` |
-| `period` | string | 조회 기간 | `?period=1h` (1h, 1d, 1w, 1m) |
-| `start_time` | ISO 8601 | 시작 시각 | `?start_time=2024-01-01T00:00:00Z` |
-| `end_time` | ISO 8601 | 종료 시각 | `?end_time=2024-01-01T23:59:59Z` |
-| `step` | string | 시계열 간격 | `?step=5m` (1m, 5m, 15m, 1h) |
-| `limit` | integer | 결과 개수 제한 | `?limit=100` |
-| `offset` | integer | 페이지네이션 | `?offset=100` |
+## 스텁 응답 형태
 
----
+구현 전까지 모든 엔드포인트는 HTTP 200 + 아래 형태를 반환합니다. 포탈/클라이언트는 이 단계에서 경로·파라미터·인증 연동을 검증할 수 있습니다.
 
-## 1. Accelerators API
-
-AI 가속기(GPU, NPU) 모니터링 API
-
-### 1.1 GPU 목록
-
-**엔드포인트**: `GET /api/v1/accelerators/gpus`
-
-**설명**: 전체 GPU 목록 조회
-
-**쿼리 파라미터**:
-- `cluster`: 클러스터 필터
-- `node`: 노드 필터
-- `status`: 상태 필터 (active, idle, error)
-- `include_metrics`: 메트릭 포함 여부 (기본: false)
-
-**예시**:
-```bash
-# 기본 목록
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus
-
-# 특정 노드의 GPU만
-curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus?node=worker1"
-
-# 메트릭 포함
-curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus?include_metrics=true"
-```
-
-**응답**:
 ```json
 {
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu",
-  "data": [
-    {
-      "gpu_id": "nvidia0",
-      "uuid": "GPU-abc123...",
-      "node": "worker1",
-      "model": "NVIDIA A30",
-      "driver_version": "535.183.01",
-      "cuda_version": "12.2",
-      "power_watts": 183.5,
-      "temperature_celsius": 45.0,
-      "utilization_percent": 85.3,
-      "memory_used_mb": 18432,
-      "memory_total_mb": 24576,
-      "status": "active"
-    },
-    {
-      "gpu_id": "nvidia1",
-      "uuid": "GPU-def456...",
-      "node": "worker2",
-      "model": "NVIDIA A30",
-      "power_watts": 281.2,
-      "temperature_celsius": 52.0,
-      "utilization_percent": 92.1
-    }
-  ],
-  "metadata": {
-    "total_count": 2,
-    "query_time_ms": 45
-  }
+  "status": "not_implemented",
+  "api": "GET /api/v2/clusters/mgmt/nodes/w1/accelerators",
+  "path_template": "/api/v2/clusters/{cluster}/nodes/{node}/accelerators",
+  "description": "노드 가속기 목록(GPU/NPU 통합, UUID 식별)",
+  "data_sources": ["Mimir(DCGM_FI_DEV_* + furiosa_npu_*)", "resource-map 원장"],
+  "design_ref": "sample_api.md §4.1",
+  "data": null,
+  "observed_at": "2026-08-06T00:00:00Z",
+  "is_stale": false,
+  "warnings": ["NOT_IMPLEMENTED"],
+  "params": {"limit": 100, "offset": 0, "sort_order": "asc"}
 }
 ```
 
-### 1.2 GPU 인벤토리
+## 엔드포인트 전체 목록
 
-**엔드포인트**: `GET /api/v1/accelerators/gpus/inventory`
+canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(예외: `POST /auth/*`, `POST /resource-map/discovery/trigger`).
 
-**설명**: 물리 GPU + MIG 인스턴스(자식) + K8s 광고 용량(passthrough 포함). GPU "개수"의 세 관점을 한 응답에서 조정한다.
-- `physical_gpus`: DCGM이 보고하는 물리/passthrough GPU(부모)
-- `mig_instances`: 부모 UUID로 묶인 MIG 인스턴스 자식 수
-- `k8s_advertised_gpus`: Kubernetes에 광고된 `nvidia.com/gpu` capacity 합
-- 디바이스 수 정의: `total_devices = physical_gpus + mig_instances`
+### Clusters (5)
 
-**쿼리 파라미터**:
-- `cluster`: 클러스터 필터
-- `node`: 노드 필터
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/clusters` | 클러스터 목록 (management/service 구분) |
+| `/clusters/{c}` | 클러스터 상세 |
+| `/clusters/{c}/summary` | 리소스 요약 KPI |
+| `/clusters/{c}/topology` | 계층형 토폴로지 (Node→Pod→Container→가속기) |
+| `/clusters/{c}/power` | 클러스터 전력 합계 [P1] |
 
-**예시**:
+### Nodes (10) + Hardware/IPMI (3)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/clusters/{c}/nodes` · `/nodes/summary` · `/nodes/{n}` | 목록 / 집계 / 상세 |
+| `/clusters/{c}/nodes/{n}/metrics` | CPU/MEM/Disk/Net 종합 [M1] |
+| `/clusters/{c}/nodes/{n}/power` · `/power/timeseries` | Kepler 전력 [P2] |
+| `/clusters/{c}/nodes/{n}/cpu` · `/memory` · `/storage` · `/network` | 자원별 상세 |
+| `/clusters/{c}/nodes/{n}/hardware/sensors` | IPMI 센서 전체 (물리 노드 전용) |
+| `/clusters/{c}/nodes/{n}/hardware/power` | BMC 전력 실측 [P3] |
+| `/clusters/{c}/nodes/{n}/hardware/temperature` | IPMI 온도 |
+
+### Accelerators (8) + Partitions (4)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `.../nodes/{n}/accelerators` · `/summary` · `/topology` | GPU/NPU 목록 / 집계 / NVLink·PCIe 토폴로지 |
+| `.../accelerators/{id}` · `/metrics` · `/temperature` | 상세 / 실시간 메트릭 [M2] / 온도 |
+| `.../accelerators/{id}/power` · `/power/timeseries` | DCGM 전력 실측 [P4] |
+| `.../accelerators/{id}/partitions` · `/{pid}` | 파티션(MIG/vGPU/NPU slice) 목록 / 상세 |
+| `.../partitions/{pid}/power` · `/power/timeseries` | 파티션 전력 추정 [P5] |
+
+### Storage — Ceph (10, v2 신규 도메인)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/clusters/{c}/storage/ceph/summary` [S1] · `/health` [S2] | Ceph 요약 / health 상세 |
+| `/clusters/{c}/storage/ceph/capacity` [S3] · `/capacity/timeseries` [S9] | 용량 / 시계열 |
+| `/clusters/{c}/storage/ceph/osds` [S4] · `/osds/{osd_id}` [S5] | OSD 목록 / 상세 |
+| `/clusters/{c}/storage/ceph/pools` [S6] · `/pools/{pool}` [S7] | 풀 목록 / 상세 |
+| `/clusters/{c}/storage/ceph/pgs` [S8] | PG 상태 요약 |
+| `/clusters/{c}/storage/summary` [S10] | 스토리지 통합 요약 |
+
+### OpenStack (13, 관리 클러스터 전용)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/clusters/{c}/openstack/summary` | 전체 현황 |
+| `/clusters/{c}/openstack/projects` · `/{id}` · `/{id}/summary` | 프로젝트(과금 단위) |
+| `/clusters/{c}/openstack/hypervisors` · `/{host}` · `/{host}/vms` | 하이퍼바이저·VM 배치 |
+| `/clusters/{c}/openstack/vms` · `/summary` · `/{vm_id}` · `/{vm_id}/metrics` | VM 목록/집계/상세/메트릭 |
+| `/clusters/{c}/openstack/vms/{vm_id}/power` | VM 전력 귀속 [P6] |
+| `/clusters/{c}/openstack/vms/{vm_id}/gpu-passthrough` | passthrough 장치 (libvirt hostdev 확정) |
+
+### Workloads — 클러스터 범위 (11)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/clusters/{c}/workloads/pods` · `/summary` · `/{ns}/{pod}` | Pod 목록/집계/상세 |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/power` | Pod 전력 귀속 [P7] |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/containers` · `/containers/{name}/metrics` | 컨테이너 목록/메트릭 |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/accelerators` | Pod 가속기 할당 |
+| `/clusters/{c}/workloads/containers` · `/{container_id}` | 클러스터 전역 컨테이너 |
+| `/clusters/{c}/namespaces` · `/{ns}/summary` | 네임스페이스 |
+
+### Workloads — 전역 진입점 (11, 포탈용)
+
+응답에 `_links.self` + `_links.canonical` 포함. 전역 목록 기본 범위는 서비스 클러스터.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/workloads/pods` · `/summary` | 전 클러스터 Pod 인덱스 |
+| `/workloads/pods/{c}/{ns}/{pod}` (+ `/power`, `/containers`, `/accelerators`) | canonical 위임 |
+| `/workloads/services` · `/summary` | 논리 서비스 목록 (`service_name` 파생 그룹) |
+| `/workloads/services/{c}/{ns}/{name}` (+ `/pods`, `/power`) | 서비스 상세/소속 Pod/전력 |
+
+### Monitoring — 횡단 집계 (10)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/monitoring/overview` | 전체 시스템 KPI |
+| `/monitoring/power/summary` [P8] · `/breakdown` · `/timeseries` · `/efficiency` | 전력 요약/분해/시계열/효율 |
+| `/monitoring/metrics/timeseries` · `/query` [M5] | 메트릭 질의 (허용 목록 기반) |
+| `/monitoring/temperature/timeseries` | 온도 통합 시계열 |
+| `/monitoring/stream/power` · `/stream/metrics` | **SSE** 실시간 스트림 |
+
+### Export (3) / Resource-Map (8) / System (3)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/export/power` · `/metrics` (`format=csv\|excel\|parquet`) · `/report` (`report_type=daily\|weekly\|monthly`) | 데이터/리포트 내보내기 |
+| `/resource-map/accelerators/{id}` (+ `/history`) | 가속기 계보 (GPU→VM→Pod) / 이력 |
+| `/resource-map/partitions/{pid}` · `/containers/{pod_uid}/{container}` · `/vms/{vm_uuid}` · `/physical-servers/{server_id}` | 자원별 계보 |
+| `/resource-map/relationships` | 관계 그래프 질의 |
+| `POST /resource-map/discovery/trigger` | Discovery 수동 스캔 (202) |
+| `/system/health` · `/version` · `/metrics` | 헬스 / 버전 / 자체 Prometheus 메트릭 (**공개, 실동작**) |
+
+### 별칭 — 단축 경로 (4)
+
+UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
+
+| 별칭 | canonical |
+|------|-----------|
+| `/clusters/{c}/accelerators/{id}` | `/clusters/{c}/nodes/{n}/accelerators/{id}` |
+| `/clusters/{c}/accelerators/{id}/partitions/{pid}` | `.../accelerators/{id}/partitions/{pid}` |
+| `/clusters/{c}/pods/{ns}/{pod}` | `/clusters/{c}/workloads/pods/{ns}/{pod}` |
+| `/clusters/{c}/containers/{id}` | `/clusters/{c}/workloads/containers/{id}` |
+
+## SSE 스트리밍
+
+v1 WebSocket은 폐기되고 SSE로 통일되었습니다.
+
+- `Content-Type: text/event-stream`, 15초마다 `heartbeat` 이벤트(`observed_at`만 포함)
+- data 이벤트는 REST와 동일 응답 모델 공유 (클라이언트가 같은 타입으로 역직렬화)
+- `Last-Event-ID` 헤더로 재개 지원 (구현 예정)
+
 ```bash
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/inventory
+curl -N -H "Authorization: Bearer <TOKEN>" \
+  http://localhost:8000/api/v2/monitoring/stream/power
 ```
 
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "node": null,
-  "summary": {
-    "physical_gpus": 2,
-    "mig_instances": 4,
-    "total_devices": 6,
-    "passthrough_gpus": 1,
-    "kubernetes_gpus": 1,
-    "k8s_advertised_gpus": 5
-  },
-  "nodes": [
-    {
-      "hostname": "worker2",
-      "physical_gpus": 1,
-      "mig_instances": 4,
-      "k8s_advertised_gpus": 4,
-      "gpus": [
-        {
-          "gpu_id": "nvidia0",
-          "uuid": "GPU-404f...",
-          "model_name": "NVIDIA A30",
-          "memory_total_mb": 24576,
-          "allocation": "kubernetes",
-          "is_vm_gpu": false,
-          "mig_enabled": true,
-          "children": [
-            {"gpu_instance_id": 3, "profile": "1g.6gb", "utilization_percent": 42.0}
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
-
-### 1.3 GPU 상세 정보
-
-**엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}`
-
-**설명**: 특정 GPU의 상세 정보
-
-**식별자/모호성**: `gpu_id`는 device id(`nvidia0`) 또는 UUID. device id는 노드 간 중복되므로 여러 노드에 매칭되면 **409**(모호) 반환 — `?node=`로 노드를 지정하거나 전역 유일한 UUID 사용(per-GPU metrics/power/temperature 라우트 공통). UUID는 정확히 1개로 해석된다.
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0
-# device id가 노드 간 중복일 때 노드 지정
-curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus/nvidia0/metrics?node=worker2"
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu",
-  "data": {
-    "gpu_id": "nvidia0",
-    "uuid": "GPU-abc123...",
-    "node": "worker1",
-    "model": "NVIDIA A30",
-    "architecture": "Ampere",
-    "compute_capability": "8.0",
-    "driver_version": "535.183.01",
-    "cuda_version": "12.2",
-    "vbios_version": "92.00.36.00.01",
-    "pcie_generation": 4,
-    "pcie_link_width": 16,
-    "power_limit_watts": 230.0,
-    "power_default_watts": 165.0,
-    "memory_total_mb": 24576,
-    "memory_bus_width": 384,
-    "ecc_enabled": true
-  }
-}
-```
-
-### 1.4 GPU 메트릭
-
-**엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}/metrics`
-
-**설명**: GPU 실시간 성능 메트릭
-
-**쿼리 파라미터**:
-- `period`: 조회 기간 (기본: 1h)
-- `step`: 샘플링 간격 (기본: 5m)
-
-**예시**:
-```bash
-# 현재 메트릭
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0/metrics
-
-# 1시간 시계열
-curl -u admin:changeme "http://localhost:8001/api/v1/accelerators/gpus/nvidia0/metrics?period=1h&step=1m"
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu_metrics",
-  "data": {
-    "gpu_id": "nvidia0",
-    "node": "worker1",
-    "current": {
-      "power_watts": 183.5,
-      "temperature_celsius": 45.0,
-      "gpu_utilization_percent": 85.3,
-      "memory_utilization_percent": 75.0,
-      "sm_clock_mhz": 1410,
-      "memory_clock_mhz": 1215,
-      "pcie_throughput_rx_mbps": 1250.5,
-      "pcie_throughput_tx_mbps": 850.3,
-      "fan_speed_rpm": 2400
-    },
-    "timeseries": [
-      {
-        "timestamp": "2024-01-01T11:00:00Z",
-        "power_watts": 180.2,
-        "temperature_celsius": 44.0,
-        "utilization_percent": 83.5
-      }
-    ]
-  }
-}
-```
-
-### 1.5 GPU 전력
-
-**엔드포인트**: `GET /api/v1/accelerators/gpus/{gpu_id}/power`
-
-**설명**: GPU 전력 소비 상세 데이터
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/nvidia0/power
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu_power",
-  "data": {
-    "gpu_id": "nvidia0",
-    "current_power_watts": 183.5,
-    "average_power_watts": 178.2,
-    "max_power_watts": 195.0,
-    "min_power_watts": 165.3,
-    "power_limit_watts": 230.0,
-    "power_usage_percent": 79.8,
-    "energy_consumed_joules": 641340.0,
-    "efficiency_gflops_per_watt": 42.5
-  }
-}
-```
-
-### 1.6 GPU 요약
-
-**엔드포인트**: `GET /api/v1/accelerators/gpus/summary`
-
-**설명**: 전체 GPU 요약 통계
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/accelerators/gpus/summary
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "gpu_summary",
-  "data": {
-    "total_gpus": 2,
-    "active_gpus": 2,
-    "idle_gpus": 0,
-    "total_power_watts": 464.7,
-    "average_utilization_percent": 88.7,
-    "average_temperature_celsius": 48.5,
-    "total_memory_mb": 49152,
-    "used_memory_mb": 36864,
-    "memory_utilization_percent": 75.0,
-    "nodes": ["worker1", "worker2"]
-  }
-}
-```
-
-### 1.7 NPU (Placeholder)
-
-**엔드포인트**: `GET /api/v1/accelerators/npus`
-
-**설명**: NPU 목록 (Furiosa AI, Rebellions 등)
-
-**참고**: 현재는 Placeholder. 실제 NPU 연동 시 활성화됩니다.
-
----
-
-## 2. Infrastructure API
-
-쿠버네티스 인프라 모니터링 API
-
-### 2.1 노드 목록
-
-**엔드포인트**: `GET /api/v1/infrastructure/nodes`
-
-**설명**: 전체 노드 목록
-
-**쿼리 파라미터**:
-- `cluster`: 클러스터 필터
-- `role`: 노드 역할 (master, worker)
-- `status`: 상태 필터 (ready, not_ready)
-
-**예시**:
-```bash
-# 전체 노드
-curl -u admin:changeme http://localhost:8001/api/v1/infrastructure/nodes
-
-# Worker 노드만
-curl -u admin:changeme "http://localhost:8001/api/v1/infrastructure/nodes?role=worker"
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "node",
-  "data": [
-    {
-      "node_name": "master1",
-      "role": "master",
-      "status": "ready",
-      "cpu_cores": 16,
-      "memory_gb": 64,
-      "power_watts": 120.5,
-      "cpu_utilization_percent": 45.2,
-      "memory_utilization_percent": 62.3,
-      "pods_count": 35,
-      "gpus_count": 0
-    },
-    {
-      "node_name": "worker1",
-      "role": "worker",
-      "status": "ready",
-      "cpu_cores": 48,
-      "memory_gb": 256,
-      "power_watts": 285.3,
-      "cpu_utilization_percent": 78.5,
-      "memory_utilization_percent": 85.1,
-      "pods_count": 120,
-      "gpus_count": 2
-    }
-  ]
-}
-```
-
-### 2.2 노드 상세
-
-**엔드포인트**: `GET /api/v1/infrastructure/nodes/{node_name}`
-
-**설명**: 특정 노드 상세 정보
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/infrastructure/nodes/worker1
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "node",
-  "data": {
-    "node_name": "worker1",
-    "role": "worker",
-    "status": "ready",
-    "kubernetes_version": "v1.28.0",
-    "os_image": "Ubuntu 22.04.3 LTS",
-    "kernel_version": "5.15.0-91-generic",
-    "container_runtime": "containerd://1.7.2",
-    "cpu_cores": 48,
-    "cpu_architecture": "x86_64",
-    "memory_total_gb": 256,
-    "memory_available_gb": 38,
-    "disk_total_gb": 1024,
-    "disk_available_gb": 512,
-    "power_watts": 285.3,
-    "pods_count": 120,
-    "pods_capacity": 250,
-    "gpus": ["nvidia0", "nvidia1"]
-  }
-}
-```
-
-### 2.3 Pod 목록
-
-**엔드포인트**: `GET /api/v1/infrastructure/pods`
-
-**설명**: 전체 Pod 목록
-
-**쿼리 파라미터**:
-- `cluster`: 클러스터 필터
-- `namespace`: 네임스페이스 필터
-- `node`: 노드 필터
-- `status`: 상태 필터 (running, pending, failed)
-
-**예시**:
-```bash
-# 전체 Pod
-curl -u admin:changeme http://localhost:8001/api/v1/infrastructure/pods
-
-# 특정 네임스페이스
-curl -u admin:changeme "http://localhost:8001/api/v1/infrastructure/pods?namespace=default"
-
-# GPU 사용 Pod만
-curl -u admin:changeme "http://localhost:8001/api/v1/infrastructure/pods?has_gpu=true"
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "pod",
-  "data": [
-    {
-      "pod_name": "training-job-1",
-      "namespace": "ml-workloads",
-      "node": "worker1",
-      "status": "running",
-      "power_watts": 195.2,
-      "cpu_utilization_percent": 85.3,
-      "memory_used_mb": 8192,
-      "gpu_count": 1,
-      "gpu_ids": ["nvidia0"],
-      "created_at": "2024-01-01T10:00:00Z"
-    }
-  ]
-}
-```
-
-### 2.4 Pod 상세
-
-**엔드포인트**: `GET /api/v1/infrastructure/pods/{namespace}/{pod_name}`
-
-**설명**: 특정 Pod 상세 정보
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/infrastructure/pods/default/training-job-1
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "default",
-  "resource_type": "pod",
-  "data": {
-    "pod_name": "training-job-1",
-    "namespace": "ml-workloads",
-    "node": "worker1",
-    "status": "running",
-    "ip": "10.244.1.15",
-    "power_watts": 195.2,
-    "cpu_request": "16",
-    "cpu_limit": "32",
-    "cpu_utilization_percent": 85.3,
-    "memory_request_mb": 16384,
-    "memory_limit_mb": 32768,
-    "memory_used_mb": 20480,
-    "gpu_count": 1,
-    "gpu_ids": ["nvidia0"],
-    "containers": [
-      {
-        "name": "pytorch-trainer",
-        "image": "pytorch/pytorch:2.1.0-cuda12.1",
-        "status": "running",
-        "restart_count": 0
-      }
-    ],
-    "labels": {
-      "app": "training",
-      "workload": "ml"
-    }
-  }
-}
-```
-
----
-
-## 3. Hardware API
-
-물리 하드웨어 센서(IPMI) 모니터링 API
-
-### 3.1 전체 IPMI 센서
-
-**엔드포인트**: `GET /api/v1/hardware/ipmi/sensors`
-
-**설명**: 전체 노드의 IPMI 센서 데이터
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/hardware/ipmi/sensors
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "ipmi_sensors",
-  "data": [
-    {
-      "node": "worker1",
-      "sensors": {
-        "power": [
-          {"name": "PSU1_Power", "value": 145.0, "unit": "watts"},
-          {"name": "PSU2_Power", "value": 140.3, "unit": "watts"}
-        ],
-        "temperature": [
-          {"name": "CPU1_Temp", "value": 55.0, "unit": "celsius"},
-          {"name": "CPU2_Temp", "value": 58.0, "unit": "celsius"}
-        ],
-        "fans": [
-          {"name": "Fan1", "value": 3200, "unit": "rpm"},
-          {"name": "Fan2", "value": 3150, "unit": "rpm"}
-        ],
-        "voltage": [
-          {"name": "12V", "value": 12.05, "unit": "volts"},
-          {"name": "5V", "value": 5.02, "unit": "volts"}
-        ]
-      }
-    }
-  ]
-}
-```
-
-### 3.2 노드별 IPMI 센서
-
-**엔드포인트**: `GET /api/v1/hardware/ipmi/sensors/{node_name}`
-
-**설명**: 특정 노드의 IPMI 센서
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/hardware/ipmi/sensors/worker1
-```
-
-### 3.3 전력 센서
-
-**엔드포인트**: `GET /api/v1/hardware/ipmi/power`
-
-**설명**: 전체 노드의 전력 센서만
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/hardware/ipmi/power
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "ipmi_power",
-  "data": [
-    {
-      "node": "worker1",
-      "total_power_watts": 285.3,
-      "psu1_power_watts": 145.0,
-      "psu2_power_watts": 140.3,
-      "psu_redundancy": "active"
-    },
-    {
-      "node": "worker2",
-      "total_power_watts": 298.7,
-      "psu1_power_watts": 152.3,
-      "psu2_power_watts": 146.4
-    }
-  ],
-  "summary": {
-    "total_power_watts": 584.0,
-    "node_count": 2
-  }
-}
-```
-
-### 3.4 온도 센서
-
-**엔드포인트**: `GET /api/v1/hardware/ipmi/temperature`
-
-**설명**: 전체 노드의 온도 센서
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/hardware/ipmi/temperature
-```
-
----
-
-## 4. Monitoring API
-
-통합 모니터링 및 실시간 스트리밍 API
-
-### 4.1 통합 전력 모니터링
-
-**엔드포인트**: `GET /api/v1/monitoring/power`
-
-**설명**: 전체 시스템 통합 전력 소비
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/monitoring/power
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "integrated_power",
-  "data": {
-    "total_power_watts": 1534.7,
-    "gpu_power_watts": 464.7,
-    "cpu_power_watts": 685.3,
-    "memory_power_watts": 284.5,
-    "other_power_watts": 100.2,
-    "breakdown": {
-      "accelerators": {
-        "gpus": 464.7,
-        "npus": 0.0
-      },
-      "infrastructure": {
-        "nodes": 685.3,
-        "pods": 384.5
-      },
-      "hardware": {
-        "ipmi_total": 285.3
-      }
-    },
-    "efficiency": {
-      "pue": 1.15,
-      "gpu_utilization_percent": 88.7,
-      "cpu_utilization_percent": 65.2
-    }
-  }
-}
-```
-
-### 4.2 전력 분해 분석
-
-**엔드포인트**: `GET /api/v1/monitoring/power/breakdown`
-
-**설명**: 전력 소비 분해 분석
-
-**쿼리 파라미터**:
-- `breakdown_by`: 분해 기준 (cluster, node, namespace, workload)
-
-**예시**:
-```bash
-# 클러스터별 분해
-curl -u admin:changeme "http://localhost:8001/api/v1/monitoring/power/breakdown?breakdown_by=cluster"
-
-# 노드별 분해
-curl -u admin:changeme "http://localhost:8001/api/v1/monitoring/power/breakdown?breakdown_by=node"
-
-# 네임스페이스별 분해
-curl -u admin:changeme "http://localhost:8001/api/v1/monitoring/power/breakdown?breakdown_by=namespace"
-```
-
-**응답 (노드별 예시)**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "power_breakdown",
-  "breakdown_by": "node",
-  "data": [
-    {
-      "node": "master1",
-      "power_watts": 120.5,
-      "percentage": 7.9,
-      "components": {
-        "cpu": 85.3,
-        "memory": 25.2,
-        "other": 10.0
-      }
-    },
-    {
-      "node": "worker1",
-      "power_watts": 285.3,
-      "percentage": 18.6,
-      "components": {
-        "gpu": 183.5,
-        "cpu": 75.8,
-        "memory": 26.0
-      }
-    },
-    {
-      "node": "worker2",
-      "power_watts": 298.7,
-      "percentage": 19.5,
-      "components": {
-        "gpu": 281.2,
-        "cpu": 12.5,
-        "memory": 5.0
-      }
-    }
-  ],
-  "summary": {
-    "total_power_watts": 1534.7,
-    "node_count": 3
-  }
-}
-```
-
-### 4.3 전력 시계열
-
-**엔드포인트**: `GET /api/v1/monitoring/timeseries/power`
-
-**설명**: 전력 소비 시계열 데이터
-
-**쿼리 파라미터**:
-- `period`: 조회 기간 (1h, 1d, 1w, 1m)
-- `step`: 샘플링 간격 (1m, 5m, 15m, 1h)
-
-**예시**:
-```bash
-# 1시간, 1분 간격
-curl -u admin:changeme "http://localhost:8001/api/v1/monitoring/timeseries/power?period=1h&step=1m"
-
-# 1일, 5분 간격
-curl -u admin:changeme "http://localhost:8001/api/v1/monitoring/timeseries/power?period=1d&step=5m"
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "power_timeseries",
-  "query": {
-    "period": "1h",
-    "step": "1m",
-    "start_time": "2024-01-01T11:00:00Z",
-    "end_time": "2024-01-01T12:00:00Z"
-  },
-  "data": [
-    {
-      "timestamp": "2024-01-01T11:00:00Z",
-      "total_power_watts": 1520.3,
-      "gpu_power_watts": 450.2,
-      "cpu_power_watts": 680.1,
-      "memory_power_watts": 280.0,
-      "other_power_watts": 110.0
-    },
-    {
-      "timestamp": "2024-01-01T11:01:00Z",
-      "total_power_watts": 1525.7,
-      "gpu_power_watts": 455.3,
-      "cpu_power_watts": 682.4
-    }
-  ],
-  "summary": {
-    "total_samples": 60,
-    "average_power_watts": 1532.5,
-    "max_power_watts": 1580.2,
-    "min_power_watts": 1485.3
-  }
-}
-```
-
-### 4.4 WebSocket 스트리밍
-
-**엔드포인트**: `WS /api/v1/monitoring/stream/power`
-
-**설명**: 실시간 전력 데이터 WebSocket 스트림
-
-**쿼리 파라미터**:
-- `interval`: 업데이트 간격 (초, 기본: 5)
-
-**예시 (JavaScript)**:
-```javascript
-const ws = new WebSocket('ws://localhost:8001/api/v1/monitoring/stream/power?interval=5');
-
-ws.onopen = () => {
-  console.log('WebSocket connected');
-};
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Power Update:', data);
-  /*
-  {
-    "timestamp": "2024-01-01T12:00:05Z",
-    "total_power_watts": 1534.7,
-    "gpu_power_watts": 464.7,
-    "cpu_power_watts": 685.3,
-    "breakdown": { ... }
-  }
-  */
-};
-
-ws.onerror = (error) => {
-  console.error('WebSocket error:', error);
-};
-
-ws.onclose = () => {
-  console.log('WebSocket disconnected');
-};
-```
-
-### 4.5 SSE 이벤트 스트림
-
-**엔드포인트**: `GET /api/v1/monitoring/events/power`
-
-**설명**: Server-Sent Events 전력 이벤트 스트림
-
-**예시 (JavaScript)**:
-```javascript
-const eventSource = new EventSource('http://localhost:8001/api/v1/monitoring/events/power');
-
-// 전력 업데이트 이벤트
-eventSource.addEventListener('power_update', (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Power:', data.total_power_watts, 'W');
-});
-
-// 임계값 초과 이벤트
-eventSource.addEventListener('threshold_exceeded', (event) => {
-  const alert = JSON.parse(event.data);
-  console.warn('Alert:', alert.message);
-  /*
-  {
-    "type": "threshold_exceeded",
-    "message": "Total power exceeded 1500W",
-    "current_value": 1534.7,
-    "threshold": 1500.0,
-    "severity": "warning"
-  }
-  */
-});
-
-eventSource.onerror = (error) => {
-  console.error('SSE error:', error);
-  eventSource.close();
-};
-```
-
----
-
-## 5. Export API
-
-데이터 내보내기 API
-
-### 5.1 전력 데이터 내보내기
-
-**엔드포인트**: `GET /api/v1/export/power`
-
-**설명**: 전력 데이터를 다양한 포맷으로 내보내기
-
-**쿼리 파라미터**:
-- `format`: 출력 포맷 (json, csv, excel, parquet, pdf)
-- `period`: 조회 기간
-- `breakdown_by`: 분해 기준 (옵션)
-
-**예시**:
-```bash
-# JSON 내보내기 (기본)
-curl -u admin:changeme "http://localhost:8001/api/v1/export/power?format=json&period=1h" > power.json
-
-# CSV 내보내기
-curl -u admin:changeme "http://localhost:8001/api/v1/export/power?format=csv&period=1h" > power.csv
-
-# Excel 내보내기
-curl -u admin:changeme "http://localhost:8001/api/v1/export/power?format=excel&period=1h" > power.xlsx
-
-# Parquet 내보내기 (빅데이터 분석용)
-curl -u admin:changeme "http://localhost:8001/api/v1/export/power?format=parquet&period=1h" > power.parquet
-
-# PDF 리포트
-curl -u admin:changeme "http://localhost:8001/api/v1/export/power?format=pdf&period=1d" > power_report.pdf
-```
-
-### 5.2 메트릭 데이터 내보내기
-
-**엔드포인트**: `GET /api/v1/export/metrics`
-
-**설명**: 성능 메트릭 데이터 내보내기
-
-**쿼리 파라미터**:
-- `format`: 출력 포맷
-- `resource_type`: 리소스 타입 (gpu, node, pod)
-- `period`: 조회 기간
-
-**예시**:
-```bash
-# GPU 메트릭 CSV
-curl -u admin:changeme "http://localhost:8001/api/v1/export/metrics?format=csv&resource_type=gpu&period=1h" > gpu_metrics.csv
-
-# 노드 메트릭 Excel
-curl -u admin:changeme "http://localhost:8001/api/v1/export/metrics?format=excel&resource_type=node&period=1d" > node_metrics.xlsx
-```
-
-### 5.3 리포트 생성
-
-**엔드포인트**: `GET /api/v1/export/report`
-
-**설명**: 종합 리포트 생성
-
-**쿼리 파라미터**:
-- `template`: 리포트 템플릿 (daily, weekly, monthly)
-- `format`: 출력 포맷 (pdf, excel)
-
-**예시**:
-```bash
-# 일일 리포트
-curl -u admin:changeme "http://localhost:8001/api/v1/export/report?template=daily&format=pdf" > daily_report.pdf
-
-# 주간 리포트
-curl -u admin:changeme "http://localhost:8001/api/v1/export/report?template=weekly&format=excel" > weekly_report.xlsx
-
-# 월간 리포트
-curl -u admin:changeme "http://localhost:8001/api/v1/export/report?template=monthly&format=pdf" > monthly_report.pdf
-```
-
----
-
-## 6. Clusters API
-
-멀티 클러스터 관리 API
-
-### 6.1 클러스터 목록
-
-**엔드포인트**: `GET /api/v1/clusters`
-
-**설명**: 전체 클러스터 목록
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/clusters
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "resource_type": "cluster",
-  "data": [
-    {
-      "name": "prod",
-      "url": "http://prom-prod:9090",
-      "region": "us-east-1",
-      "status": "connected",
-      "nodes_count": 15,
-      "gpus_count": 30,
-      "total_power_watts": 3500.5
-    },
-    {
-      "name": "dev",
-      "url": "http://prom-dev:9090",
-      "region": "us-west-1",
-      "status": "connected",
-      "nodes_count": 5,
-      "gpus_count": 8
-    }
-  ]
-}
-```
-
-### 6.2 클러스터 요약
-
-**엔드포인트**: `GET /api/v1/clusters/{cluster_name}/summary`
-
-**설명**: 특정 클러스터 요약
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/clusters/prod/summary
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "cluster": "prod",
-  "resource_type": "cluster_summary",
-  "data": {
-    "name": "prod",
-    "region": "us-east-1",
-    "status": "healthy",
-    "nodes": {
-      "total": 15,
-      "ready": 15,
-      "masters": 3,
-      "workers": 12
-    },
-    "gpus": {
-      "total": 30,
-      "active": 28,
-      "models": ["NVIDIA A30", "NVIDIA A100"]
-    },
-    "pods": {
-      "total": 450,
-      "running": 445,
-      "pending": 5
-    },
-    "power": {
-      "total_watts": 3500.5,
-      "gpu_watts": 2100.3,
-      "cpu_watts": 1200.2,
-      "efficiency_pue": 1.12
-    }
-  }
-}
-```
-
-### 6.3 클러스터 전력
-
-**엔드포인트**: `GET /api/v1/clusters/{cluster_name}/power`
-
-**설명**: 클러스터별 전력 소비
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/clusters/prod/power
-```
-
----
-
-## 7. System API
-
-시스템 정보 및 메트릭 API
-
-### 7.1 헬스체크
-
-**엔드포인트**: `GET /api/v1/system/health`
-
-**설명**: API 서버 및 Prometheus 연결 상태 확인
-
-**인증**: 불필요
-
-**예시**:
-```bash
-curl http://localhost:8001/api/v1/system/health
-```
-
-**응답**:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T12:00:00Z",
-  "version": "0.1.0",
-  "prometheus": {
-    "connected": true,
-    "url": "http://prometheus:9090",
-    "response_time_ms": 12
-  },
-  "cache": {
-    "enabled": true,
-    "hit_rate_percent": 78.5
-  },
-  "uptime_seconds": 86400
-}
-```
-
-### 7.2 버전 정보
-
-**엔드포인트**: `GET /api/v1/system/version`
-
-**설명**: API 버전 및 기능 정보
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/system/version
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "data": {
-    "api_version": "0.1.0",
-    "api_name": "KCloud Monitor",
-    "build_date": "2024-01-01",
-    "python_version": "3.12.0",
-    "fastapi_version": "0.104.1"
-  }
-}
-```
-
-### 7.3 지원 기능
-
-**엔드포인트**: `GET /api/v1/system/capabilities`
-
-**설명**: API가 지원하는 기능 목록
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/system/capabilities
-```
-
-**응답**:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "data": {
-    "accelerators": ["nvidia_gpu"],
-    "infrastructure": ["kubernetes_nodes", "pods", "containers"],
-    "hardware": ["ipmi"],
-    "data_sources": ["dcgm", "kepler", "ipmi"],
-    "export_formats": ["json", "csv", "excel", "parquet", "pdf"],
-    "streaming": ["websocket", "sse"],
-    "multi_cluster": true,
-    "real_time_monitoring": true
-  }
-}
-```
-
-### 7.4 API 메트릭 (Prometheus)
-
-**엔드포인트**: `GET /api/v1/system/metrics`
-
-**설명**: API 서버 메트릭 (Prometheus 형식)
-
-**인증**: 필요
-
-**예시**:
-```bash
-curl -u admin:changeme http://localhost:8001/api/v1/system/metrics
-```
-
-**응답**:
-```
-# HELP api_requests_total Total API requests
-# TYPE api_requests_total counter
-api_requests_total{method="GET",endpoint="/api/v1/accelerators/gpus",status="200"} 1234
-
-# HELP api_request_duration_seconds API request duration
-# TYPE api_request_duration_seconds histogram
-api_request_duration_seconds_bucket{le="0.1"} 850
-api_request_duration_seconds_bucket{le="0.5"} 1180
-api_request_duration_seconds_sum 450.5
-api_request_duration_seconds_count 1234
-
-# HELP cache_hits_total Cache hits
-# TYPE cache_hits_total counter
-cache_hits_total 968
-
-# HELP cache_misses_total Cache misses
-# TYPE cache_misses_total counter
-cache_misses_total 266
-
-# HELP prometheus_query_duration_seconds Prometheus query duration
-# TYPE prometheus_query_duration_seconds histogram
-prometheus_query_duration_seconds_sum 125.3
-prometheus_query_duration_seconds_count 1500
-```
-
----
-
-## 오류 처리
-
-### 오류 응답 구조
-```json
-{
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable error message",
-    "details": { ... }
-  },
-  "timestamp": "2024-01-01T12:00:00Z"
-}
-```
-
-### 일반 오류 코드
-
-| 코드 | 상태 | 설명 |
-|------|------|------|
-| `UNAUTHORIZED` | 401 | 인증 실패 |
-| `FORBIDDEN` | 403 | 권한 없음 |
-| `NOT_FOUND` | 404 | 리소스 없음 |
-| `INVALID_PARAMETER` | 400 | 잘못된 파라미터 |
-| `PROMETHEUS_ERROR` | 502 | Prometheus 연결 실패 |
-| `INTERNAL_ERROR` | 500 | 서버 내부 오류 |
-
----
-
-## 추가 리소스
-
-- 빠른 시작: [QUICK_START.md](./QUICK_START.md)
-- 아키텍처: [ARCHITECTURE_OVERVIEW.md](./ARCHITECTURE_OVERVIEW.md)
-- Swagger UI: http://localhost:8001/docs
-- ReDoc: http://localhost:8001/redoc
+스텁 단계에서는 heartbeat 1회 + 스텁 이벤트 1회 송신 후 종료합니다.
