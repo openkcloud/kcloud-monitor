@@ -1,249 +1,115 @@
 # KCloud Monitor
 
-> AI 반도체 통합 모니터링 플랫폼
+> AI 반도체 통합 모니터링 플랫폼 (v2)
 
-KCloud Monitor는 AI 반도체(GPU, NPU)와 클라우드 인프라의 전력 소비 및 성능을 통합 모니터링하는 FastAPI 기반 REST API 서비스입니다. Prometheus를 통해 DCGM, Kepler, IPMI 등 다양한 메트릭을 수집하고 실시간 스트리밍, 데이터 내보내기 등의 기능을 제공합니다.
+KCloud Monitor는 AI 반도체(GPU, NPU)와 클라우드 인프라(K8s·OpenStack)의 자원·전력을 통합 모니터링하는 FastAPI 기반 REST API 서비스입니다.
 
 ![GitHub license](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python version](https://img.shields.io/badge/python-3.12-green.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.119%2B-teal.svg)
-![API Version](https://img.shields.io/badge/API-v0.1.0-blue)
+![API Version](https://img.shields.io/badge/API-v2%20scaffold-orange)
 
 [![Korean](https://img.shields.io/badge/lang-한국어-red)](README.md)
 [![English](https://img.shields.io/badge/lang-English-blue)](README_EN.md)
 
-## 주요 기능
+## ⚠️ 현재 상태: v2 스캐폴드
 
-### 🚀 핵심 기능
+v1 API(프로토타입)는 종료되었습니다(`docs/temp/02-decisions/design_contracts.md` §1).
+현재 브랜치는 **v2 라우팅·인증·경로 구조만 확정**한 스캐폴드 단계로,
+모든 엔드포인트는 정의·데이터소스·설계 참조를 담은 **스텁 응답**(`status: not_implemented`)을 반환합니다.
 
-- **AI 반도체 모니터링**: GPU(NVIDIA DCGM), NPU(Furiosa/Rebellions) 성능 및 전력 모니터링
-- **인프라 모니터링**: Kubernetes Nodes, Pods, Containers 리소스 및 전력 분해 (Kepler)
-- **하드웨어 센서**: IPMI 기반 물리 서버 센서 모니터링 (전력, 온도, 팬, 전압)
-- **멀티 클러스터**: 여러 Kubernetes 클러스터 통합 관리 및 모니터링
-- **통합 전력 분석**: 클러스터/노드/네임스페이스/리소스 타입별 전력 분해 분석 및 PUE 계산
-- **실시간 스트리밍**: WebSocket 및 SSE를 통한 실시간 메트릭 푸시
-- **데이터 내보내기**: JSON, CSV, Parquet, Excel, PDF 형식 지원
-- **API 메트릭**: Prometheus 형식으로 API 서버 메트릭 노출
+- v1 구현(GPU/DCGM·Kepler·IPMI 수집 로직, 익스포터 등)은 git 이력에서 참조 가능하며 실제 구현 시 재사용합니다.
+- 경로 SoT: `docs/temp/04-reference/sample_api.md` (Monitor 81 + Resource-Map 8) + `docs/temp/01-domain-plans/openkcloud_storage_ceph_plan.md` (S1~S10) = **canonical 99개** (+별칭 4, 인증 3).
 
-### 📊 도메인 아키텍처
+## API 구조 (`/api/v2`)
 
-1. **Accelerators** - AI 반도체 (GPU, NPU, TPU)
-2. **Infrastructure** - 인프라 리소스 (Nodes, Pods, Containers, VMs)
-3. **Hardware** - 물리 하드웨어 센서 (IPMI)
-4. **Clusters** - 멀티 클러스터 관리
-5. **Monitoring** - 통합 모니터링 및 스트리밍
-6. **Export** - 데이터 내보내기 및 리포트
-7. **System** - 시스템 정보 및 헬스체크
+| 영역 | 경로 | 내용 | 수량 |
+|------|------|------|------|
+| Clusters | `/clusters/{c}` | 클러스터 요약·토폴로지·전력 [P1] | 5 |
+| Nodes & Hardware | `/clusters/{c}/nodes/{n}/*` | 노드 메트릭·전력 [P2] + IPMI 실측 [P3] | 13 |
+| Accelerators & Partitions | `.../accelerators/{id}/*` | GPU/NPU 통합, 파티션(MIG/vGPU/slice) [P4·P5] | 12(+별칭 2) |
+| Storage (Ceph) | `/clusters/{c}/storage/*` | Rook-Ceph S1~S10 (v2 신규 도메인) | 10 |
+| OpenStack | `/clusters/{c}/openstack/*` | 프로젝트·하이퍼바이저·VM·전력 귀속 [P6] | 13 |
+| Workloads | `/clusters/{c}/workloads/*` | Pod/Container/Namespace [P7] | 11(+별칭 2) |
+| Workloads (전역) | `/workloads/*` | 포탈용 전역 진입점 (`_links.canonical`) | 11 |
+| Monitoring | `/monitoring/*` | 횡단 전력 집계 [P8]·시계열·SSE 스트림 | 10 |
+| Export | `/export/*` | 전력/메트릭/리포트 내보내기 | 3 |
+| Resource-Map | `/resource-map/*` | 자원 계보 원장(GPU→VM→Pod), Discovery | 8 |
+| System | `/system/*` | 헬스·버전·자체 메트릭 (공개, 실동작) | 3 |
+| Auth | `/auth/*` | JWT 발급 (Gateway 도입 전 개발용) | 3 |
 
 ## 빠른 시작
 
-### 1. 환경 설정
-
 ```bash
-# 1. 저장소 클론
-git clone https://github.com/openkcloud/kcloud-monitor.git
-cd kcloud-monitor
-
-# 2. 가상환경 생성 및 활성화
-python3.12 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# 3. 의존성 설치
+# 1. 의존성 설치
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 4. 환경 변수 설정
+# 2. 환경 변수
 cp .env.example .env
-# .env 파일에서 Prometheus URL 및 인증 정보 설정
-```
 
-### 2. Docker로 실행 (권장)
+# 3. 서버 실행
+python run.py --port 8000
+```
 
 ```bash
-# 1. 환경 변수 설정
-cp .env.example .env
-# .env 파일에서 Prometheus URL 및 인증 정보 설정
+# 헬스체크 (공개)
+curl http://localhost:8000/api/v2/system/health
 
-# 2. Docker Compose로 실행
-docker-compose up -d
+# 로그인 → 토큰
+curl -X POST http://localhost:8000/api/v2/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme"}'
 
-# 3. 로그 확인
-docker-compose logs -f api
-
-# 4. 서비스 상태 확인
-curl http://localhost:8000/api/v1/system/health
-
-# 5. API 문서 확인
-# http://localhost:8000/docs (Swagger UI)
-# http://localhost:8000/redoc (ReDoc)
-
-# 6. 서비스 중지
-docker-compose down
+# 스텁 응답 확인 (정의·데이터소스·설계 참조 포함)
+curl -H "Authorization: Bearer <TOKEN>" \
+  http://localhost:8000/api/v2/clusters/mgmt/nodes/w1/accelerators
 ```
 
-### 3. 로컬 개발 서버 실행
+- Swagger UI: http://localhost:8000/docs
+- 테스트: `pytest tests/ -v` (route inventory 106개·인증·스텁 계약 검증)
 
-```bash
-# 개발 서버 실행
-uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+## v2 목표 아키텍처 (구현 예정)
 
-# API 문서 확인
-# http://127.0.0.1:8001/docs (Swagger UI)
-# http://127.0.0.1:8001/redoc (ReDoc)
-```
+| 백엔드 | 용도 | 상태 |
+|--------|------|------|
+| **Mimir** (PromQL) | 중앙 메트릭 — 클러스터별 Alloy remote_write | 설정 placeholder |
+| **PostgreSQL** | resource-map 원장(자원 계보) | 설정 placeholder |
+| **Redis(+Streams)** | 캐시 + 서비스 간 이벤트 버스 | 설정 placeholder |
+| **OpenStack API / libvirt** | VM 매핑·GPU passthrough·전력 귀속(A안) | 설정 placeholder |
 
-### 4. 기본 사용 예시
-
-```bash
-# 헬스체크
-curl http://127.0.0.1:8001/api/v1/system/health
-
-# GPU 모니터링
-curl -u admin:changeme http://127.0.0.1:8001/api/v1/accelerators/gpus
-
-# 통합 전력 모니터링
-curl -u admin:changeme http://127.0.0.1:8001/api/v1/monitoring/power
-
-# 데이터 내보내기 (CSV)
-curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&format=csv" > power.csv
-```
-
-## API 엔드포인트
-
-| 도메인 | 주요 엔드포인트 | 데이터 소스 | 상태 |
-|--------|----------------|-------------|------|
-| **Accelerators** | `/api/v1/accelerators/gpus` | DCGM | ✅ |
-| | `/api/v1/accelerators/npus` | NPU Exporter | ⚠️ |
-| **Infrastructure** | `/api/v1/infrastructure/nodes` | Kepler | ✅ |
-| | `/api/v1/infrastructure/pods` | Kepler | ✅ |
-| **Hardware** | `/api/v1/hardware/ipmi/sensors` | IPMI Exporter | ⚠️ |
-| **Clusters** | `/api/v1/clusters` | Prometheus | ✅ |
-| **Monitoring** | `/api/v1/monitoring/power` | Kepler + DCGM | ✅ |
-| | `/api/v1/monitoring/stream/power` (WS) | Prometheus | ✅ |
-| **Export** | `/api/v1/export/power?format=csv` | - | ✅ |
-| **System** | `/api/v1/system/health` | - | ✅ |
-
-> 📖 **상세 API 문서**: [docs/API_GUIDE.md](docs/API_GUIDE.md)
-
-## 시스템 아키텍처
-
-```
-┌─────────────────────────────────────────┐
-│         Client Applications              │
-│   (Dashboard, CLI, Export Tools)         │
-└────────────────┬────────────────────────┘
-                 │ REST API / WebSocket
-┌────────────────┴────────────────────────┐
-│         FastAPI Application              │
-│  Accelerators│Infrastructure│Hardware│  │
-│  Clusters│Monitoring│Export│System      │
-└────────────────┬────────────────────────┘
-                 │ Prometheus Query API
-┌────────────────┴────────────────────────┐
-│       Prometheus (Multi-Cluster)         │
-└────────────────┬────────────────────────┘
-                 │ Metrics Collection
-┌────────────────┴────────────────────────┐
-│  DCGM│Kepler│IPMI│NPU│OpenStack        │
-└────────────────┬────────────────────────┘
-                 │ Hardware Metrics
-┌────────────────┴────────────────────────┐
-│  GPU│NPU│Nodes│Pods│Containers│VMs     │
-└─────────────────────────────────────────┘
-```
-
-### 데이터 소스
-
-| 데이터 소스 | 용도 | 상태 |
-|------------|------|------|
-| **DCGM Exporter** | NVIDIA GPU 모니터링 | ✅ |
-| **Kepler** | 노드/Pod 전력 분해 | ✅ |
-| **IPMI Exporter** | 물리 서버 센서 | ⚠️ 설정 필요 |
-| **NPU Exporter** | Furiosa/Rebellions NPU | ⚠️ 설정 필요 |
-| **OpenStack** | VM 모니터링 | ❌ 미구현 |
+전력 계층(P1~P8)·신뢰도 표기(`power_estimation`, `attribution.method`)는
+`docs/temp/01-domain-plans/openkcloud_power_attribution_plan.md`를 따릅니다.
 
 ## 로드맵
 
-### ✅ 완료 (v0.1.0)
-
-- 도메인 기반 아키텍처 설계 및 구현
-- GPU 모니터링 (DCGM)
-- 인프라 모니터링 (Kepler - Nodes/Pods/Containers)
-- 멀티 클러스터 지원
-- 통합 전력 모니터링 및 분해 분석
-- 실시간 스트리밍 (WebSocket, SSE)
-- 다양한 포맷 데이터 내보내기 (JSON, CSV, Parquet, Excel, PDF)
-- API 메트릭 노출 (Prometheus)
-
-### 🚧 개발 중
-
-- IPMI Exporter 설정
-- NPU Exporter 설정
-- 테스트 코드 완성 (113 tests, 66 passed)
-
-### 📋 향후 계획
-
-- NPU 모니터링 (Furiosa, Rebellions)
-- OpenStack VM 모니터링
-- Kubernetes 배포 자동화
-- Grafana 대시보드
-- Alert Manager 연동
-
-## 환경 설정
-
-주요 환경 변수:
-
-```bash
-# Prometheus 연결
-PROMETHEUS_URL=http://prometheus-server:9090
-
-# 인증
-API_AUTH_USERNAME=admin
-API_AUTH_PASSWORD=changeme
-
-# 멀티 클러스터 (옵션)
-# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
-```
-
-> 📖 **상세 설정 가이드**: [docs/PROMETHEUS_NPU_SETUP.md](docs/PROMETHEUS_NPU_SETUP.md)
+- ✅ v2 라우팅/인증/경로 구조 확정 (스캐폴드, 현재)
+- 🚧 데이터소스 클라이언트(Mimir·PostgreSQL·Redis·OpenStack) 및 도메인별 실제 구현
+- 📋 resource-map Discovery 수집기, 전력 귀속 recording rules, Ceph 도메인 구현
 
 ## 문서
 
-### 📚 프로젝트 문서
-
 | 문서 | 설명 |
 |------|------|
-| [API 가이드](docs/API_GUIDE.md) | API 엔드포인트 사용 가이드 |
-| [아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md) | 도메인 기반 아키텍처 |
-| [Prometheus NPU 설정](docs/PROMETHEUS_NPU_SETUP.md) | NPU 수집 설정(Furiosa exporter + hwmon) |
-| [빠른 시작](docs/QUICK_START.md) | 빠른 시작 가이드 |
+| `docs/temp/04-reference/sample_api.md` | v2 API 카탈로그·예제 응답 (경로 SoT) |
+| `docs/temp/02-decisions/design_contracts.md` | 설계 계약(응답 정책·NFR·SoT 우선순위) |
+| `docs/temp/00-architecture/` | 시스템/자원매핑 아키텍처 |
+| `docs/temp/01-domain-plans/` | 도메인별 설계(전력 귀속, Ceph 등) |
 
 ### 🔧 기술 스택
 
 - **Framework**: FastAPI 0.119+, Python 3.12
 - **Data Validation**: Pydantic 2.12+
-- **Metrics**: Prometheus Client, DCGM, Kepler
-- **Export**: pyarrow, openpyxl, reportlab
+- **Metrics**: prometheus-client (자체 메트릭 노출)
 - **Server**: Uvicorn (ASGI)
 
 ## 기여하기
 
 버그 리포트나 기능 제안은 이슈를 통해 제출해 주세요.
 
-### 개발 환경 설정
-
 ```bash
-# 1. 포크 및 클론
 git clone https://github.com/openkcloud/kcloud-monitor.git
-
-# 2. 브랜치 생성
 git checkout -b feature/your-feature
-
-# 3. 변경사항 커밋
-git commit -m "Add your feature"
-
-# 4. 푸시 및 PR 생성
-git push origin feature/your-feature
 ```
 
 ## 라이선스
@@ -264,16 +130,7 @@ You may obtain a copy of the License at
 
 - **개발**: OpenKCloud 커뮤니티
 - **이슈**: [GitHub Issues](https://github.com/openkcloud/kcloud-monitor/issues)
-- **문서**: [프로젝트 위키](https://github.com/openkcloud/kcloud-monitor/wiki)
-
-## 감사의 말
-
-- 모든 기여자 분들
-- OpenKCloud 커뮤니티
-- Prometheus, Kepler, DCGM 프로젝트
 
 ---
 
-**KCloud Monitor v0.1.0** | AI 반도체 통합 모니터링 플랫폼
-
-프로젝트 링크: [https://github.com/openkcloud/kcloud-monitor](https://github.com/openkcloud/kcloud-monitor)
+**KCloud Monitor v2 (scaffold)** | AI 반도체 통합 모니터링 플랫폼

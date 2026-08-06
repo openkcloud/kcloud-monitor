@@ -1,258 +1,82 @@
 # KCloud Monitor
 
-> Unified Monitoring Platform for AI Semiconductors
+> Unified Monitoring Platform for AI Semiconductors (v2)
 
-KCloud Monitor is a FastAPI-based REST API service for unified monitoring of AI semiconductors (GPU, NPU) and cloud infrastructure power consumption and performance. It collects various metrics through Prometheus including DCGM, Kepler, and IPMI, providing real-time streaming and data export capabilities.
+KCloud Monitor is a FastAPI-based REST API service for unified monitoring of AI semiconductors (GPU, NPU) and cloud infrastructure (Kubernetes, OpenStack), covering resources and power attribution.
 
 ![GitHub license](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python version](https://img.shields.io/badge/python-3.12-green.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.119%2B-teal.svg)
-![API Version](https://img.shields.io/badge/API-v0.1.0-blue)
+![API Version](https://img.shields.io/badge/API-v2%20scaffold-orange)
 
 [![Korean](https://img.shields.io/badge/lang-한국어-red)](README.md)
 [![English](https://img.shields.io/badge/lang-English-blue)](README_EN.md)
 
-## Overview
+## ⚠️ Current Status: v2 Scaffold
 
-KCloud Monitor is an enterprise-grade monitoring platform designed for AI semiconductor infrastructure, providing comprehensive power consumption analysis and performance monitoring across GPU/NPU, Kubernetes resources, and physical hardware. Built on a domain-based microservice architecture, it delivers high performance, scalability, and real-time insights through WebSocket streaming and multi-format data export.
+The v1 API (prototype) has been retired (`docs/temp/02-decisions/design_contracts.md` §1).
+This codebase currently defines the **v2 routing, authentication, and path structure only** —
+every endpoint returns a **stub response** (`status: not_implemented`) that carries its
+definition, planned data sources, and design references.
 
-## Key Features
+- The v1 implementation (DCGM/Kepler/IPMI query logic, exporters, etc.) remains available in git history for reuse during actual implementation.
+- Path source of truth: `docs/temp/04-reference/sample_api.md` (Monitor 81 + Resource-Map 8) plus `docs/temp/01-domain-plans/openkcloud_storage_ceph_plan.md` (S1–S10) = **99 canonical routes** (+4 aliases, +3 auth).
 
-### 🚀 Core Capabilities
+## API Structure (`/api/v2`)
 
-- **AI Semiconductor Monitoring**: Performance and power monitoring for GPU (NVIDIA DCGM) and NPU (Furiosa/Rebellions)
-- **Infrastructure Monitoring**: Kubernetes Nodes, Pods, Containers resource and power breakdown (Kepler)
-- **Hardware Sensors**: IPMI-based physical server sensor monitoring (power, temperature, fan, voltage)
-- **Multi-Cluster Support**: Unified management and monitoring across multiple Kubernetes clusters
-- **Unified Power Analysis**: Power breakdown analysis by cluster/node/namespace/resource type and PUE calculation
-- **Real-time Streaming**: Real-time metric push via WebSocket and SSE
-- **Data Export**: Support for JSON, CSV, Parquet, Excel, PDF formats
-- **API Metrics**: Prometheus-format API server metrics exposure
-
-### 📊 Domain Architecture
-
-1. **Accelerators** - AI semiconductors (GPU, NPU, TPU)
-2. **Infrastructure** - Infrastructure resources (Nodes, Pods, Containers, VMs)
-3. **Hardware** - Physical hardware sensors (IPMI)
-4. **Clusters** - Multi-cluster management
-5. **Monitoring** - Unified monitoring and streaming
-6. **Export** - Data export and reporting
-7. **System** - System information and health checks
+| Area | Path | Description | Count |
+|------|------|-------------|-------|
+| Clusters | `/clusters/{c}` | Cluster summary, topology, power [P1] | 5 |
+| Nodes & Hardware | `/clusters/{c}/nodes/{n}/*` | Node metrics, power [P2], IPMI sensors [P3] | 13 |
+| Accelerators & Partitions | `.../accelerators/{id}/*` | Unified GPU/NPU, partitions (MIG/vGPU/slice) [P4·P5] | 12 (+2 aliases) |
+| Storage (Ceph) | `/clusters/{c}/storage/*` | Rook-Ceph S1–S10 (new v2 domain) | 10 |
+| OpenStack | `/clusters/{c}/openstack/*` | Projects, hypervisors, VMs, power attribution [P6] | 13 |
+| Workloads | `/clusters/{c}/workloads/*` | Pods/Containers/Namespaces [P7] | 11 (+2 aliases) |
+| Workloads (Global) | `/workloads/*` | Portal-facing global entry (`_links.canonical`) | 11 |
+| Monitoring | `/monitoring/*` | Cross-cluster power [P8], timeseries, SSE streams | 10 |
+| Export | `/export/*` | Power/metrics/report export | 3 |
+| Resource-Map | `/resource-map/*` | Resource lineage ledger (GPU→VM→Pod), discovery | 8 |
+| System | `/system/*` | Health, version, self metrics (public, functional) | 3 |
+| Auth | `/auth/*` | JWT issuance (dev-only until API Gateway) | 3 |
 
 ## Quick Start
 
-### 1. Setup
-
 ```bash
-# 1. Clone repository
-git clone https://github.com/openkcloud/kcloud-monitor.git
-cd kcloud-monitor
-
-# 2. Create and activate virtual environment
-python3.12 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# 3. Install dependencies
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Configure environment variables
 cp .env.example .env
-# Edit .env file to set Prometheus URL and authentication credentials
+python run.py --port 8000
 ```
-
-### 2. Run with Docker (Recommended)
 
 ```bash
-# 1. Configure environment variables
-cp .env.example .env
-# Edit .env file to set Prometheus URL and authentication credentials
+# Health check (public)
+curl http://localhost:8000/api/v2/system/health
 
-# 2. Start with Docker Compose
-docker-compose up -d
+# Login → token
+curl -X POST http://localhost:8000/api/v2/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme"}'
 
-# 3. View logs
-docker-compose logs -f api
-
-# 4. Check service health
-curl http://localhost:8000/api/v1/system/health
-
-# 5. Access API documentation
-# http://localhost:8000/docs (Swagger UI)
-# http://localhost:8000/redoc (ReDoc)
-
-# 6. Stop service
-docker-compose down
+# Inspect a stub response (definition, data sources, design refs)
+curl -H "Authorization: Bearer <TOKEN>" \
+  http://localhost:8000/api/v2/clusters/mgmt/nodes/w1/accelerators
 ```
 
-### 3. Run Local Development Server
+- Swagger UI: http://localhost:8000/docs
+- Tests: `pytest tests/ -v` (validates the 106-route inventory, auth, stub contract)
 
-```bash
-# Run development server
-uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+## Target v2 Architecture (to be implemented)
 
-# Access API documentation
-# http://127.0.0.1:8001/docs (Swagger UI)
-# http://127.0.0.1:8001/redoc (ReDoc)
-```
-
-### 4. Basic Usage Examples
-
-```bash
-# Health check
-curl http://127.0.0.1:8001/api/v1/system/health
-
-# GPU monitoring
-curl -u admin:changeme http://127.0.0.1:8001/api/v1/accelerators/gpus
-
-# Unified power monitoring
-curl -u admin:changeme http://127.0.0.1:8001/api/v1/monitoring/power
-
-# Data export (CSV)
-curl -u admin:changeme "http://127.0.0.1:8001/api/v1/export/power?period=1h&format=csv" > power.csv
-```
-
-## API Endpoints
-
-| Domain | Main Endpoints | Data Source | Status |
-|--------|----------------|-------------|--------|
-| **Accelerators** | `/api/v1/accelerators/gpus` | DCGM | ✅ |
-| | `/api/v1/accelerators/npus` | NPU Exporter | ⚠️ |
-| **Infrastructure** | `/api/v1/infrastructure/nodes` | Kepler | ✅ |
-| | `/api/v1/infrastructure/pods` | Kepler | ✅ |
-| **Hardware** | `/api/v1/hardware/ipmi/sensors` | IPMI Exporter | ⚠️ |
-| **Clusters** | `/api/v1/clusters` | Prometheus | ✅ |
-| **Monitoring** | `/api/v1/monitoring/power` | Kepler + DCGM | ✅ |
-| | `/api/v1/monitoring/stream/power` (WS) | Prometheus | ✅ |
-| **Export** | `/api/v1/export/power?format=csv` | - | ✅ |
-| **System** | `/api/v1/system/health` | - | ✅ |
-
-> 📖 **Detailed API Documentation**: [docs/API_GUIDE.md](docs/API_GUIDE.md)
-
-## System Architecture
-
-```
-┌─────────────────────────────────────────┐
-│         Client Applications              │
-│   (Dashboard, CLI, Export Tools)         │
-└────────────────┬────────────────────────┘
-                 │ REST API / WebSocket
-┌────────────────┴────────────────────────┐
-│         FastAPI Application              │
-│  Accelerators│Infrastructure│Hardware│  │
-│  Clusters│Monitoring│Export│System      │
-└────────────────┬────────────────────────┘
-                 │ Prometheus Query API
-┌────────────────┴────────────────────────┐
-│       Prometheus (Multi-Cluster)         │
-└────────────────┬────────────────────────┘
-                 │ Metrics Collection
-┌────────────────┴────────────────────────┐
-│  DCGM│Kepler│IPMI│NPU│OpenStack        │
-└────────────────┴────────────────────────┘
-                 │ Hardware Metrics
-┌────────────────┴────────────────────────┐
-│  GPU│NPU│Nodes│Pods│Containers│VMs     │
-└─────────────────────────────────────────┘
-```
-
-### Data Sources
-
-| Data Source | Purpose | Status |
-|------------|---------|--------|
-| **DCGM Exporter** | NVIDIA GPU monitoring | ✅ |
-| **Kepler** | Node/Pod power breakdown | ✅ |
-| **IPMI Exporter** | Physical server sensors | ⚠️ Setup Required |
-| **NPU Exporter** | Furiosa/Rebellions NPU | ⚠️ Setup Required |
-| **OpenStack** | VM monitoring | ❌ Not Implemented |
-
-## Roadmap
-
-### ✅ Completed (v0.1.0)
-
-- Domain-based architecture design and implementation
-- GPU monitoring (DCGM)
-- Infrastructure monitoring (Kepler - Nodes/Pods/Containers)
-- Multi-cluster support
-- Unified power monitoring and breakdown analysis
-- Real-time streaming (WebSocket, SSE)
-- Multi-format data export (JSON, CSV, Parquet, Excel, PDF)
-- API metrics exposure (Prometheus)
-
-### 🚧 In Progress
-
-- IPMI Exporter setup
-- NPU Exporter setup
-- Test code completion (113 tests, 66 passed)
-
-### 📋 Future Plans
-
-- NPU monitoring (Furiosa, Rebellions)
-- OpenStack VM monitoring
-- Kubernetes deployment automation
-- Grafana dashboards
-- Alert Manager integration
-
-## Configuration
-
-Key environment variables:
-
-```bash
-# Prometheus connection
-PROMETHEUS_URL=http://prometheus-server:9090
-
-# Authentication
-API_AUTH_USERNAME=admin
-API_AUTH_PASSWORD=changeme
-
-# Multi-cluster (optional)
-# PROMETHEUS_CLUSTERS='[{"name":"cluster1","url":"http://prom-cluster1:9090"}]'
-```
-
-> 📖 **Detailed Configuration Guide**: [docs/PROMETHEUS_NPU_SETUP.md](docs/PROMETHEUS_NPU_SETUP.md)
-
-## Documentation
-
-### 📚 Project Documentation
-
-| Document | Description |
-|----------|-------------|
-| [API Guide](docs/API_GUIDE.md) | API endpoint usage guide |
-| [Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md) | Domain-based architecture |
-| [Prometheus NPU Setup](docs/PROMETHEUS_NPU_SETUP.md) | NPU metric collection (Furiosa exporter + hwmon) |
-| [Quick Start](docs/QUICK_START.md) | Quick start guide |
-
-### 🔧 Tech Stack
-
-- **Framework**: FastAPI 0.119+, Python 3.12
-- **Data Validation**: Pydantic 2.12+
-- **Metrics**: Prometheus Client, DCGM, Kepler
-- **Export**: pyarrow, openpyxl, reportlab
-- **Server**: Uvicorn (ASGI)
-
-## Contributing
-
-Bug reports and feature suggestions are welcome through issues.
-
-### Development Setup
-
-```bash
-# 1. Fork and clone
-git clone https://github.com/yourusername/kcloud-monitor.git
-
-# 2. Create branch
-git checkout -b feature/your-feature
-
-# 3. Commit changes
-git commit -m "Add your feature"
-
-# 4. Push and create PR
-git push origin feature/your-feature
-```
+| Backend | Purpose | Status |
+|---------|---------|--------|
+| **Mimir** (PromQL) | Central metrics — per-cluster Alloy remote_write | config placeholder |
+| **PostgreSQL** | Resource-map ledger (resource lineage) | config placeholder |
+| **Redis (+Streams)** | Cache + inter-service event bus | config placeholder |
+| **OpenStack API / libvirt** | VM mapping, GPU passthrough, power attribution | config placeholder |
 
 ## License
 
-This project is distributed under the Apache License 2.0. See [LICENSE](LICENSE) file for details.
+This project is distributed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ```
 Copyright 2025 OpenKCloud Community
@@ -268,16 +92,7 @@ You may obtain a copy of the License at
 
 - **Development**: OpenKCloud Community
 - **Issues**: [GitHub Issues](https://github.com/openkcloud/kcloud-monitor/issues)
-- **Documentation**: [Project Wiki](https://github.com/openkcloud/kcloud-monitor/wiki)
-
-## Acknowledgments
-
-- All contributors
-- OpenKCloud community
-- Prometheus, Kepler, and DCGM projects
 
 ---
 
-**KCloud Monitor v0.1.0** | Unified Monitoring Platform for AI Semiconductors
-
-Project Link: [https://github.com/openkcloud/kcloud-monitor](https://github.com/openkcloud/kcloud-monitor)
+**KCloud Monitor v2 (scaffold)** | Unified Monitoring Platform for AI Semiconductors
