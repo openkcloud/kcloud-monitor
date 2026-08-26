@@ -31,15 +31,11 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field("INFO", description="로그 레벨")
 
     # ── v2 데이터소스 (스캐폴드 단계 미사용 — 구현 시 활성화) ─────────────
-    MIMIR_URL: Optional[str] = Field(
-        None,
-        description="중앙 메트릭 백엔드 URL(PromQL 호환). 전환기에는 기존 Prometheus URL 지정 가능",
-    )
-    MIMIR_TENANT_ID: Optional[str] = Field(
-        None, description="Mimir X-Scope-OrgID (MVP는 단일 테넌트 + 라벨 필터)"
-    )
+    PROMETHEUS_URL: Optional[str] = Field("http://localhost:9090", description="Prometheus HTTP API URL",)
+    LOKI_URL: Optional[str] = Field(None, description="Loki HTTP API URL")
+    TEMPO_URL: Optional[str] = Field(None, description="Tempo HTTP API URL")
     DATABASE_URL: Optional[str] = Field(
-        None, description="PostgreSQL — resource-map 원장 (예: postgresql://user:pw@host:5432/kcloud)"
+        None, description="PostgreSQL — resource-map 원장"
     )
     REDIS_URL: Optional[str] = Field(
         None, description="Redis — 캐시 + Streams 이벤트 버스 (예: redis://host:6379/0)"
@@ -50,6 +46,11 @@ class Settings(BaseSettings):
     OPENSTACK_USERNAME: Optional[str] = Field(None, description="OpenStack 계정(admin/system-reader 필요)")
     OPENSTACK_PASSWORD: Optional[str] = Field(None, description="OpenStack 비밀번호")
     OPENSTACK_PROJECT_NAME: Optional[str] = Field(None, description="OpenStack 프로젝트")
+    OPENSTACK_USER_DOMAIN: str = Field("Default", description="Keystone 사용자 도메인")
+    OPENSTACK_PROJECT_DOMAIN: str = Field("Default", description="Keystone 프로젝트 도메인")
+    OPENSTACK_NOVA_URL: Optional[str] = Field(None, description="Nova compute API URL 오버라이드")
+    OPENSTACK_PLACEMENT_URL: Optional[str] = Field(None, description="Placement API URL 오버라이드")
+    OPENSTACK_MAGNUM_URL: Optional[str] = Field(None, description="Magnum(container-infra) API URL 오버라이드")
     CLUSTER_REGISTRY: Optional[str] = Field(
         None,
         description="클러스터 레지스트리 JSON — 관리/서비스 구분·접속 정보. "
