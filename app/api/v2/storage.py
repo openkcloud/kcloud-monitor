@@ -9,7 +9,7 @@ Rook-Ceph 분산 스토리지 모니터링(v2 신규 도메인, 2026-06-22 확�
 from fastapi import APIRouter, Depends, Request
 
 from app.api.v2._stub import stub
-from app.api.v2.deps import list_params, timeseries_params
+from app.api.v2.deps import PaginationParams, TimeseriesParams
 
 router = APIRouter()
 
@@ -51,7 +51,7 @@ async def get_ceph_capacity(request: Request, cluster: str):
 
 @router.get("/clusters/{cluster}/storage/ceph/capacity/timeseries", summary="Ceph 용량 시계열 [S9]")
 async def get_ceph_capacity_timeseries(
-    request: Request, cluster: str, params: dict = Depends(timeseries_params)
+    request: Request, cluster: str, params: TimeseriesParams = Depends()
 ):
     """Ceph 용량/사용률 시계열."""
     return stub(
@@ -64,7 +64,7 @@ async def get_ceph_capacity_timeseries(
 
 
 @router.get("/clusters/{cluster}/storage/ceph/osds", summary="OSD 목록 [S4]")
-async def list_ceph_osds(request: Request, cluster: str, params: dict = Depends(list_params)):
+async def list_ceph_osds(request: Request, cluster: str, params: PaginationParams = Depends()):
     """OSD 목록 — up/in 상태, 용량, apply/commit latency. 모델: CephOSD."""
     return stub(
         request,
@@ -87,7 +87,7 @@ async def get_ceph_osd(request: Request, cluster: str, osd_id: str):
 
 
 @router.get("/clusters/{cluster}/storage/ceph/pools", summary="풀 목록 [S6]")
-async def list_ceph_pools(request: Request, cluster: str, params: dict = Depends(list_params)):
+async def list_ceph_pools(request: Request, cluster: str, params: PaginationParams = Depends()):
     """풀 목록 — stored/avail/objects, 읽기/쓰기 IOPS. 모델: CephPool."""
     return stub(
         request,

@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v2._stub import stub
-from app.api.v2.deps import list_params
+from app.api.v2.deps import PaginationParams
 
 router = APIRouter()
 
@@ -81,10 +81,10 @@ async def list_relationships(
     request: Request,
     source_type: Optional[str] = Query(None, description="시작 노드 유형(accelerator|vm|pod|...)"),
     relation: Optional[str] = Query(None, description="관계 유형(attached_to|runs_on|...)"),
-    params: dict = Depends(list_params),
+    params: PaginationParams = Depends(),
 ):
     """원장 edge 질의 — 자원 간 관계(그래프)를 조건으로 조회."""
-    merged = dict(params)
+    merged = {k: v for k, v in vars(params).items() if v is not None}
     if source_type:
         merged["source_type"] = source_type
     if relation:
