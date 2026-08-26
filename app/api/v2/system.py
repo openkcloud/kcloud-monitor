@@ -10,22 +10,20 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Response
 
 from app.middleware import get_metrics_content_type, get_metrics_text
+from app.services.prometheus import prometheus_client
 
 router = APIRouter()
 
 
 @router.get("/system/health", summary="헬스체크")
 async def get_health(request: Request):
-    """서비스 헬스 — 스캐폴드 단계에서는 앱 생존만 보장. 백엔드 연결 상태는 구현 시 채운다."""
+    """서비스 헬스 — 앱 생존 + 유일한 데이터소스(Prometheus) 연결 상태를 실측한다."""
+    prometheus_ok = await prometheus_client.ping()
     return {
-        "status": "healthy",
-        "phase": "v2-scaffold",
+        # 앱은 살아 있으나 데이터소스 미도달이면 degraded로 강등
+        "status": "healthy" if prometheus_ok else "degraded",
         "backends": {
-            # 구현 시 실제 연결 체크로 대체 (data_source_v1_to_v2.md §2)
-            "mimir": "not_configured",
-            "postgresql": "not_configured",
-            "redis": "not_configured",
-            "openstack": "not_configured",
+            "prometheus": "connected" if prometheus_ok else "unreachable",
         },
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "is_stale": False,
@@ -40,7 +38,7 @@ async def get_version(request: Request):
         "service": "kcloud-monitor",
         "version": request.app.version,
         "api_version": "v2",
-        "phase": "scaffold (라우팅·인증·경로 구조만 확정, 전 엔드포인트 스텁)",
+        "phase": "partial (clusters·nodes·accelerators·monitoring·workloads 실구현, storage/openstack/resource-map/export 스텁)",
         "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 

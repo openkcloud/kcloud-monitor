@@ -2,7 +2,8 @@
 KCloud Monitor API — v2 스캐폴드 엔트리포인트.
 
 v1(프로토타입)은 종료되었다(design_contracts §1 "v1 종료, v2 신규 개발").
-현 단계는 라우팅·인증·경로 구조만 확정하고 전 엔드포인트가 스텁으로 응답한다.
+clusters·nodes·accelerators·monitoring·workloads 도메인은 Prometheus 실데이터로 동작하고,
+storage/openstack/resource-map/export는 아직 스텁(status: not_implemented)이다.
 경로 SoT: sample_api.md(Monitor 81 + Resource-Map 8) + storage_ceph_plan(S1~S10) + 별칭 4.
 """
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from app.api.v2 import (
     auth,
     clusters,
     export,
+    logs,
     monitoring,
     nodes,
     openstack,
@@ -48,9 +50,9 @@ async def lifespan(app: FastAPI):
 API_DESCRIPTION = """
 **KCloud Monitor API v2** — 이기종 AI 반도체 인프라 모니터링 (OPT.001/OPT.002).
 
-## 현재 단계: 스캐폴드
-라우팅·인증·경로 구조만 확정된 상태로, **모든 엔드포인트는 스텁 응답**
-(`status: not_implemented`, 정의·데이터소스·설계 참조 포함)을 반환한다.
+## 현재 단계: 부분 구현
+clusters·nodes·accelerators·monitoring·workloads 도메인은 **Prometheus 실데이터**로 동작한다.
+storage/openstack/resource-map/export는 아직 **스텁**(`status: not_implemented`)이다.
 
 ## 경로 구조 (sample_api.md)
 - `/clusters/{c}/...` — 계층형 canonical (노드→가속기→파티션, storage/ceph, openstack, workloads)
@@ -59,7 +61,7 @@ API_DESCRIPTION = """
 - `/resource-map/...` — 자원 계보 원장 (GPU→VM→Pod 교차 추적)
 
 ## 공통 응답 정책 (design_contracts §6)
-- `status`: `success` | `partial` | `error` (스텁 단계: `not_implemented`)
+- `status`: `success` | `partial` | `error` (미구현 도메인: `not_implemented`)
 - 모든 응답에 `observed_at`, `is_stale`, 경고 시 `warnings[]` / `partial_sources[]`
 - 에러 스키마: `{status, error:{code, message, retryable}, request_id, observed_at}`
 
@@ -133,6 +135,7 @@ app.include_router(openstack.router, prefix=V2, tags=["OpenStack"], dependencies
 app.include_router(workloads.router, prefix=V2, tags=["Workloads"], dependencies=PROTECTED)
 app.include_router(workloads_global.router, prefix=V2, tags=["Workloads (Global Entry)"], dependencies=PROTECTED)
 app.include_router(monitoring.router, prefix=V2, tags=["Monitoring"], dependencies=PROTECTED)
+app.include_router(logs.router, prefix=V2, tags=["Logs"], dependencies=PROTECTED)
 app.include_router(export.router, prefix=V2, tags=["Export"], dependencies=PROTECTED)
 app.include_router(resource_map.router, prefix=V2, tags=["Resource-Map"], dependencies=PROTECTED)
 
@@ -147,7 +150,7 @@ def read_root():
         "service": "KCloud Monitor API",
         "version": APP_VERSION,
         "api_base": "/api/v2",
-        "phase": "scaffold — 라우팅·인증·경로 구조 확정, 전 엔드포인트 스텁",
+        "phase": "partial — clusters·nodes·accelerators·monitoring·workloads 실구현, storage/openstack/resource-map/export 스텁",
         "docs": "/docs",
         "authentication": {
             "login": "POST /api/v2/auth/login",
