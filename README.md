@@ -7,16 +7,16 @@ KCloud Monitor는 AI 반도체(GPU, NPU)와 클라우드 인프라(K8s·OpenStac
 ![GitHub license](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python version](https://img.shields.io/badge/python-3.12-green.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.119%2B-teal.svg)
-![API Version](https://img.shields.io/badge/API-v2%20scaffold-orange)
+![API Version](https://img.shields.io/badge/API-v2%20partial-yellow)
 
 [![Korean](https://img.shields.io/badge/lang-한국어-red)](README.md)
 [![English](https://img.shields.io/badge/lang-English-blue)](README_EN.md)
 
-## ⚠️ 현재 상태: v2 스캐폴드
+## 현재 상태: v2 부분 구현
 
 v1 API(프로토타입)는 종료되었습니다(`docs/temp/02-decisions/design_contracts.md` §1).
-현재 브랜치는 **v2 라우팅·인증·경로 구조만 확정**한 스캐폴드 단계로,
-모든 엔드포인트는 정의·데이터소스·설계 참조를 담은 **스텁 응답**(`status: not_implemented`)을 반환합니다.
+**clusters · nodes · accelerators · monitoring · workloads** 도메인은 Prometheus 실데이터로 동작합니다(78/106).
+나머지 **storage · openstack · resource-map · export**는 아직 스텁(`status: not_implemented`)을 반환합니다.
 
 - v1 구현(GPU/DCGM·Kepler·IPMI 수집 로직, 익스포터 등)은 git 이력에서 참조 가능하며 실제 구현 시 재사용합니다.
 - 경로 SoT: `docs/temp/04-reference/sample_api.md` (Monitor 81 + Resource-Map 8) + `docs/temp/01-domain-plans/openkcloud_storage_ceph_plan.md` (S1~S10) = **canonical 99개** (+별칭 4, 인증 3).
@@ -61,13 +61,13 @@ curl -X POST http://localhost:8000/api/v2/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme"}'
 
-# 스텁 응답 확인 (정의·데이터소스·설계 참조 포함)
+# 실데이터 조회 예시 (전력 3계층 요약)
 curl -H "Authorization: Bearer <TOKEN>" \
-  http://localhost:8000/api/v2/clusters/mgmt/nodes/w1/accelerators
+  http://localhost:8000/api/v2/monitoring/power/summary
 ```
 
 - Swagger UI: http://localhost:8000/docs
-- 테스트: `pytest tests/ -v` (route inventory 106개·인증·스텁 계약 검증)
+- 테스트: `pytest tests/ -v` (route inventory 106개·인증·응답 계약 검증)
 
 ## v2 목표 아키텍처 (구현 예정)
 
@@ -83,15 +83,16 @@ curl -H "Authorization: Bearer <TOKEN>" \
 
 ## 로드맵
 
-- ✅ v2 라우팅/인증/경로 구조 확정 (스캐폴드, 현재)
-- 🚧 데이터소스 클라이언트(Mimir·PostgreSQL·Redis·OpenStack) 및 도메인별 실제 구현
-- 📋 resource-map Discovery 수집기, 전력 귀속 recording rules, Ceph 도메인 구현
+- ✅ v2 라우팅/인증/경로 구조 확정
+- ✅ clusters·nodes·accelerators·monitoring·workloads 실구현 (Prometheus 데이터소스)
+- 🚧 storage(Ceph)·openstack·resource-map·export 도메인 실구현
+- 📋 resource-map Discovery 수집기, 전력 귀속 recording rules
 
 ## 문서
 
 | 문서 | 설명 |
 |------|------|
-| [빠른 시작](docs/QUICK_START.md) | 설치·실행·로그인·스텁 호출·테스트 |
+| [빠른 시작](docs/QUICK_START.md) | 설치·실행·로그인·API 호출·테스트 |
 | [API 가이드](docs/API_GUIDE.md) | 전체 106 라우트 표·인증·공통 파라미터·응답 정책·SSE |
 | [아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md) | 6계층 자원 모델·데이터소스·전력 계층 P1~P8·resource-map |
 | [NPU 수집 설정](docs/PROMETHEUS_NPU_SETUP.md) | Furiosa exporter + hwmon 수집 환경 |
@@ -135,4 +136,4 @@ You may obtain a copy of the License at
 
 ---
 
-**KCloud Monitor v2 (scaffold)** | AI 반도체 통합 모니터링 플랫폼
+**KCloud Monitor v2** | AI 반도체 통합 모니터링 플랫폼

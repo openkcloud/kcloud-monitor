@@ -116,16 +116,7 @@ OPENAI*.md
 .spec/
 
 # Temporary Documentation (임시 분석)
-docs/temp
-docs/**/*.tmp.md
-docs/**/*.draft.md
-
-# Working docs (미공개 작업 문서)
-docs/API_RESTRUCTURE_PLAN.md
-docs/HANDBOOK.md
-docs/TODO_monitoring.md
-docs/sample_api.md
-docs/reports/
+docs/**
 
 # ============================================
 # Tests
