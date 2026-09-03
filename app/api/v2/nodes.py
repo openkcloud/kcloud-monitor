@@ -1,6 +1,9 @@
 """노드(서버 한 대) 조회 라우터
 
-운영체제 수준 지표는 node_exporter, 전력은 Kepler, 서버 하드웨어 센서는 IPMI 기반.
+운영체제 수준 지표는 node_exporter, 전력과 하드웨어 센서는 IPMI 기반.
+노드 전력은 BMC 실측(벽면 전력) 하나로 통일했다. 노드 8대가 같은 기준이라 서로 비교할 수 있다.
+CPU/메모리만 재는 Kepler는 측정 범위가 CPU 세대에 따라 갈려(psys/package) 노드 간 비교가
+불가능하므로 노드 경로에서 쓰지 않고, 클러스터·시스템 요약의 CPU 계층에서만 제공한다.
 hardware 하위 경로는 IPMI 센서를 걷어오지 않는 노드에서 IPMI_NOT_AVAILABLE 경고와
 함께 빈 데이터 반환.
 """
@@ -166,35 +169,43 @@ def _first_value(results: list[dict]) -> Optional[float]:
     return value
 
 
-async def _kepler_node_power_instant(node: str) -> list[dict]:
-    """물리 노드 Kepler 전력(현재값) — zone=psys 우선, 없으면 package(+dram) 합산.
+async def _ipmi_node_power_instant(node: str) -> tuple[list[dict], str]:
+    """물리 노드 서버 총전력(현재값) — BMC 실측. 결과와 산출 경로를 함께 반환.
 
-    Kepler zone은 psys ⊇ package ⊇ core 포함관계라 합산 시 중복 계산된다. psys가 있으면
-    그것만 쓰고, 없는 노드(마스터 등)는 package(+dram)을 합산한다. 물리 노드는 `node_name`
-    라벨로 식별하며 kepler/ipmi 메트릭에는 cluster 라벨이 없다.
+    노드 전력은 IPMI를 기준으로 삼는다. BMC가 전원공급장치를 직접 읽으므로 CPU·메모리뿐
+    아니라 가속기·팬·디스크·PSU 손실까지 포함한 벽면 전력이고, 노드 8대가 같은 기준이라
+    서로 비교할 수 있다. Kepler는 CPU 세대에 따라 psys/package로 측정 범위가 갈려
+    노드 간 비교가 불가능하다(CPU/RAM 계층은 클러스터·시스템 요약에서 별도 제공).
+
+    DCMI가 기본이며, mlt만 BMC가 DCMI 명령을 지원하지 않는다(2026-08-26 확정).
+    그 노드는 PSU 입력 전력 합으로 대체한다. 둘 다 벽면 전력이지만 산출 경로가 달라
+    (compute5 실측 DCMI 417W vs PSU 입력 합 400W) source로 구분해 알린다.
+    ipmi 메트릭에는 cluster 라벨이 없어 물리 `node` 라벨로 식별한다.
     """
     n = _esc(node)
-    psys = await prometheus_client.instant(
-        f'sum(kepler_node_cpu_watts{{node_name="{n}",zone="psys"}})'
+    dcmi = await prometheus_client.instant(f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}')
+    if dcmi:
+        return dcmi, "ipmi-dcmi"
+    psu = await prometheus_client.instant(
+        f'sum(ipmi_power_watts{{node="{n}",name=~".*(Power In|Input Power)"}})'
     )
-    if psys:
-        return psys
-    return await prometheus_client.instant(
-        f'sum(kepler_node_cpu_watts{{node_name="{n}",zone=~"package|dram"}})'
-    )
+    return psu, "ipmi-psu-input"
 
 
-async def _kepler_node_power_range(node: str, start: str, end: str, step: str) -> list[dict]:
-    """물리 노드 Kepler 전력(시계열) — _kepler_node_power_instant의 range 버전."""
+async def _ipmi_node_power_range(
+    node: str, start: str, end: str, step: str
+) -> tuple[list[dict], str]:
+    """물리 노드 서버 총전력(시계열) — _ipmi_node_power_instant의 range 버전."""
     n = _esc(node)
-    psys = await prometheus_client.range_query(
-        f'sum(kepler_node_cpu_watts{{node_name="{n}",zone="psys"}})', start, end, step
+    dcmi = await prometheus_client.range_query(
+        f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}', start, end, step
     )
-    if psys:
-        return psys
-    return await prometheus_client.range_query(
-        f'sum(kepler_node_cpu_watts{{node_name="{n}",zone=~"package|dram"}})', start, end, step
+    if dcmi:
+        return dcmi, "ipmi-dcmi"
+    psu = await prometheus_client.range_query(
+        f'sum(ipmi_power_watts{{node="{n}",name=~".*(Power In|Input Power)"}})', start, end, step
     )
+    return psu, "ipmi-psu-input"
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +245,13 @@ async def list_nodes(
         ready_results = await prometheus_client.instant(
             f'kube_node_status_condition{{cluster="{c}",condition="Ready",status="true"}}'
         )
-        # ipmi/kepler는 cluster 라벨이 없어 전체 조회 후 node 라벨로 매칭한다.
+        # ipmi 메트릭에는 cluster 라벨이 없어 전체 조회 후 node 라벨로 매칭한다.
+        # 단건 조회(`/nodes/{node}/power`)와 같은 기준을 쓴다. DCMI가 기본이고, DCMI를
+        # 지원하지 않는 노드(mlt)는 PSU 입력 전력 합으로 채운다.
         power_results = await prometheus_client.instant("ipmi_dcmi_power_consumption_watts")
+        psu_results = await prometheus_client.instant(
+            'sum by (node) (ipmi_power_watts{name=~".*(Power In|Input Power)"})'
+        )
 
         role_map: dict[str, str] = {}
         for item in role_results:
@@ -255,7 +271,7 @@ async def list_nodes(
             ready_map[n] = ready_map.get(n, False) or val == 1.0
 
         power_map: dict[str, float] = {}
-        for item in power_results:
+        for item in psu_results + power_results:  # DCMI가 나중에 덮어써 우선한다
             n = item.get("metric", {}).get("node")
             val = _first_value([item])
             if n and val is not None:
@@ -711,20 +727,23 @@ async def get_node_network(request: Request, cluster: str, node: str):
     "/clusters/{cluster}/nodes/{node}/power", summary="노드 전력 현재값", response_model=NodePowerResponse
 )
 async def get_node_power(request: Request, cluster: str, node: str):
-    """노드 한 대가 지금 쓰고 있는 전력 조회
+    """노드 한 대가 지금 쓰고 있는 서버 총전력 조회
 
     - watts : 전력(W)
-    - source : 어느 측정 범위에서 읽었는지 (시스템 전체 또는 CPU 패키지)
+    - source : 산출 경로. `ipmi-dcmi`(BMC의 DCMI 명령) 또는 `ipmi-psu-input`(PSU 입력 전력 합)
 
-    CPU에 내장된 전력 측정 기능(Kepler)으로 읽은 실측값.
+    BMC가 전원공급장치를 읽은 벽면 전력. CPU·메모리뿐 아니라 가속기·팬·디스크·PSU 손실까지
+    포함하며, 노드 간 비교에 쓸 수 있는 단일 기준. CPU/메모리 계층만 따로 보려면
+    클러스터 요약(`/clusters/{cluster}/summary`)의 `power.breakdown.cpu_watts` 사용.
+    BMC가 없는 가상 노드는 NO_POWER_DATA 경고와 함께 빈 데이터 반환.
     """
     await _require_cluster(cluster)
-    results = await _kepler_node_power_instant(node)
+    results, source = await _ipmi_node_power_instant(node)
 
     if not results:
         return NodePowerResponse(status="partial", data=None, warnings=["NO_POWER_DATA"])
 
-    data = NodePowerData(watts=_first_value(results), source="kepler")
+    data = NodePowerData(watts=_first_value(results), source=source)
     return NodePowerResponse(status="success", data=data, warnings=[])
 
 
@@ -736,10 +755,13 @@ async def get_node_power(request: Request, cluster: str, node: str):
 async def get_node_power_timeseries(
     request: Request, cluster: str, node: str, params: TimeseriesParams = Depends()
 ):
-    """노드 한 대의 전력 변화 추이 조회
+    """노드 한 대의 서버 총전력 변화 추이 조회
 
     - series : (시각, 전력값(W)) 쌍 목록
+    - source : 산출 경로. `ipmi-dcmi` 또는 `ipmi-psu-input`
     - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+
+    현재값(`/power`)과 같은 IPMI 기준.
     """
     await _require_cluster(cluster)
     now = datetime.now(timezone.utc)
@@ -747,7 +769,7 @@ async def get_node_power_timeseries(
     end = params.end or now.isoformat()
     step = params.step
 
-    results = await _kepler_node_power_range(node, start, end, step)
+    results, source = await _ipmi_node_power_range(node, start, end, step)
 
     if not results:
         return NodePowerTimeseriesResponse(status="partial", series=[], warnings=["NO_POWER_DATA"])
@@ -759,7 +781,7 @@ async def get_node_power_timeseries(
         )
         for v in results[0].get("values", [])
     ]
-    return NodePowerTimeseriesResponse(status="success", series=series, warnings=[])
+    return NodePowerTimeseriesResponse(status="success", series=series, source=source, warnings=[])
 
 
 # ---------------------------------------------------------------------------

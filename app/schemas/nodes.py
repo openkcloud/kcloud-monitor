@@ -251,8 +251,11 @@ class NodeNetworkResponse(BaseModel):
 class NodePowerData(BaseModel):
     """노드 전력 현재값 데이터."""
 
-    watts: Optional[float] = Field(None, description="전력 (와트 W)")
-    source: Optional[str] = None
+    watts: Optional[float] = Field(None, description="서버 총전력 (와트 W)")
+    source: Optional[str] = Field(
+        None,
+        description='산출 경로. "ipmi-dcmi"는 BMC의 DCMI 명령, "ipmi-psu-input"은 PSU 입력 전력 합',
+    )
 
 
 class NodePowerResponse(BaseModel):
@@ -276,6 +279,10 @@ class NodePowerTimeseriesResponse(BaseModel):
 
     status: str
     series: list[NodePowerTimeseriesPoint] = []
+    source: Optional[str] = Field(
+        None,
+        description='산출 경로. "ipmi-dcmi"는 BMC의 DCMI 명령, "ipmi-psu-input"은 PSU 입력 전력 합',
+    )
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
