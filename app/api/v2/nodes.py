@@ -1,9 +1,8 @@
-"""
-KCloud Monitor v2 — Nodes (10개) + Hardware/IPMI (3개).
+"""노드(서버 한 대) 조회 라우터
 
-node_exporter 메트릭 기반 노드 상세 조회. hardware/* 는 IPMI 미수집 시
-"IPMI_NOT_AVAILABLE" 경고와 함께 빈 데이터를 반환한다.
-데이터소스: Prometheus(node_exporter, kepler, ipmi-exporter).
+운영체제 수준 지표는 node_exporter, 전력은 Kepler, 서버 하드웨어 센서는 IPMI 기반.
+hardware 하위 경로는 IPMI 센서를 걷어오지 않는 노드에서 IPMI_NOT_AVAILABLE 경고와
+함께 빈 데이터 반환.
 """
 import math
 from datetime import datetime, timedelta, timezone
@@ -206,17 +205,19 @@ async def list_nodes(
     params: PaginationParams = Depends(),
     node_type: Optional[str] = Query(None, description='노드 타입 필터: "physical" | "virtual"'),
 ):
-    """노드 목록.
+    """클러스터에 속한 노드 목록 조회
 
-    관리 클러스터(mgmt)는 쿠버네티스 공식 노드(kube_node_info) 기준. node(이름, 예: compute1)를
-    식별자로 삼으며 이 이름은 상세/서브 엔드포인트에도 그대로 쓸 수 있다(내부적으로 node-exporter
-    instance로 자동 해석됨). 역할은 kube_node_role, Ready 상태는 kube_node_status_condition에서 가져온다.
+    - 노드 이름, 내부 IP, 역할(worker | control-plane), 소속 클러스터
+    - 정상 동작 여부, 종류(physical | virtual)
+    - OS 이미지, kubelet 버전
+    - 이 노드의 가속기 카드 수, 전력(W)
+    - total : 전체 노드 개수
 
-    서비스 클러스터(l40s/rebellions/k8s-furiosa-rngd 등)는 kube_node_info가 없어, 대신 가속기
-    메트릭의 hostname을 노드로 삼는다(node = 가속기가 보고된 VM/워커 호스트명).
+    노드 이름은 하위 경로(상세, CPU, 메모리 등)의 식별자로 그대로 사용 가능.
+    관리 클러스터는 Kubernetes에 등록된 노드가 기준이고, 가속기 클러스터는 가속기 메트릭에
+    찍힌 호스트 이름이 기준.
 
-    node_type은 machine_cpu_cores의 node 라벨 집합에 있으면 physical, 없으면 virtual이다.
-    sort_by=power_watts 정렬을 지원한다(그 외 값은 이름순 기본 정렬로 폴백).
+    정렬: sort_by=power_watts 지원. 그 외 값은 이름순으로 정렬.
     """
     info = await _require_cluster(cluster)
     phys_nodes = await _phys_node_set()
@@ -323,9 +324,15 @@ async def list_nodes(
 
 @router.get("/clusters/{cluster}/nodes/summary", summary="노드 집계 요약", response_model=NodesSummaryResponse)
 async def get_nodes_summary(request: Request, cluster: str):
-    """노드 집계 — Ready/Total 수(kube_node_info/kube_node_status_condition 기준), 메모리 총량/사용량.
+    """클러스터 노드 전체를 하나로 합친 집계값 조회
 
-    가속기 전용 클러스터는 kube_node_info가 없어 0/0이 되는 것이 의도된 동작이다(클러스터 API와 동일 규약).
+    - ready_count : 정상 노드 수
+    - total_count : 전체 노드 수
+    - memory_total_bytes : 전체 메모리 합계(bytes)
+    - memory_used_bytes : 사용 메모리 합계(bytes)
+    - memory_usage_percent : 메모리 사용률(%)
+
+    Kubernetes에 등록되지 않은 가속기 전용 클러스터는 노드 수가 0으로 나옴.
     """
     await _require_cluster(cluster)
     c = _cl(cluster)
@@ -367,11 +374,16 @@ async def get_nodes_summary(request: Request, cluster: str):
 
 @router.get("/clusters/{cluster}/nodes/{node}", summary="노드 상세", response_model=NodeDetailResponse)
 async def get_node(request: Request, cluster: str, node: str):
-    """노드 상세 — OS 정보, 부팅 시각, 메모리 총량, CPU 코어 수, Ready 상태, 가속기 수.
+    """노드 한 대의 상세 조회
 
-    cpu_cores는 machine_cpu_cores(node 라벨, 물리 노드만 보고)를 우선 쓰고, 없으면
-    node_cpu_seconds_total 코어 카운트로 폴백한다(가상 노드 등 machine_cpu_cores 미보고 시).
-    ready는 kube_node_status_condition(mgmt만 존재), 가속기 수는 hostname 매칭(전 클러스터 공통)이다.
+    - 노드 이름, 소속 클러스터, 메트릭 보고 여부
+    - os : 커널 종류, 릴리스, 버전, 아키텍처, 호스트명
+    - boot_time : 마지막 부팅 시각
+    - cpu_cores : CPU 코어 수
+    - memory_total_bytes : 전체 메모리(bytes)
+    - node_type : physical | virtual
+    - ready : Kubernetes Ready 상태 (관리 클러스터만 값이 있음)
+    - accelerator_count : 이 노드의 가속기 카드 수
     """
     await _require_cluster(cluster)
     raw_node = node
@@ -436,10 +448,17 @@ async def get_node(request: Request, cluster: str, node: str):
 
 
 @router.get(
-    "/clusters/{cluster}/nodes/{node}/metrics", summary="노드 종합 메트릭 [M1]", response_model=NodeMetricsResponse
+    "/clusters/{cluster}/nodes/{node}/metrics", summary="노드 종합 메트릭", response_model=NodeMetricsResponse
 )
 async def get_node_metrics(request: Request, cluster: str, node: str):
-    """노드 종합 메트릭 — CPU/메모리/디스크 사용률과 네트워크 처리량."""
+    """노드 한 대의 주요 사용량을 한 번에 조회
+
+    - cpu_usage_percent : CPU 사용률(%)
+    - memory_usage_percent : 메모리 사용률(%), 전체 메모리와 사용 메모리(bytes)
+    - disk_usage_percent : 디스크 사용률(%)
+    - network_receive_bytes_per_sec : 네트워크 수신 처리량(bytes/sec)
+    - network_transmit_bytes_per_sec : 네트워크 송신 처리량(bytes/sec)
+    """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
     label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
@@ -477,7 +496,13 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
 
 @router.get("/clusters/{cluster}/nodes/{node}/cpu", summary="노드 CPU 상세", response_model=NodeCpuResponse)
 async def get_node_cpu(request: Request, cluster: str, node: str):
-    """노드 CPU 상세 — 전체/코어별 사용률, load average, 모드별 사용량."""
+    """노드 한 대의 CPU 사용 상세 조회
+
+    - usage_percent : 전체 CPU 사용률(%)
+    - load1, load5, load15 : 1분, 5분, 15분 평균 부하
+    - per_core : 코어별 사용률(%)
+    - per_mode : 처리 종류(user, system, iowait 등)별 CPU 시간 비율
+    """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
     label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
@@ -518,7 +543,13 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
 
 @router.get("/clusters/{cluster}/nodes/{node}/memory", summary="노드 메모리 상세", response_model=NodeMemoryResponse)
 async def get_node_memory(request: Request, cluster: str, node: str):
-    """노드 메모리 상세 — total/available/cached/buffers, 스왑."""
+    """노드 한 대의 메모리 사용 상세 조회
+
+    - total_bytes, available_bytes, used_bytes : 전체, 가용, 사용 메모리(bytes)
+    - used_percent : 메모리 사용률(%)
+    - cached_bytes, buffers_bytes : 캐시와 버퍼가 차지한 메모리(bytes)
+    - swap_total_bytes, swap_free_bytes, swap_used_bytes : 스왑 전체, 가용, 사용량(bytes)
+    """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
     label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
@@ -558,7 +589,13 @@ async def get_node_memory(request: Request, cluster: str, node: str):
     "/clusters/{cluster}/nodes/{node}/storage", summary="노드 로컬 디스크 상세", response_model=NodeStorageResponse
 )
 async def get_node_storage(request: Request, cluster: str, node: str):
-    """노드 로컬 디스크 — 마운트포인트별 용량/사용률과 디스크 I/O. (Ceph 분산 스토리지는 /clusters/{c}/storage/*)"""
+    """노드 한 대에 붙어 있는 디스크 사용 상세 조회
+
+    - filesystems : 마운트 위치별 파일시스템 종류, 전체 용량, 남은 용량(bytes), 사용률(%)
+    - disks : 디스크 장치별 읽기, 쓰기 처리량(bytes/sec)
+
+    Ceph 분산 스토리지는 이 경로가 아니라 클러스터의 storage 경로에서 조회.
+    """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
     label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
@@ -612,7 +649,11 @@ async def get_node_storage(request: Request, cluster: str, node: str):
     "/clusters/{cluster}/nodes/{node}/network", summary="노드 네트워크 상세", response_model=NodeNetworkResponse
 )
 async def get_node_network(request: Request, cluster: str, node: str):
-    """노드 네트워크 — 인터페이스별 수신/송신 처리량과 에러율."""
+    """노드 한 대의 네트워크 사용 상세 조회
+
+    - interfaces : 네트워크 장치별 수신, 송신 처리량(bytes/sec)
+    - 장치별 수신, 송신 에러 발생 건수(errors/sec)
+    """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
     label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
@@ -657,10 +698,16 @@ async def get_node_network(request: Request, cluster: str, node: str):
 
 
 @router.get(
-    "/clusters/{cluster}/nodes/{node}/power", summary="노드 전력 현재값 [P2]", response_model=NodePowerResponse
+    "/clusters/{cluster}/nodes/{node}/power", summary="노드 전력 현재값", response_model=NodePowerResponse
 )
 async def get_node_power(request: Request, cluster: str, node: str):
-    """노드 전력 현재값 — Kepler(RAPL) 실측. zone=psys 우선, 없으면 package(+dram)."""
+    """노드 한 대가 지금 쓰고 있는 전력 조회
+
+    - watts : 전력(W)
+    - source : 어느 측정 범위에서 읽었는지 (시스템 전체 또는 CPU 패키지)
+
+    CPU에 내장된 전력 측정 기능(Kepler)으로 읽은 실측값.
+    """
     await _require_cluster(cluster)
     results = await _kepler_node_power_instant(node)
 
@@ -679,7 +726,11 @@ async def get_node_power(request: Request, cluster: str, node: str):
 async def get_node_power_timeseries(
     request: Request, cluster: str, node: str, params: TimeseriesParams = Depends()
 ):
-    """노드 전력 시계열 — Kepler(RAPL) 실측. zone=psys 우선, 없으면 package(+dram)."""
+    """노드 한 대의 전력 변화 추이 조회
+
+    - series : (시각, 전력값(W)) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    """
     await _require_cluster(cluster)
     now = datetime.now(timezone.utc)
     start = params.start or (now - timedelta(hours=1)).isoformat()
@@ -712,7 +763,13 @@ async def get_node_power_timeseries(
     response_model=HardwareSensorsResponse,
 )
 async def get_hardware_sensors(request: Request, cluster: str, node: str):
-    """IPMI 센서 전체 — 미수집 환경에서는 사용 불가로 응답."""
+    """서버 본체에 달린 하드웨어 센서 값 전체 조회
+
+    - sensors : 센서 이름, 값, 단위
+    - 온도, 팬 회전수, 전압, 전력 센서가 함께 나옴
+
+    IPMI 센서를 걷어오지 않는 노드는 빈 목록 + IPMI_NOT_AVAILABLE 경고 반환.
+    """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(f'{{__name__=~"ipmi_.*",node="{_esc(node)}"}}')
 
@@ -737,11 +794,17 @@ async def get_hardware_sensors(request: Request, cluster: str, node: str):
 
 @router.get(
     "/clusters/{cluster}/nodes/{node}/hardware/power",
-    summary="BMC 전력 실측 [P3]",
+    summary="서버 본체 전력 실측",
     response_model=HardwarePowerResponse,
 )
 async def get_hardware_power(request: Request, cluster: str, node: str):
-    """서버 전체 전력 BMC 실측(DCMI) — 미수집 환경에서는 사용 불가로 응답."""
+    """서버 한 대가 콘센트에서 끌어가는 전체 전력 조회
+
+    - watts : 전력(W)
+
+    서버 관리 칩(BMC)이 직접 측정한 값으로, CPU와 가속기뿐 아니라 팬과 메모리까지 포함.
+    IPMI 센서를 걷어오지 않는 노드는 IPMI_NOT_AVAILABLE 경고 반환.
+    """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(
         f'ipmi_dcmi_power_consumption_watts{{node="{_esc(node)}"}}'
@@ -759,10 +822,12 @@ async def get_hardware_power(request: Request, cluster: str, node: str):
     response_model=HardwareTemperatureResponse,
 )
 async def get_hardware_temperature(request: Request, cluster: str, node: str):
-    """IPMI 온도 센서 — 미수집 환경에서는 사용 불가로 응답.
+    """서버 본체 온도 센서 값 조회
 
-    ipmi_temperature_celsius는 cluster 라벨이 없고 node(호스트명)로 식별된다
-    (hardware/power와 동일 라벨 규약 — probed: node="master3" 등).
+    - sensors : 센서 이름, 온도(°C)
+    - CPU 흡기, 배기, 메인보드 등 위치별 온도가 나옴
+
+    IPMI 센서를 걷어오지 않는 노드는 빈 목록 + IPMI_NOT_AVAILABLE 경고 반환.
     """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(f'ipmi_temperature_celsius{{node="{_esc(node)}"}}')

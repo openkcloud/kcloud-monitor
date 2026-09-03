@@ -1,9 +1,7 @@
-"""
-KCloud Monitor v2 — Workloads 전역 진입점 (11개, 포탈용).
+"""클러스터를 고르지 않고 워크로드 전체를 보는 라우터
 
-클러스터를 먼저 고르지 않아도 Pod/서비스 기준으로 바로 진입하는 인덱스 API.
-진입 규칙: canonical은 /clusters/{c}/workloads/*, 응답에 _links.canonical 포함.
-데이터소스: Prometheus(kube-state-metrics, cAdvisor, Kepler).
+어느 클러스터에 있는지 몰라도 Pod와 서비스를 바로 찾을 수 있는 경로.
+모든 응답에 `_links.canonical` 로 클러스터를 포함한 정식 경로를 함께 안내.
 """
 import asyncio
 from types import SimpleNamespace
@@ -96,6 +94,18 @@ async def list_pods_global(
     params: WorkloadFilterParams = Depends(),
     cluster: Optional[str] = Query(None, description="클러스터 필터(전역 목록)"),
 ):
+    """모든 클러스터의 Pod를 한 목록으로 조회
+
+    - 소속 클러스터, 네임스페이스, Pod 이름, 올라가 있는 노드
+    - 상태(Running | Pending | Succeeded | Failed | Unknown)
+    - Pod IP, 노드 IP, 생성 시각
+    - 소속 워크로드 종류와 이름, 서비스 이름
+    - 컨테이너 개수, 재시작 횟수
+    - CPU 사용량, 메모리 사용량(bytes)
+    - total : 전체 Pod 개수
+
+    필터: cluster(특정 클러스터만), namespace, service_name, workload_type, status, search
+    """
     names = await _resolve_clusters(cluster)
     inner = _all_params(params)
 
@@ -116,6 +126,13 @@ async def list_pods_global(
 
 @router.get("/workloads/pods/summary", summary="전역 Pod 집계", response_model=PodSummaryResponse)
 async def get_pods_summary_global(request: Request):
+    """모든 클러스터의 Pod를 상태별로 세어본 집계값 조회
+
+    - total_count : 전체 Pod 개수
+    - running_count, pending_count : 실행 중, 대기 중 개수
+    - succeeded_count, failed_count, unknown_count : 완료, 실패, 상태 불명 개수
+    - namespace_distribution : 네임스페이스별 Pod 개수
+    """
     names = await _resolve_clusters(None)
     results = await asyncio.gather(*(fetch_pods_summary(n) for n in names))
 
@@ -141,6 +158,16 @@ async def get_pods_summary_global(request: Request):
 
 @router.get("/workloads/pods/{cluster}/{namespace}/{pod}", summary="전역 Pod 상세")
 async def get_pod_global(request: Request, cluster: str, namespace: str, pod: str):
+    """Pod 한 개의 상세 조회
+
+    - 네임스페이스, Pod 이름, 고유 ID, 올라가 있는 노드
+    - 상태(Running | Pending | Succeeded | Failed | Unknown)
+    - Pod IP, 노드 IP, 생성 시각
+    - 소속 워크로드 종류와 이름, 서비스 이름
+    - 컨테이너 개수, 재시작 횟수
+    - CPU와 메모리의 실제 사용량, 요청량, 상한값
+    - `_links.canonical` 에 클러스터를 포함한 정식 경로 안내
+    """
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
     resp = PodDetailResponse(status=status, data=data, warnings=warnings)
@@ -153,6 +180,12 @@ async def get_pod_global(request: Request, cluster: str, namespace: str, pod: st
 async def get_pod_power_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
+    """Pod 한 개가 쓴 것으로 볼 수 있는 전력 조회
+
+    - watts : 이 Pod에 배분된 전력(W)
+    - source : 배분에 쓴 측정값의 출처
+    - `_links.canonical` 에 클러스터를 포함한 정식 경로 안내
+    """
     data, warnings = await fetch_pod_power(cluster, namespace, pod)
     status = "success" if data else "partial"
     resp = PodPowerResponse(status=status, data=data, warnings=warnings)
@@ -166,6 +199,13 @@ async def get_pod_power_global(
 async def list_pod_containers_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
+    """Pod 한 개 안에 들어 있는 컨테이너 목록 조회
+
+    - 컨테이너 이름, 컨테이너 ID, 이미지
+    - 상태, 재시작 횟수
+    - CPU와 메모리의 실제 사용량, 요청량, 상한값
+    - `_links.canonical` 에 클러스터를 포함한 정식 경로 안내
+    """
     containers, warnings = await fetch_pod_containers(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
     resp = ContainerListResponse(
@@ -184,6 +224,12 @@ async def list_pod_containers_global(
 async def get_pod_accelerators_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
+    """Pod 한 개에 배정된 가속기 조회
+
+    - 가속기 ID, 벤더, 모델명
+    - 배정된 카드가 없으면 빈 목록 반환
+    - `_links.canonical` 에 클러스터를 포함한 정식 경로 안내
+    """
     items, warnings = await fetch_pod_accelerators(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
     resp = PodAcceleratorResponse(status=status, data=items, warnings=warnings)
@@ -225,6 +271,18 @@ async def list_services_global(
     params: WorkloadFilterParams = Depends(),
     cluster: Optional[str] = Query(None, description="클러스터 필터(전역 목록)"),
 ):
+    """모든 클러스터의 서비스를 한 목록으로 조회
+
+    - 서비스 이름, 네임스페이스, 소속 클러스터
+    - pod_count, running_pod_count : 소속 Pod 개수, 실행 중 개수
+    - cpu_usage, memory_usage_bytes : 소속 Pod를 합친 CPU와 메모리 사용량
+    - total : 전체 서비스 개수
+
+    같은 서비스 이름을 가진 Pod를 하나로 묶어서 반환. 서비스 이름이 없는 Pod는
+    Pod 이름을 서비스 이름으로 사용.
+
+    필터: cluster(특정 클러스터만), search
+    """
     names = await _resolve_clusters(cluster)
     inner = _all_params(params)
     results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
@@ -251,6 +309,11 @@ async def list_services_global(
 
 @router.get("/workloads/services/summary", summary="전역 서비스 집계", response_model=ServiceSummaryResponse)
 async def get_services_summary_global(request: Request):
+    """모든 클러스터의 서비스 개수 집계 조회
+
+    - total_services : 전체 서비스 개수
+    - cluster_distribution : 클러스터별 서비스 개수
+    """
     names = await _resolve_clusters(None)
     inner = _all_params()
     results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
@@ -282,6 +345,14 @@ async def get_services_summary_global(request: Request):
 async def get_service_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
+    """서비스 한 개의 상세 조회
+
+    - 서비스 이름, 네임스페이스, 소속 클러스터
+    - pod_count, running_pod_count : 소속 Pod 개수, 실행 중 개수
+    - cpu_usage, memory_usage_bytes : 소속 Pod를 합친 CPU와 메모리 사용량
+    - cpu_requests, memory_requests_bytes : 소속 Pod를 합친 CPU와 메모리 요청량
+    - `_links.canonical` 에 클러스터를 포함한 정식 경로 안내
+    """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, _, _ = await fetch_pods(cluster, inner)
 
@@ -312,6 +383,14 @@ async def get_service_global(
 async def list_service_pods_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
+    """서비스 한 개에 속한 Pod 목록 조회
+
+    - 네임스페이스, Pod 이름, 올라가 있는 노드, 상태
+    - Pod IP, 노드 IP, 생성 시각
+    - 컨테이너 개수, 재시작 횟수
+    - CPU 사용량, 메모리 사용량(bytes)
+    - total : 이 서비스의 Pod 개수
+    """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, total, warnings = await fetch_pods(cluster, inner)
     status = "success" if pods else "partial"
@@ -329,6 +408,13 @@ async def list_service_pods_global(
 async def get_service_power_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
+    """서비스 한 개가 쓴 것으로 볼 수 있는 전력 합계 조회
+
+    - watts : 소속 Pod에 배분된 전력을 모두 더한 값(W)
+    - source : 배분에 쓴 측정값의 출처
+
+    Pod 중 어느 것도 전력값을 얻지 못하면 NO_POWER_DATA 경고 반환.
+    """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, _, _ = await fetch_pods(cluster, inner)
     links = _service_links(cluster, namespace, service_name, "/power")

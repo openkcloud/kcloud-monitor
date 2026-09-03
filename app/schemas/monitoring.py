@@ -31,12 +31,12 @@ METRIC_ALLOWLIST: dict[str, str] = {
     "gpu_utilization_prof": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster="l40s"} * 100',
     "furiosa_utilization": 'furiosa_npu_core_utilization{cluster="k8s-furiosa-rngd"}',
     "rebellions_utilization": 'RBLN_DEVICE_STATUS:UTILIZATION{cluster="rebellions"}',
-    # 메모리 (Memory) — 단위 주의: L40S=MiB, NPU=bytes
+    # 메모리 (Memory). 단위 주의: L40S=MiB, NPU=bytes
     "gpu_memory_used_mib": 'DCGM_FI_DEV_FB_USED{cluster="l40s"}',
     "gpu_memory_free_mib": 'DCGM_FI_DEV_FB_FREE{cluster="l40s"}',
     "furiosa_memory_used_bytes": 'furiosa_npu_dram_usage{cluster="k8s-furiosa-rngd"}',
     "rebellions_memory_used_bytes": 'RBLN_DEVICE_STATUS:DRAM_USED{cluster="rebellions"}',
-    # 헬스 (Health) — 방향 주의!
+    # 헬스 (Health). 방향 주의!
     "furiosa_alive": 'furiosa_npu_alive{cluster="k8s-furiosa-rngd"}',          # 1=정상
     "rebellions_health": 'RBLN_DEVICE_STATUS:HEALTH{cluster="rebellions"}',    # 0=정상!
     "gpu_xid_errors": 'changes(DCGM_FI_DEV_XID_ERRORS{cluster="l40s"}[10m])', # 0=정상
@@ -70,10 +70,10 @@ class NodeCounts(BaseModel):
     """노드 구분별 개수 (물리/가상) 및 헬스. [docs/API_RESTRUCTURE_PLAN.md §4.7]"""
 
     total: int = Field(..., description="전체 노드 수 (물리 + 가상)")
-    physical: int = Field(..., description="물리 노드 수 — 관리 클러스터 kube_node_info 기준")
-    virtual: int = Field(..., description="가상(VM) 노드 수 — 서비스 클러스터별 node_uname_info 합계")
-    healthy: int = Field(..., description="정상 노드 수 — 물리는 kube_node_status_condition Ready 기준, 서비스 VM은 근사치 포함")
-    unhealthy: int = Field(..., description="비정상 노드 수 — 물리 노드 중 Ready가 아닌 수")
+    physical: int = Field(..., description="물리 노드 수. 관리 클러스터에 등록된 노드 기준")
+    virtual: int = Field(..., description="가상(VM) 노드 수. 서비스 클러스터별 합계")
+    healthy: int = Field(..., description="정상 노드 수. 물리 노드는 Ready 상태 기준, 가상 노드는 근사치 포함")
+    unhealthy: int = Field(..., description="비정상 노드 수. 물리 노드 중 Ready가 아닌 개수")
 
 
 class OverviewData(BaseModel):
@@ -152,11 +152,11 @@ class TemperatureTimeseriesResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 전력(Power) — Phase 5 [P8]
+# 전력(Power)
 # ---------------------------------------------------------------------------
 
 class PowerSummaryData(BaseModel):
-    """전력 요약 데이터 — 서버총전력(IPMI)/CPU(Kepler)/가속기 벤더별/기타."""
+    """전력 요약 데이터. 서버 총전력, CPU, 가속기 벤더별, 기타로 구분."""
 
     server_total_watts: Optional[float] = Field(..., description="서버 총 전력, IPMI 기준 (와트 W)")
     cpu_total_watts: Optional[float] = Field(..., description="CPU 전력, Kepler 기준 (와트 W)")
@@ -216,14 +216,14 @@ class AcceleratorEfficiency(BaseModel):
     vendor: str
     power_watts: Optional[float] = Field(..., description="가속기 전력 (와트 W)")
     utilization_pct: Optional[float] = Field(
-        ..., description="가속기 사용률 (%) — NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
+        ..., description="가속기 사용률 (%). NVIDIA는 0~100, NPU는 표기 범위 확인 필요"
     )
     tdp_watts: Optional[float] = Field(..., description="TDP (와트 W)")
     tdp_ratio_pct: Optional[float] = Field(..., description="TDP 대비 사용 전력 비중 (%)")
 
 
 class PowerEfficiencyData(BaseModel):
-    """전력 효율 데이터 — PUE 추정 + 가속기별 효율."""
+    """전력 효율 데이터. 전력 효율 추정치와 가속기별 효율."""
 
     pue_estimate: Optional[float]
     accelerators: list[AcceleratorEfficiency]

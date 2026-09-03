@@ -102,7 +102,7 @@ class ProjectDetailResponse(BaseModel):
 
 
 class ProjectSummaryData(BaseModel):
-    """프로젝트 자원 요약. flavor 상세에 vcpus/ram 수치가 없어 VM 수 위주로 집계한다."""
+    """프로젝트가 쓰는 자원 요약. flavor 상세를 가져올 수 없어 VM 수 위주로 집계."""
 
     project_id: str = Field(..., description="Keystone 프로젝트 uuid")
     name: str = Field(..., description="프로젝트 이름")
@@ -120,7 +120,7 @@ class ProjectSummaryResponse(BaseModel):
 
 
 class HypervisorDetailData(BaseModel):
-    """하이퍼바이저(물리 서버) 상세 — Nova os-hypervisors/detail 응답 필드 + 배치 VM."""
+    """물리 서버 상세. 서버 자원 정보와 그 위에 올라간 VM 목록."""
 
     hostname: str = Field(..., description="하이퍼바이저 호스트명")
     state: Optional[str] = Field(None, description="up/down")
@@ -218,7 +218,7 @@ class VMMetricsResponse(BaseModel):
 # ── VM 전력 귀속 (P6) ───────────────────────────────────────────────────────
 
 class VMPowerData(BaseModel):
-    """VM 귀속 전력 — 물리서버 총전력을 CPU 점유 비율로 배분한 근사치."""
+    """VM에 배분된 전력. 물리 서버 총전력을 CPU 점유 비율로 나눈 추정치."""
 
     vm_id: str = Field(..., description="instance uuid")
     name: Optional[str] = Field(None, description="VM 이름")

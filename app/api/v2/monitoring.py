@@ -1,10 +1,7 @@
-"""
-KCloud Monitor v2 — Monitoring 횡단 집계 (10개: REST 8 + SSE 2).
+"""여러 클러스터를 한꺼번에 묶어 보는 라우터
 
-여러 클러스터를 가로지르는 전력/메트릭 집계와 실시간 스트리밍(SSE).
-v1 WebSocket은 v2에서 SSE로 통일(design_contracts §7: 15초 heartbeat, Last-Event-ID 재개).
-데이터소스(구현 예정): Mimir(PromQL 횡단 질의), 전력 귀속 recording rules.
-설계: sample_api.md §1.1, §8.1~§8.4, §10.2~§10.3 / 전력 계층 P8, 메트릭 M5.
+클러스터 구분 없이 전체를 합친 현황, 전력, 메트릭 조회와 실시간 스트리밍(SSE).
+스트리밍은 15초마다 heartbeat 전송, Last-Event-ID 헤더로 재개 가능.
 """
 import asyncio
 import json
@@ -53,7 +50,14 @@ router = APIRouter()
 
 @router.get("/monitoring/overview", summary="전체 시스템 현황(KPI)", response_model=OverviewResponse)
 async def get_overview(request: Request):
-    """포탈 메인 KPI — 클러스터/노드/가속기/워크로드 수, 전력 합계, (추론 KPI RPS·P99·에러율 예정, A-6). [§1.1]"""
+    """전체 인프라 현황을 한 화면에 담을 수 있는 요약값 조회
+
+    - clusters : 전체 클러스터 수, 관리 클러스터 수, 서비스 클러스터 수
+    - nodes : 전체 노드 수, 물리 노드 수, 가상 노드 수, 정상 노드 수, 비정상 노드 수
+    - accelerator_count : 전체 가속기 카드 수
+    - healthy_count : 정상 동작 중인 가속기 카드 수
+    - avg_temperature : 클러스터별 평균 가속기 온도(°C)
+    """
     warnings: list[str] = []
 
     # 1. up 쿼리로 클러스터별 인스턴스 수 집계
@@ -178,9 +182,16 @@ async def get_overview(request: Request):
     return OverviewResponse(status=status, data=data, warnings=warnings)
 
 
-@router.get("/monitoring/power/summary", summary="전력 요약 [P8]", response_model=PowerSummaryResponse)
+@router.get("/monitoring/power/summary", summary="전력 요약", response_model=PowerSummaryResponse)
 async def get_power_summary(request: Request):
-    """시스템 전체 전력 요약 — 계층별(서버총전력/CPU/가속기/기타) 합계. 전력 계층 P8. [§8.1]"""
+    """인프라 전체가 쓰는 전력을 항목별로 나눈 합계 조회
+
+    - server_total_watts : 서버 총 전력(W), IPMI 실측
+    - cpu_total_watts : CPU 전력(W), Kepler 실측
+    - accelerator_total_watts : 가속기 전력 합계(W)
+    - accelerator_by_vendor : 벤더별 가속기 전력 합계(W)
+    - other_watts : 나머지 전력(W), 서버 총 전력에서 CPU와 가속기를 뺀 값
+    """
     r = await power_summary()
     return PowerSummaryResponse(
         status=r["status"],
@@ -192,9 +203,13 @@ async def get_power_summary(request: Request):
 @router.get("/monitoring/power/breakdown", summary="전력 분해(다차원)", response_model=PowerBreakdownResponse)
 async def get_power_breakdown(
     request: Request,
-    dimension: str = Query("vendor", description="vendor|cluster|node|accelerator"),
+    dimension: str = Query("vendor", description="쪼개는 기준: vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)"),
 ):
-    """전력 분해 — 벤더/클러스터/노드/가속기 차원별 기여도. [§8.2]"""
+    """전력을 원하는 기준으로 쪼개서 어디서 얼마나 쓰는지 조회
+
+    - dimension : vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)
+    - items : 기준값 이름, 전력(W), 측정 구분
+    """
     r = await power_breakdown(dimension)
     return PowerBreakdownResponse(
         status=r["status"],
@@ -206,7 +221,13 @@ async def get_power_breakdown(
 
 @router.get("/monitoring/power/timeseries", summary="전력 시계열(횡단)", response_model=PowerTimeseriesResponse)
 async def get_power_timeseries(request: Request, params: TimeseriesParams = Depends()):
-    """시스템 전력 시계열 — 계층 스택 구성용(server/cpu/accelerator). [§8.3]"""
+    """인프라 전체 전력의 시간별 변화 추이 조회
+
+    - layers : 측정 구분(server | cpu | accelerator)별로 (시각, 전력값) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+
+    구분별 값을 쌓아 올리는 누적 그래프에 그대로 쓸 수 있는 형태.
+    """
     now = datetime.now(timezone.utc)
     start = params.start_iso(now)
     end = params.end_iso(now)
@@ -222,7 +243,11 @@ async def get_power_timeseries(request: Request, params: TimeseriesParams = Depe
 
 @router.get("/monitoring/power/efficiency", summary="전력 효율", response_model=PowerEfficiencyResponse)
 async def get_power_efficiency(request: Request):
-    """전력 효율 — 사용률 대비 전력, PUE 추정(냉각 계수), TDP 대비 비중. [§8.4]"""
+    """가속기가 전력을 얼마나 효율적으로 쓰는지 조회
+
+    - pue_estimate : 냉각 등 부대 설비를 포함한 전력 효율 추정치
+    - accelerators : 벤더별 전력(W), 사용률(%), 규격 최대 전력(TDP, W), TDP 대비 사용 비중(%)
+    """
     r = await power_efficiency()
     data = r["data"]
     return PowerEfficiencyResponse(
@@ -235,12 +260,18 @@ async def get_power_efficiency(request: Request):
     )
 
 
-@router.get("/monitoring/metrics/query", summary="메트릭 즉시 질의 [M5]", response_model=MetricsQueryResponse)
+@router.get("/monitoring/metrics/query", summary="메트릭 현재값 조회", response_model=MetricsQueryResponse)
 async def query_metrics(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름(카탈로그 내 허용 목록)"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
 ):
-    """메트릭 즉시값 질의 — 허용 목록 기반 안전 질의. 메트릭 계층 M5."""
+    """지정한 메트릭의 지금 값 조회
+
+    - metric : 조회한 메트릭 이름
+    - results : 메트릭 라벨과 (시각, 값) 쌍
+
+    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
+    """
     if metric is None:
         raise HTTPException(
             status_code=400,
@@ -284,10 +315,17 @@ async def query_metrics(
 @router.get("/monitoring/metrics/timeseries", summary="메트릭 시계열(횡단)", response_model=TimeseriesResponse)
 async def get_metrics_timeseries(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름(카탈로그 내 허용 목록)"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
     params: TimeseriesParams = Depends(),
 ):
-    """지정 메트릭의 횡단 시계열 — 허용 목록 기반(PromQL 인젝션 방지 계약 유지)."""
+    """지정한 메트릭의 시간별 변화 추이 조회
+
+    - metric : 조회한 메트릭 이름
+    - series : 메트릭 라벨별 (시각, 값) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+
+    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
+    """
     if metric is None:
         raise HTTPException(
             status_code=400,
@@ -341,7 +379,11 @@ async def get_metrics_timeseries(
     response_model=TemperatureTimeseriesResponse,
 )
 async def get_temperature_timeseries(request: Request, params: TimeseriesParams = Depends()):
-    """가속기/노드/IPMI 온도 통합 시계열."""
+    """가속기와 서버 하드웨어 온도를 한데 모은 변화 추이 조회
+
+    - series : 벤더, 클러스터, 라벨별 (시각, 온도값) 쌍 목록
+    - 가속기 온도, 노드 온도, 서버 하드웨어(IPMI) 온도를 함께 반환
+    """
     now = datetime.now(timezone.utc)
     start = params.start_iso(now)
     end = params.end_iso(now)
@@ -426,7 +468,12 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
 
 @router.get("/monitoring/stream/power", summary="실시간 전력 스트림(SSE)")
 async def stream_power(request: Request):
-    """전력 실시간 SSE — REST와 동일 응답 모델의 data 이벤트 + 15초 heartbeat. [§10.2]"""
+    """전력 요약값을 주기적으로 밀어주는 실시간 스트림
+
+    - data 이벤트 : 전력 요약 조회와 같은 형태의 JSON
+    - 15초마다 heartbeat 이벤트 전송
+    - Last-Event-ID 헤더로 끊긴 지점부터 재개 가능
+    """
     _now_iso = lambda: datetime.now(timezone.utc).isoformat()
     event_id = 0
 
@@ -464,9 +511,14 @@ async def stream_power(request: Request):
 @router.get("/monitoring/stream/metrics", summary="실시간 메트릭 스트림(SSE)")
 async def stream_metrics(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름(허용 목록)"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
 ):
-    """메트릭 실시간 SSE — 15초 heartbeat, allowlist 기반 주기 폴링. [§10.3]"""
+    """지정한 메트릭 값을 주기적으로 밀어주는 실시간 스트림
+
+    - data 이벤트 : 메트릭 현재값 조회와 같은 형태의 JSON
+    - 15초마다 heartbeat 이벤트 전송
+    - metric 파라미터는 미리 허용된 메트릭 이름만 받음
+    """
     if metric is None or metric not in METRIC_ALLOWLIST:
         available = list(METRIC_ALLOWLIST.keys())
         raise HTTPException(

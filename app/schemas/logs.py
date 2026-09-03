@@ -22,7 +22,7 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 class LogEntry(BaseModel):
-    """단일 로그 행 — sample_api §11 응답 형식."""
+    """로그 한 줄."""
 
     timestamp: str = Field(..., description="ISO 8601 타임스탬프")
     log_level: str = Field("info", description="error | warning | info | debug")
@@ -36,7 +36,7 @@ class LogEntry(BaseModel):
 
 
 class LogPagination(BaseModel):
-    """페이지네이션 메타 — Loki는 시간 커서 방식이라 offset=0 고정."""
+    """페이지 정보. Loki는 시각을 기준으로 넘기므로 offset은 항상 0."""
 
     total: int = Field(..., description="반환된 로그 수")
     limit: int

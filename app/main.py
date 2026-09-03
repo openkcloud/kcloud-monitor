@@ -1,11 +1,4 @@
-"""
-KCloud Monitor API — v2 스캐폴드 엔트리포인트.
-
-v1(프로토타입)은 종료되었다(design_contracts §1 "v1 종료, v2 신규 개발").
-clusters·nodes·accelerators·monitoring·workloads 도메인은 Prometheus 실데이터로 동작하고,
-storage/openstack/resource-map/export는 아직 스텁(status: not_implemented)이다.
-경로 SoT: sample_api.md(Monitor 81 + Resource-Map 8) + storage_ceph_plan(S1~S10) + 별칭 4.
-"""
+"""KCloud Monitor API v2"""
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -41,33 +34,39 @@ APP_VERSION = "0.2.0"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging(settings.LOG_LEVEL)
-    print("KCloud Monitor API (v2 scaffold) - Starting up")
+    print("KCloud Monitor API v2 - Starting up")
     print(f"Version: {APP_VERSION} | Docs: /docs | Metrics: /api/v2/system/metrics")
     yield
     print("Application shutdown")
 
 
 API_DESCRIPTION = """
-**KCloud Monitor API v2** — 이기종 AI 반도체 인프라 모니터링 (OPT.001/OPT.002).
+KCloud Monitor API v2
 
-## 현재 단계: 부분 구현
-clusters·nodes·accelerators·monitoring·workloads 도메인은 **Prometheus 실데이터**로 동작한다.
-storage/openstack/resource-map/export는 아직 **스텁**(`status: not_implemented`)이다.
+이기종 AI 반도체(NVIDIA GPU, Furiosa NPU, Rebellions NPU) 인프라의 자원, 전력, 워크로드 모니터링 API.
 
-## 경로 구조 (sample_api.md)
-- `/clusters/{c}/...` — 계층형 canonical (노드→가속기→파티션, storage/ceph, openstack, workloads)
-- `/workloads/...` — 포탈용 전역 진입점 (`_links.canonical` 포함)
-- `/monitoring/...` — 횡단 집계 (전력 P1~P8, SSE 스트림)
-- `/resource-map/...` — 자원 계보 원장 (GPU→VM→Pod 교차 추적)
+## 경로 구조
+- `/clusters` : 클러스터와 그 하위 노드, 가속기, 파티션의 상태와 메트릭 조회
+- `/workloads` : 클러스터 구분 없이 전체 Pod와 서비스를 한 번에 조회
+- `/monitoring` : 시스템 전체 현황, 전력 합계, 메트릭 시계열, 실시간 스트림(SSE) 조회
+- `/storage` : Ceph 분산 스토리지 상태 조회
+- `/openstack` : 하이퍼바이저, VM, 프로젝트 등 OpenStack 자원 조회
+- `/logs` : Loki 기반 로그 검색과 실시간 스트리밍
+- `/export` : 전력, 메트릭, 리포트 데이터를 CSV 또는 JSON으로 내보내기
+- `/resource-map` : 가속기가 어떤 VM, 어떤 Pod에 배정되어 있는지 추적
+- `/system` : 서비스 헬스, 버전, Prometheus 메트릭
+- `/auth` : 토큰 발급과 검증
 
-## 공통 응답 정책 (design_contracts §6)
-- `status`: `success` | `partial` | `error` (미구현 도메인: `not_implemented`)
-- 모든 응답에 `observed_at`, 경고 시 `warnings[]` / `partial_sources[]`
-- 에러 스키마: `{status, error:{code, message, retryable}, request_id, observed_at}`
+## 공통 응답
+- `status` : `success` | `partial` | `error` | `not_implemented`
+- `observed_at` : 데이터 관측 시각
+- `warnings` : 일부 데이터가 빈 경우의 원인 코드 목록
+- 에러 응답 : `{status, error:{code, message, retryable}, request_id, observed_at}`
 
 ## 인증
-- JWT Bearer(`POST /api/v2/auth/login`) 또는 `X-API-Key`. System 헬스/버전/메트릭은 공개.
-- 목표 구조: API Gateway 발급 JWT(RBAC/테넌트) + service-to-service JWT — Gateway 전환 시 의존성 교체.
+- JWT Bearer 토큰 : `POST /api/v2/auth/login` 으로 발급
+- `X-API-Key` 헤더 : 서버 간 호출용
+- `/system` 하위 경로(헬스, 버전, 메트릭)는 인증 없이 접근 가능
 """
 
 app = FastAPI(
@@ -78,8 +77,9 @@ app = FastAPI(
 )
 
 # ============================================================================
-# Middleware (추가 역순 실행: RequestID → RateLimit → Metrics → CORS)
+# Middleware
 # ============================================================================
+
 
 cors_allow_origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -94,8 +94,9 @@ app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.RATE_LIMIT_PER
 app.add_middleware(RequestIDMiddleware)
 
 # ============================================================================
-# Exception Handlers — design_contracts §6 에러 스키마
+# Exception Handlers
 # ============================================================================
+
 
 
 def _error_body(request: Request, code: str, message: str, retryable: bool = False) -> dict:
@@ -122,22 +123,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 PROTECTED = [Depends(verify_token_or_api_key)]
 V2 = "/api/v2"
 
-# 공개: 인증 발급, 시스템 헬스/버전/메트릭
 app.include_router(auth.router, prefix=V2, tags=["Authentication"])
 app.include_router(system.router, prefix=V2, tags=["System"])
-
-# 보호: 자원/모니터링 전 도메인
 app.include_router(clusters.router, prefix=V2, tags=["Clusters"], dependencies=PROTECTED)
-app.include_router(nodes.router, prefix=V2, tags=["Nodes & Hardware"], dependencies=PROTECTED)
-app.include_router(accelerators.router, prefix=V2, tags=["Accelerators & Partitions"], dependencies=PROTECTED)
-app.include_router(storage.router, prefix=V2, tags=["Storage (Ceph)"], dependencies=PROTECTED)
+app.include_router(nodes.router, prefix=V2, tags=["Nodes"], dependencies=PROTECTED)
+app.include_router(accelerators.router, prefix=V2, tags=["Accelerators"], dependencies=PROTECTED)
+app.include_router(storage.router, prefix=V2, tags=["Storage"], dependencies=PROTECTED)
 app.include_router(openstack.router, prefix=V2, tags=["OpenStack"], dependencies=PROTECTED)
 app.include_router(workloads.router, prefix=V2, tags=["Workloads"], dependencies=PROTECTED)
-app.include_router(workloads_global.router, prefix=V2, tags=["Workloads (Global Entry)"], dependencies=PROTECTED)
+app.include_router(workloads_global.router, prefix=V2, tags=["Workloads Global"], dependencies=PROTECTED)
 app.include_router(monitoring.router, prefix=V2, tags=["Monitoring"], dependencies=PROTECTED)
 app.include_router(logs.router, prefix=V2, tags=["Logs"], dependencies=PROTECTED)
 app.include_router(export.router, prefix=V2, tags=["Export"], dependencies=PROTECTED)
-app.include_router(resource_map.router, prefix=V2, tags=["Resource-Map"], dependencies=PROTECTED)
+app.include_router(resource_map.router, prefix=V2, tags=["Resource Map"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
@@ -146,27 +144,28 @@ app.include_router(resource_map.router, prefix=V2, tags=["Resource-Map"], depend
 
 @app.get("/")
 def read_root():
+    """API 진입점. 주요 경로 안내
+
+    - service, version : 서비스 이름과 버전
+    - docs : Swagger 문서 경로
+    - endpoints : 도메인별 대표 경로와 한 줄 설명
+    """
     return {
         "service": "KCloud Monitor API",
         "version": APP_VERSION,
-        "api_base": "/api/v2",
-        "phase": "partial — clusters·nodes·accelerators·monitoring·workloads 실구현, storage/openstack/resource-map/export 스텁",
         "docs": "/docs",
-        "authentication": {
-            "login": "POST /api/v2/auth/login",
-            "alt": "X-API-Key 헤더 (API_KEY 설정 시)",
+        "endpoints": {
+            "auth": "POST /api/v2/auth/login - 토큰 발급",
+            "clusters": "GET /api/v2/clusters - 클러스터 목록과 상태",
+            "nodes": "GET /api/v2/clusters/{cluster}/nodes - 노드 자원 정보",
+            "accelerators": "GET /api/v2/clusters/{cluster}/nodes/{node}/accelerators - 가속기 상태",
+            "workloads": "GET /api/v2/workloads/pods - 전체 Pod 목록",
+            "monitoring": "GET /api/v2/monitoring/overview - 전체 시스템 현황",
+            "storage": "GET /api/v2/clusters/{cluster}/storage/summary - 스토리지 자원",
+            "openstack": "GET /api/v2/openstack/summary - OpenStack 자원",
+            "logs": "GET /api/v2/logs/search - 로그 검색",
+            "export": "GET /api/v2/export/power - 데이터 내보내기",
+            "resource_map": "GET /api/v2/resource-map/relationships - 자원 간 연결 관계",
+            "system": "GET /api/v2/system/health - 서비스 헬스체크",
         },
-        "domains": {
-            "clusters": "/api/v2/clusters/* (nodes·accelerators·partitions·storage/ceph·openstack·workloads)",
-            "workloads_global": "/api/v2/workloads/* (포탈용 전역 진입점)",
-            "monitoring": "/api/v2/monitoring/* (전력 P1~P8·시계열·SSE)",
-            "export": "/api/v2/export/*",
-            "resource_map": "/api/v2/resource-map/* (자원 계보)",
-            "system": "/api/v2/system/* (공개)",
-        },
-        "design_refs": [
-            "docs/temp/04-reference/sample_api.md",
-            "docs/temp/02-decisions/design_contracts.md",
-            "docs/temp/01-domain-plans/openkcloud_storage_ceph_plan.md",
-        ],
     }

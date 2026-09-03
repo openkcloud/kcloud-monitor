@@ -1,5 +1,4 @@
-"""
-KCloud Monitor v2 — Export 도메인 스키마.
+"""내보내기 응답 스키마.
 
 CSV/JSON 내보내기 응답 모델과 허용 메트릭 목록.
 CSV 응답은 `fastapi.responses.Response`로 파일 스트림을 직접 반환하므로
@@ -108,7 +107,7 @@ class MetricExportResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReportExportResponse(BaseModel):
-    """GET /export/report 응답 — pdf 생성 의존성 미도입으로 항상 NOT_CONFIGURED."""
+    """리포트 생성 응답. PDF 생성 라이브러리가 없어 항상 NOT_CONFIGURED."""
 
     status: str
     data: Optional[Any] = None

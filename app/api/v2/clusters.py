@@ -1,8 +1,6 @@
-"""
-KCloud Monitor v2 — Clusters (5개).
+"""클러스터 조회 라우터
 
-최상위 진입점: 모든 자원 탐색의 시작. Prometheus cluster 라벨 기반 자동 발견.
-데이터소스: Prometheus HTTP API (up, DCGM_*, furiosa_*, RBLN_DEVICE_STATUS:*).
+모든 자원 탐색의 시작점. 클러스터 목록은 Prometheus의 cluster 라벨로 자동 발견.
 """
 from typing import Optional
 
@@ -212,16 +210,20 @@ async def list_clusters(
         None, alias="type", description='클러스터 타입 필터: "management" | "service"'
     ),
     project: Optional[str] = Query(
-        None, description="OpenStack 프로젝트명 필터 (서비스 클러스터의 openstack_project와 일치)"
+        None, description="OpenStack 프로젝트 이름 필터. 그 프로젝트에 속한 클러스터만 반환"
     ),
     limit: int = Query(100, ge=1, le=1000, description="페이지 크기 (max 1000)"),
     offset: int = Query(0, ge=0, description="페이징 오프셋"),
 ):
-    """발견된 클러스터 목록과 상태를 반환한다.
+    """운영 중인 클러스터 전체 목록 조회
 
-    ?type=service    → 서비스 클러스터만,
-    ?type=management → 관리 클러스터만,
-    ?project=<name>  → 해당 OpenStack 프로젝트 소속 클러스터만
+    - 이름, 타입(management | service), 상태(healthy | warning | critical)
+    - 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록
+    - 노드 수, 가속기 수, 가속기 전력 합계(W)
+    - OpenStack 경로 접근 가능 여부
+    - pagination : 전체 개수, 페이지 크기, 오프셋, 다음 페이지 존재 여부
+
+    필터: type=service(서비스만), type=management(관리만), project=이름(해당 프로젝트 소속만)
     """
     warnings: list[str] = []
     clusters = await cluster_discovery.get_clusters()
@@ -278,7 +280,14 @@ async def list_clusters(
     response_model_exclude_none=True,  # 타입에 안 맞는 필드는 생략(목록과 동일 정책)
 )
 async def get_cluster(request: Request, cluster: str):
-    """단일 클러스터 상세 — 목록 아이템과 동일 필드 + 노드 목록·평균 온도/사용률."""
+    """클러스터 한 개의 상세 조회
+
+    - 이름, 타입(management | service), 설명, 상태(healthy | warning | critical)
+    - 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록
+    - 노드 수, 가속기 수, 가속기 전력 합계(W)
+    - 실행 형태(kubernetes | vm), 가속기 벤더, 가속기 종류(GPU | NPU)
+    - 노드 이름 목록, 평균 가속기 사용률(%), 평균 온도(°C)
+    """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
 
@@ -381,10 +390,17 @@ async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources
     response_model_exclude_none=True,  # 데이터 없는 자원 항목(storage 등)은 생략
 )
 async def get_cluster_summary(request: Request, cluster: str):
-    """클러스터 리소스 요약 — nodes·cpu·memory·accelerators·power breakdown. [sample_api §2.1]
+    """클러스터가 가진 자원을 종류별로 합친 요약 조회
 
-    데이터 없는 항목은 생략(storage·dram 등). 물리 자원(cpu/mem/ipmi/kepler)은 관리 클러스터에서
-    주로 채워지고, 서비스 클러스터는 가속기 위주로 채워진다(가용 데이터에 따라 graceful).
+    - nodes : 전체 노드 수, Ready 노드 수, NotReady 노드 수
+    - cpu : 전체 코어 수, 사용 중 코어 수, 사용률(%)
+    - memory : 전체 메모리, 사용 메모리(GB), 사용률(%)
+    - accelerators : 카드 수, 사용 중/유휴 카드 수, 평균 사용률(%), 전력 합계(W)
+    - storage : 전체 용량, 사용 용량(TB), 사용률(%)
+    - power : 총 전력(W)과 CPU/가속기/기타로 나눈 내역
+
+    값이 없는 항목은 응답에서 생략. CPU, 메모리, 서버 전력은 관리 클러스터에서 주로 채워지고
+    서비스 클러스터는 가속기 항목이 주로 채워짐.
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -513,10 +529,12 @@ async def _collect_topo(info: ClusterInfo, node_map: dict[str, dict[str, dict]])
     response_model_exclude_none=True,
 )
 async def get_cluster_topology(request: Request, cluster: str):
-    """노드별 가속기 구성(v1) — node(name·type·cpu·mem) + accelerators(id·model·util·power).
+    """클러스터의 노드와 각 노드에 꽂힌 가속기 구성 조회
 
-    관리 클러스터는 하위 서비스 클러스터의 가속기를 호스트별로 모아 보여준다.
-    workload_binding·passthrough_to·pods 는 Phase 2(resource-map)에서 추가 예정.
+    - 노드별 : 이름, 종류(physical | virtual), CPU 코어 수, 메모리(GB)
+    - 노드에 장착된 가속기별 : ID, 모델명, 사용률(%), 전력(W)
+
+    관리 클러스터를 조회하면 하위 서비스 클러스터의 가속기까지 호스트별로 모아서 반환.
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -564,10 +582,14 @@ async def get_cluster_topology(request: Request, cluster: str):
 
 @router.get("/clusters/{cluster}/power", summary="클러스터 전력 합계 조회", response_model=ClusterPowerResponse)
 async def get_cluster_power(request: Request, cluster: str):
-    """클러스터 가속기 전력 합계 + 카드별 내역(id·hostname·watts)을 반환한다. [sample_api §8 모양 정합]
+    """클러스터 전체 가속기가 쓰는 전력 조회
 
-    관리 클러스터는 하위 서비스 클러스터의 카드를 모두 모아 합산한다(_aggregate_metrics와 동일 방침).
-    total_power_watts/accelerator_count는 기존 필드 그대로 유지하고 cards[]로 확장한다(하위호환).
+    - 클러스터 이름
+    - 가속기 전력 합계(W)
+    - 가속기 카드 개수
+    - cards : 카드별 ID, 카드가 꽂힌 호스트 이름, 전력(W)
+
+    관리 클러스터를 조회하면 하위 서비스 클러스터의 카드까지 모두 모아 합산.
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
