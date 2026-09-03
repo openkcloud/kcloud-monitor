@@ -49,6 +49,10 @@ from app.services.prometheus import prometheus_client
 
 router = APIRouter()
 
+# 실디스크 파일시스템만 남기는 PromQL 라벨 조건. tmpfs·ramfs·overlay 같은 가상 파일시스템을
+# 용량 집계에 넣으면 사용률이 왜곡되고, `/run/user/*`처럼 로그인 수에 따라 개수가 변한다.
+REAL_FS = 'fstype=~"ext4|xfs|btrfs"'
+
 
 def _esc(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
@@ -455,7 +459,7 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
 
     - cpu_usage_percent : CPU 사용률(%)
     - memory_usage_percent : 메모리 사용률(%), 전체 메모리와 사용 메모리(bytes)
-    - disk_usage_percent : 디스크 사용률(%)
+    - disk_usage_percent : 실디스크 사용률(%), 용량 가중 합계 기준. tmpfs 등 가상 파일시스템 제외
     - network_receive_bytes_per_sec : 네트워크 수신 처리량(bytes/sec)
     - network_transmit_bytes_per_sec : 네트워크 송신 처리량(bytes/sec)
     """
@@ -468,8 +472,14 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
     )
     mem_total_results = await prometheus_client.instant(f"node_memory_MemTotal_bytes{{{label}}}")
     mem_avail_results = await prometheus_client.instant(f"node_memory_MemAvailable_bytes{{{label}}}")
+    # 용량 가중으로 계산한다. 파일시스템별 사용률을 avg()로 평균내면 1GB tmpfs가 500GB 디스크와
+    # 같은 비중을 가져 실제 사용률이 희석된다(실측 27.9% → 9.2%). 또 `/run/user/*` tmpfs는
+    # 로그인 수에 따라 늘어나 값이 흔들린다. REAL_FS로 실디스크만 남기면 크기 0인 ramfs의
+    # 0/0 = NaN도 함께 걸러진다(NaN이 하나라도 섞이면 집계 전체가 NaN이 되어 null로 떨어짐).
+    disk_label = f"{label},{REAL_FS}"
     disk_results = await prometheus_client.instant(
-        f"avg(1 - (node_filesystem_avail_bytes{{{label}}} / node_filesystem_size_bytes{{{label}}})) * 100"
+        f"(1 - sum(node_filesystem_avail_bytes{{{disk_label}}})"
+        f" / sum(node_filesystem_size_bytes{{{disk_label}}})) * 100"
     )
     net_rx_results = await prometheus_client.instant(f"sum(rate(node_network_receive_bytes_total{{{label}}}[5m]))")
     net_tx_results = await prometheus_client.instant(f"sum(rate(node_network_transmit_bytes_total{{{label}}}[5m]))")
