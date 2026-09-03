@@ -2,7 +2,7 @@
 로그 API v2 Pydantic 스키마 (OPT.003 §3-1, §3-2).
 
 공통 응답 정책(docs/API_GUIDE.md):
-  - observed_at, is_stale, warnings[] 동일
+  - observed_at, warnings[] 동일
   - 로그 응답은 data[] + pagination 구조 (sample_api §11)
 """
 from datetime import datetime, timezone, timedelta
@@ -53,7 +53,6 @@ class LogSearchResponse(BaseModel):
 
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     data: list[LogEntry] = []
     pagination: LogPagination
     warnings: list[str] = []
@@ -64,7 +63,6 @@ class PodLogResponse(BaseModel):
 
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     cluster: str
     namespace: str
     pod: str
@@ -78,7 +76,6 @@ class AcceleratorLogResponse(BaseModel):
 
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     cluster: str
     accelerator_id: str
     data: list[LogEntry] = []
@@ -91,7 +88,6 @@ class NodeLogResponse(BaseModel):
 
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     cluster: str
     node: str
     data: list[LogEntry] = []

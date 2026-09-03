@@ -4,7 +4,6 @@
 공통 응답 정책(docs/API_GUIDE.md §공통-응답-정책):
   - status: "success" | "partial" | "error"
   - observed_at: ISO 8601 수집 시각
-  - is_stale: 메트릭 2분 / resource-map 10분 초과 시 True
   - warnings[]: STALE_DATA, PARTIAL_SOURCE, ESTIMATED_POWER 등 (정상 시 빈 목록)
 """
 from datetime import datetime, timedelta, timezone
@@ -95,7 +94,6 @@ class OverviewResponse(BaseModel):
     status: str
     data: OverviewData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -120,7 +118,6 @@ class MetricsQueryResponse(BaseModel):
     metric: str
     results: list[MetricSample]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -131,7 +128,6 @@ class TimeseriesResponse(BaseModel):
     metric: str
     series: list[MetricSample]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -152,7 +148,6 @@ class TemperatureTimeseriesResponse(BaseModel):
     status: str
     series: list[TemperatureSeriesItem]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -178,7 +173,6 @@ class PowerSummaryResponse(BaseModel):
     status: str
     data: PowerSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -197,7 +191,6 @@ class PowerBreakdownResponse(BaseModel):
     dimension: str
     items: list[PowerBreakdownItem]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -214,7 +207,6 @@ class PowerTimeseriesResponse(BaseModel):
     status: str
     layers: list[PowerTimeseriesLayer]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -243,5 +235,4 @@ class PowerEfficiencyResponse(BaseModel):
     status: str
     data: PowerEfficiencyData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

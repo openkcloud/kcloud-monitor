@@ -4,7 +4,6 @@
 공통 응답 정책(docs/API_GUIDE.md §공통-응답-정책):
   - status: "success" | "partial" | "error"
   - observed_at: ISO 8601 수집 시각
-  - is_stale: 메트릭 2분 초과 시 True
   - warnings[]: NO_DATA, ACCELERATOR_NOT_FOUND, PARTITION_DATA_NOT_AVAILABLE 등
 메모리는 벤더별 원본 단위(L40S=MiB, Furiosa/Rebellions=bytes)를 bytes로 통일해 반환한다.
 """
@@ -50,7 +49,6 @@ class AcceleratorListResponse(BaseModel):
     status: str
     data: list[AcceleratorItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -73,7 +71,6 @@ class AcceleratorSummaryResponse(BaseModel):
     status: str
     data: AcceleratorSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -97,7 +94,6 @@ class AcceleratorTopologyResponse(BaseModel):
     status: str
     data: AcceleratorTopologyData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -107,7 +103,6 @@ class AcceleratorDetailResponse(BaseModel):
     status: str
     data: Optional[AcceleratorItem] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -141,7 +136,6 @@ class AcceleratorMetricsResponse(BaseModel):
     vendor: Optional[str] = None
     data: AcceleratorMetricsData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -158,7 +152,6 @@ class AcceleratorPowerResponse(BaseModel):
     acc_id: str
     data: PowerData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -178,7 +171,6 @@ class AcceleratorPowerTimeseriesResponse(BaseModel):
     acc_id: str
     series: list[PowerSeriesItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -195,7 +187,6 @@ class AcceleratorTemperatureResponse(BaseModel):
     acc_id: str
     data: TemperatureData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -215,7 +206,6 @@ class PartitionListResponse(BaseModel):
     status: str
     data: list[PartitionItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -225,7 +215,6 @@ class PartitionDetailResponse(BaseModel):
     status: str
     data: Optional[PartitionItem] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -243,7 +232,6 @@ class PartitionPowerResponse(BaseModel):
     partition_id: str
     data: PartitionPowerData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -255,5 +243,4 @@ class PartitionPowerTimeseriesResponse(BaseModel):
     partition_id: str
     series: list[PowerSeriesItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

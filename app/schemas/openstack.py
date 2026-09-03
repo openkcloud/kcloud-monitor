@@ -1,7 +1,7 @@
 """
 OpenStack API v2 Pydantic 스키마.
 
-공통 응답 정책: status(success|partial|error) / observed_at / is_stale / warnings.
+공통 응답 정책: status(success|partial|error) / observed_at / warnings.
 경고 코드: NOT_CONFIGURED(크리덴셜 미설정), UPSTREAM_ERROR(OpenStack 호출 실패), NO_DATA.
 """
 from datetime import datetime, timezone
@@ -54,7 +54,6 @@ class OpenStackSummaryResponse(BaseModel):
     status: str
     data: Optional[OpenStackSummaryData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -62,7 +61,6 @@ class HypervisorListResponse(BaseModel):
     status: str
     data: list[HypervisorItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -70,7 +68,6 @@ class VMListResponse(BaseModel):
     status: str
     data: list[VMItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -78,7 +75,6 @@ class VMDetailResponse(BaseModel):
     status: str
     data: Optional[VMItem] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -95,7 +91,6 @@ class ProjectListResponse(BaseModel):
     status: str
     data: list[ProjectItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -103,7 +98,6 @@ class ProjectDetailResponse(BaseModel):
     status: str
     data: Optional[ProjectItem] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -122,7 +116,6 @@ class ProjectSummaryResponse(BaseModel):
     status: str
     data: Optional[ProjectSummaryData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -149,7 +142,6 @@ class HypervisorDetailResponse(BaseModel):
     status: str
     data: Optional[HypervisorDetailData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -166,7 +158,6 @@ class VMSummaryResponse(BaseModel):
     status: str
     data: Optional[VMSummaryData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -221,7 +212,6 @@ class VMMetricsResponse(BaseModel):
     status: str
     data: Optional[VMMetricsData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -243,5 +233,4 @@ class VMPowerResponse(BaseModel):
     status: str
     data: Optional[VMPowerData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

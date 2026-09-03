@@ -26,7 +26,6 @@ async def get_health(request: Request):
             "prometheus": "connected" if prometheus_ok else "unreachable",
         },
         "observed_at": datetime.now(timezone.utc).isoformat(),
-        "is_stale": False,
     }
 
 

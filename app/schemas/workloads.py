@@ -44,7 +44,6 @@ class PodListResponse(BaseModel):
     pods: list[PodItem] = []
     total: int = 0
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -62,7 +61,6 @@ class PodSummaryResponse(BaseModel):
     status: str
     data: PodSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -93,7 +91,6 @@ class PodDetailResponse(BaseModel):
     status: str
     data: Optional[PodDetailData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -106,7 +103,6 @@ class PodPowerResponse(BaseModel):
     status: str
     data: Optional[PodPowerData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -137,7 +133,6 @@ class ContainerListResponse(BaseModel):
     containers: list[ContainerItem] = []
     total: int = 0
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -150,7 +145,6 @@ class ContainerMetricsResponse(BaseModel):
     status: str
     data: ContainerMetricsData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -158,7 +152,6 @@ class ContainerDetailResponse(BaseModel):
     status: str
     data: Optional[ContainerItem] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -177,7 +170,6 @@ class PodAcceleratorResponse(BaseModel):
     status: str
     data: list[PodAcceleratorItem] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -198,7 +190,6 @@ class NamespaceListResponse(BaseModel):
     namespaces: list[NamespaceItem] = []
     total: int = 0
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -217,7 +208,6 @@ class NamespaceSummaryResponse(BaseModel):
     status: str
     data: NamespaceSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -241,7 +231,6 @@ class ServiceListResponse(BaseModel):
     services: list[ServiceItem] = []
     total: int = 0
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -254,7 +243,6 @@ class ServiceSummaryResponse(BaseModel):
     status: str
     data: ServiceSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -274,7 +262,6 @@ class ServiceDetailResponse(BaseModel):
     status: str
     data: Optional[ServiceDetailData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -287,5 +274,4 @@ class ServicePowerResponse(BaseModel):
     status: str
     data: Optional[ServicePowerData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

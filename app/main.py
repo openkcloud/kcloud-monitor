@@ -62,7 +62,7 @@ storage/openstack/resource-map/export는 아직 **스텁**(`status: not_implemen
 
 ## 공통 응답 정책 (design_contracts §6)
 - `status`: `success` | `partial` | `error` (미구현 도메인: `not_implemented`)
-- 모든 응답에 `observed_at`, `is_stale`, 경고 시 `warnings[]` / `partial_sources[]`
+- 모든 응답에 `observed_at`, 경고 시 `warnings[]` / `partial_sources[]`
 - 에러 스키마: `{status, error:{code, message, retryable}, request_id, observed_at}`
 
 ## 인증

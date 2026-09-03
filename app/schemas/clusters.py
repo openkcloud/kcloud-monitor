@@ -53,7 +53,6 @@ class ClusterListResponse(BaseModel):
     data: list[ClusterListItem]
     pagination: Optional[ClusterPagination] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -103,7 +102,6 @@ class ClusterDetailResponse(BaseModel):
     status: str
     data: ClusterDetailData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -189,7 +187,6 @@ class ClusterSummaryResponse(BaseModel):
     status: str
     data: ClusterSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -228,7 +225,6 @@ class ClusterTopologyResponse(BaseModel):
     status: str
     data: ClusterTopologyData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -257,5 +253,4 @@ class ClusterPowerResponse(BaseModel):
     status: str
     data: ClusterPowerData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

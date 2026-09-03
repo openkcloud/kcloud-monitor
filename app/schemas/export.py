@@ -74,7 +74,6 @@ class PowerExportResponse(BaseModel):
     status: str
     data: Optional[PowerExportData]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -101,7 +100,6 @@ class MetricExportResponse(BaseModel):
     status: str
     data: Optional[MetricExportData]
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -116,5 +114,4 @@ class ReportExportResponse(BaseModel):
     data: Optional[Any] = None
     report_type: str
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

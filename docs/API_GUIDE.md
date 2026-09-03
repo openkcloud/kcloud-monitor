@@ -79,7 +79,6 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
 |------|------|
 | `status` | `success` \| `partial` \| `error` (스텁 단계: `not_implemented`) |
 | `observed_at` | 데이터 수집 시각 (ISO 8601) |
-| `is_stale` | 메트릭 2분 / resource-map 10분 초과 시 `true` |
 | `warnings[]` | `STALE_DATA`, `PARTIAL_SOURCE`, `ESTIMATED_POWER` 등 (정상 시 생략) |
 | `partial_sources[]` | 일부 데이터소스 장애 시 실패 소스 목록 |
 
@@ -110,7 +109,6 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
   "design_ref": "sample_api.md §4.1",
   "data": null,
   "observed_at": "2026-08-06T00:00:00Z",
-  "is_stale": false,
   "warnings": ["NOT_IMPLEMENTED"],
   "params": {"limit": 100, "offset": 0, "sort_order": "asc"}
 }

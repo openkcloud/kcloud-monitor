@@ -105,7 +105,7 @@ GPU→VM→Pod 교차 추적을 위한 원장입니다. attachment 확정 근거
 ## 공통 응답 정책
 
 - `status`: `success` | `partial`(+`warnings[]`, `partial_sources[]`) | `error`
-- 모든 응답에 `observed_at`(수집 시각), `is_stale`(메트릭 2분/resource-map 10분 초과 시 true)
+- 모든 응답에 `observed_at`(수집 시각)
 - 에러 스키마: `{status, error: {code, message, retryable}, request_id, observed_at}`
 - 모든 응답 헤더에 `X-Request-ID`(상관관계 추적)
 
