@@ -22,14 +22,16 @@ from app.services.prometheus import prometheus_client
 IPMI_POWER_METRIC = "ipmi_dcmi_power_consumption_watts"
 
 ACCEL_POWER_QUERIES = {
-    "nvidia": 'DCGM_FI_DEV_POWER_USAGE{cluster="l40s"}',
+    # cluster=~"l40s|": L40S 2장 — compute5 카드(VM push, cluster="l40s") + compute6 카드
+    # (호스트 직접 수집, cluster 라벨 없음). 빈 매치 정규식이 무라벨 시계열을 포함시킨다.
+    "nvidia": 'DCGM_FI_DEV_POWER_USAGE{cluster=~"l40s|"}',
     "furiosa": 'furiosa_npu_hw_power{cluster="k8s-furiosa-rngd"}',
     # ×1000: exporter가 실측의 1/1000로 표출 (rbln-stat 카드 실측 18.4W와 대조 확정, 2026-08-24)
     "rebellions": '({__name__="RBLN_DEVICE_STATUS:CARD_POWER",cluster="rebellions"}) * 1000',
 }
 
 ACCEL_UTIL_QUERIES = {  # 효율용, %
-    "nvidia": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster="l40s"} * 100',
+    "nvidia": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster=~"l40s|"} * 100',
     "furiosa": 'furiosa_npu_core_utilization{cluster="k8s-furiosa-rngd"}',
     "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
 }
