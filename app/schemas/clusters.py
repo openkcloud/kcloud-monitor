@@ -12,16 +12,16 @@ def _now() -> str:
 
 
 class ClusterListItem(BaseModel):
-    """클러스터 목록의 단일 항목 (sample_api spec 정합)."""
+    """클러스터 목록의 항목 하나."""
 
     name: str = Field(..., description="클러스터 이름 (= Prometheus cluster 라벨, mgmt는 관리 클러스터)")
     type: str = Field(..., description="클러스터 구분: \"management\"(물리+OpenStack) | \"service\"(VM 위 K8s)")
-    # description은 목록에서 제외 — 상세(/clusters/{cluster})에서만 제공
+    # description은 목록에서 제외. 상세 조회에서만 제공
     parent_cluster: Optional[str] = Field(
         None, description="서비스 클러스터의 부모 관리 클러스터명(mgmt). 관리 클러스터는 None"
     )
     openstack_project: Optional[str] = Field(
-        None, description="서비스 클러스터가 속한 OpenStack 프로젝트(과금 단위). Magnum→Nova 순으로 조회"
+        None, description="서비스 클러스터가 속한 OpenStack 프로젝트. 과금 단위"
     )
     has_openstack: Optional[bool] = Field(
         None, description="True이면 /openstack/ 하위 경로 접근 가능. 관리 클러스터만 True(서비스는 생략)"
@@ -173,7 +173,7 @@ class ClusterPower(BaseModel):
 
 
 class ClusterSummaryData(BaseModel):
-    """클러스터 리소스 요약 (sample_api §2.1 정합)."""
+    """클러스터가 가진 자원을 종류별로 합친 요약."""
 
     cluster: str
     type: str
@@ -191,10 +191,7 @@ class ClusterSummaryResponse(BaseModel):
 
 
 class TopologyAccelerator(BaseModel):
-    """토폴로지의 가속기 항목 (v1).
-
-    workload_binding·passthrough_to·partition_* 는 Phase 2(resource-map)에서 추가 예정.
-    """
+    """노드에 장착된 가속기 한 장."""
 
     id: str = Field(..., description="가속기 UUID/식별자")
     model: Optional[str] = Field(None, description="모델명 (예: NVIDIA L40S, Furiosa rngd)")
@@ -203,7 +200,7 @@ class TopologyAccelerator(BaseModel):
 
 
 class TopologyNode(BaseModel):
-    """토폴로지의 노드 항목 (v1). pods 는 Phase 2에서 추가 예정."""
+    """클러스터 구성도의 노드 하나."""
 
     name: str = Field(..., description="노드/호스트 이름")
     node_type: str = Field(..., description="physical | virtual")
@@ -229,7 +226,7 @@ class ClusterTopologyResponse(BaseModel):
 
 
 class ClusterPowerCard(BaseModel):
-    """클러스터 전력 합계의 카드별 내역 1건 (sample_api §8 모양 정합)."""
+    """가속기 카드 한 장의 전력 내역."""
 
     id: str = Field(..., description="가속기 카드 식별자 (UUID/uuid/gpu/device 라벨 기준)")
     hostname: str = Field(..., description="카드가 보고된 호스트 (Hostname/hostname/instance 라벨 기준)")
@@ -241,7 +238,7 @@ class ClusterPowerData(BaseModel):
 
     cluster: str
     total_power_watts: Optional[float] = Field(None, description="가속기 전력 합계 (와트 W)")
-    accelerator_count: int = Field(..., description="가속기(카드) 개수 — 전력 메트릭 시계열 수 기준")
+    accelerator_count: int = Field(..., description="전력을 보고한 가속기(카드) 개수")
     cards: list[ClusterPowerCard] = Field(
         default_factory=list, description="카드별 전력 내역(id·hostname·watts). 관리 클러스터는 하위 서비스 전체 합산"
     )

@@ -1,9 +1,11 @@
-"""
-KCloud Monitor v2 — Accelerators (8개) + Partitions (4개) + 별칭 2개.
+"""가속기(GPU/NPU)와 그 파티션 조회 라우터
 
-가속기 = GPU(NVIDIA, DCGM)·NPU(Furiosa, furiosa_npu_*)·NPU(Rebellions, RBLN_*) 통합 모델.
-벤더는 cluster 경로 파라미터로 판별한다: l40s→nvidia, k8s-furiosa-rngd→furiosa, rebellions→rebellions.
-파티션(MIG/vGPU/NPU slice)은 MIG/파티셔닝 미사용 환경이라 파티션 메트릭이 부재하므로 stub 유지(빈 응답 + 경고).
+벤더별 exporter 3종을 하나의 응답 모델로 통일:
+- NVIDIA GPU: DCGM
+- Furiosa NPU: furiosa_npu_*
+- Rebellions NPU: RBLN_*
+
+벤더는 cluster 경로 파라미터로 판별: l40s -> nvidia, k8s-furiosa-rngd -> furiosa, rebellions -> rebellions
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -244,7 +246,13 @@ async def _extra_metrics(vendor: str, cluster: str, node: Optional[str], acc_id:
 async def list_accelerators(
     request: Request, cluster: str, node: str, params: PaginationParams = Depends()
 ) -> AcceleratorListResponse:
-    """노드의 가속기 목록 — UUID·모델·사용률·온도·전력·헬스."""
+    """특정 노드에 장착된 가속기(GPU/NPU) 목록 조회
+
+    - 가속기 ID(UUID), 벤더, 모델명
+    - 사용률(%), 온도(°C), 전력(W)
+    - 사용 메모리, 총 메모리(bytes)
+    - 정상 동작 여부
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorListResponse(status="partial", data=[], warnings=["UNKNOWN_CLUSTER"])
@@ -265,7 +273,12 @@ async def list_accelerators(
 async def get_accelerators_summary(
     request: Request, cluster: str, node: str
 ) -> AcceleratorSummaryResponse:
-    """노드 가속기 집계 — 수량, 평균 사용률/온도/전력."""
+    """노드에 장착된 가속기 전체를 하나로 합친 집계값 조회
+
+    - 가속기 개수, 벤더
+    - 평균 사용률(%), 평균 온도(°C), 평균 전력(W)
+    - 전력 합계(W)
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorSummaryResponse(
@@ -298,7 +311,12 @@ async def get_accelerators_summary(
 async def get_accelerators_topology(
     request: Request, cluster: str, node: str
 ) -> AcceleratorTopologyResponse:
-    """가속기 인터커넥트 — NVLink 대역폭(L40S만 제공)."""
+    """가속기끼리 직접 연결된 통신 링크(NVLink) 조회
+
+    - 벤더
+    - 링크별 대역폭 값과 어느 카드에서 어느 카드로 이어지는지 나타내는 라벨
+    - NVIDIA 클러스터만 값이 채워지고 NPU 클러스터는 빈 목록 반환
+    """
     vendor = await _get_vendor(cluster)
     if vendor != "nvidia":
         return AcceleratorTopologyResponse(
@@ -325,7 +343,13 @@ async def get_accelerators_topology(
 async def get_accelerator(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorDetailResponse:
-    """단일 가속기 상세 — UUID 매칭."""
+    """가속기 ID(UUID)로 단일 가속기 상세 조회
+
+    - 가속기 ID, 벤더, 클러스터, 노드, 모델명
+    - 사용률(%), 온도(°C), 전력(W)
+    - 사용 메모리, 총 메모리(bytes)
+    - 정상 동작 여부
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorDetailResponse(status="partial", data=None, warnings=["UNKNOWN_CLUSTER"])
@@ -341,11 +365,16 @@ async def get_accelerator(
     )
 
 
-@router.get("/clusters/{cluster}/nodes/{node}/accelerators/{acc_id}/metrics", summary="가속기 실시간 메트릭 [M2]")
+@router.get("/clusters/{cluster}/nodes/{node}/accelerators/{acc_id}/metrics", summary="가속기 실시간 메트릭")
 async def get_accelerator_metrics(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorMetricsResponse:
-    """가속기 실시간 메트릭 — 사용률/메모리/클럭/쓰로틀/오류."""
+    """가속기 한 장의 실시간 메트릭 조회
+
+    - 사용률(%), 사용 메모리, 총 메모리(bytes)
+    - 전력(W), 온도(°C), 정상 동작 여부
+    - 벤더별 부가 메트릭: 코어/메모리 클럭(MHz), 인코딩·디코딩 사용률(%), PCIe 재전송과 쓰로틀 누적 횟수
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorMetricsResponse(
@@ -374,11 +403,15 @@ async def get_accelerator_metrics(
     return AcceleratorMetricsResponse(status="success", acc_id=acc_id, vendor=vendor, data=data, warnings=warnings)
 
 
-@router.get("/clusters/{cluster}/nodes/{node}/accelerators/{acc_id}/power", summary="가속기 전력 실측 [P4]")
+@router.get("/clusters/{cluster}/nodes/{node}/accelerators/{acc_id}/power", summary="가속기 전력")
 async def get_accelerator_power(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorPowerResponse:
-    """가속기 전력 — DCGM/furiosa_npu_hw_power/RBLN 실측. 전력 계층 P4."""
+    """가속기 한 장이 지금 쓰고 있는 전력 조회
+
+    - 가속기 ID
+    - 전력(W), 벤더 exporter가 직접 보고한 실측값
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorPowerResponse(
@@ -403,7 +436,12 @@ async def get_accelerator_power(
 async def get_accelerator_power_timeseries(
     request: Request, cluster: str, node: str, acc_id: str, params: TimeseriesParams = Depends()
 ) -> AcceleratorPowerTimeseriesResponse:
-    """가속기 전력 시계열."""
+    """가속기 한 장의 전력 변화 추이 조회
+
+    - 가속기 ID
+    - (시각, 전력값) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorPowerTimeseriesResponse(
@@ -441,7 +479,11 @@ async def get_accelerator_power_timeseries(
 async def get_accelerator_temperature(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorTemperatureResponse:
-    """가속기 온도."""
+    """가속기 한 장의 현재 온도 조회
+
+    - 가속기 ID
+    - 온도(°C)
+    """
     vendor = await _get_vendor(cluster)
     if vendor is None:
         return AcceleratorTemperatureResponse(
@@ -473,7 +515,11 @@ async def get_accelerator_temperature(
 async def list_partitions(
     request: Request, cluster: str, node: str, acc_id: str, params: PaginationParams = Depends()
 ) -> PartitionListResponse:
-    """가속기의 파티션 목록 — MIG/파티셔닝 미사용 환경. 파티션 메트릭 부재로 stub."""
+    """가속기 한 장을 여러 조각으로 나눈 파티션 목록 조회
+
+    - 파티션 ID, 프로파일, 사용률(%)
+    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    """
     return PartitionListResponse(status="partial", data=[], warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
 
@@ -484,18 +530,27 @@ async def list_partitions(
 async def get_partition(
     request: Request, cluster: str, node: str, acc_id: str, partition_id: str
 ) -> PartitionDetailResponse:
-    """단일 파티션 상세 — MIG/파티셔닝 미사용 환경. 파티션 메트릭 부재로 stub."""
+    """파티션 ID로 단일 파티션 상세 조회
+
+    - 파티션 ID, 프로파일, 사용률(%)
+    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
 
 @router.get(
     "/clusters/{cluster}/nodes/{node}/accelerators/{acc_id}/partitions/{partition_id}/power",
-    summary="파티션 전력 추정 [P5]",
+    summary="파티션 전력",
 )
 async def get_partition_power(
     request: Request, cluster: str, node: str, acc_id: str, partition_id: str
 ) -> PartitionPowerResponse:
-    """파티션 전력 추정 [P5] — MIG/파티셔닝 미사용 환경. 파티션 메트릭 부재로 stub."""
+    """파티션 한 조각에 배분되는 전력 조회
+
+    - 가속기 ID, 파티션 ID
+    - 전력(W), 카드 전력을 파티션 점유 비율로 나눈 추정치
+    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    """
     return PartitionPowerResponse(
         status="partial",
         acc_id=acc_id,
@@ -517,7 +572,12 @@ async def get_partition_power_timeseries(
     partition_id: str,
     params: TimeseriesParams = Depends(),
 ) -> PartitionPowerTimeseriesResponse:
-    """파티션 전력 추정 시계열 — MIG/파티셔닝 미사용 환경. 파티션 메트릭 부재로 stub."""
+    """파티션 한 조각의 전력 변화 추이 조회
+
+    - 가속기 ID, 파티션 ID
+    - (시각, 전력값) 쌍 목록
+    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    """
     return PartitionPowerTimeseriesResponse(
         status="partial",
         acc_id=acc_id,
@@ -540,12 +600,17 @@ def _accelerator_links(cluster: str, acc_id: str, node: Optional[str]) -> dict:
     return links
 
 
-@router.get("/clusters/{cluster}/accelerators/{acc_id}", summary="가속기 상세(단축 경로)")
+@router.get("/clusters/{cluster}/accelerators/{acc_id}", summary="가속기 상세(노드 생략 경로)")
 async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
-    """노드를 몰라도 UUID로 바로 조회하는 별칭 — 클러스터 전체에서 UUID 검색.
+    """노드 이름을 몰라도 가속기 ID(UUID)만으로 상세 조회
 
-    canonical(정규) 경로는 노드를 포함한 /clusters/{cluster}/nodes/{node}/accelerators/{acc_id}이며,
-    _links.canonical로 안내한다(노드를 특정할 수 없으면 생략).
+    - 가속기 ID, 벤더, 클러스터, 노드, 모델명
+    - 사용률(%), 온도(°C), 전력(W)
+    - 사용 메모리, 총 메모리(bytes)
+    - 정상 동작 여부
+    - `_links.canonical` 에 노드까지 포함한 정식 경로 안내
+
+    클러스터 전체를 훑어 ID가 일치하는 카드를 찾는 방식.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -566,10 +631,14 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
 
 @router.get(
     "/clusters/{cluster}/accelerators/{acc_id}/partitions/{partition_id}",
-    summary="파티션 상세(단축 경로)",
+    summary="파티션 상세(노드 생략 경로)",
 )
 async def get_partition_alias(
     request: Request, cluster: str, acc_id: str, partition_id: str
 ) -> PartitionDetailResponse:
-    """파티션 UUID 직접 조회 별칭 — MIG/파티셔닝 미사용 환경. 파티션 메트릭 부재로 stub."""
+    """노드 이름을 몰라도 파티션 ID만으로 상세 조회
+
+    - 파티션 ID, 프로파일, 사용률(%)
+    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])

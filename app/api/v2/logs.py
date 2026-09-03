@@ -1,12 +1,8 @@
-"""
-KCloud Monitor v2 — Logs (OPT.003 §3-1, §3-2: 10 endpoints).
+"""로그 조회 라우터
 
-§3-1 로그 검색 (6): search, stream(SSE), export, labels, label-values, volume
-§3-2 클러스터 범위 로그 (4): cluster search, node logs, pod logs, accelerator logs
-
-데이터소스: Loki (LogQL).  NodePort 192.168.90.153:32141.
-Loki 라벨 현황: container, filename, instance, instance_id, job, namespace,
-    pod, service_name, source, stream, vm_name  (cluster·node 라벨 없음)
+Loki에 LogQL 쿼리를 보내 로그를 검색.
+Loki가 현재 가진 라벨: container, filename, instance, instance_id, job, namespace,
+pod, service_name, source, stream, vm_name (cluster와 node 라벨은 없음).
 """
 import asyncio
 import csv
@@ -154,14 +150,21 @@ def _transform_loki_response(loki_resp: dict, limit: int) -> tuple[list[LogEntry
 async def log_search(
     request: Request,
     query: str = Query(..., description="LogQL 쿼리 문자열"),
-    start: Optional[str] = Query(None, description="검색 시작 (기본 1h 전)"),
-    end: Optional[str] = Query(None, description="검색 종료 (기본 now)"),
+    start: Optional[str] = Query(None, description="검색 시작 시각. 미지정 시 1시간 전"),
+    end: Optional[str] = Query(None, description="검색 종료 시각. 미지정 시 현재 시각"),
     limit: int = Query(100, ge=1, le=5000, description="최대 로그 행 수"),
     direction: str = Query("backward", pattern="^(forward|backward)$"),
-    cluster: Optional[str] = Query(None, description="클러스터 필터 (후처리)"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (후처리)"),
+    cluster: Optional[str] = Query(None, description="클러스터 필터. 검색 결과를 받은 뒤 걸러냄"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 필터. 검색 결과를 받은 뒤 걸러냄"),
 ):
-    """LogQL 자유 검색. 쿼리를 Loki에 그대로 전달한다."""
+    """LogQL 쿼리로 로그 검색
+
+    - 로그별 : 발생 시각, 로그 레벨(error | warning | info | debug), 원문 메시지
+    - labels : 해당 로그가 달고 있는 Loki 라벨
+    - detected_fields : 원문에서 자동으로 뽑아낸 구조화 필드
+    - trace_id, span_id : 분산 추적 ID (미계측 시 빈 문자열)
+    - pagination : 반환 개수, 페이지 크기, 오프셋, 다음 페이지 존재 여부
+    """
     _require_loki()
     warnings: list[str] = []
 
@@ -196,7 +199,11 @@ async def log_stream(
     query: str = Query(..., description="LogQL 쿼리 문자열"),
     limit: int = Query(50, ge=1, le=500, description="폴링당 최대 행 수"),
 ):
-    """SSE 실시간 로그. 2초 폴링 + 15초 heartbeat."""
+    """새로 들어오는 로그를 실시간으로 밀어주는 스트림
+
+    - data 이벤트 : 로그 검색과 같은 형태의 JSON
+    - 2초마다 새 로그 확인, 15초마다 heartbeat 이벤트 전송
+    """
     _require_loki()
 
     async def _generate():
@@ -250,7 +257,11 @@ async def log_export(
     direction: str = Query("backward", pattern="^(forward|backward)$"),
     export_format: str = Query("json", alias="format", pattern="^(json|csv)$"),
 ):
-    """검색 결과 파일 내보내기."""
+    """검색한 로그를 파일로 내보내기
+
+    - format=csv : 시각, 레벨, 메시지, 라벨 열을 가진 CSV 파일로 내려받기
+    - format=json : JSON 응답 본문으로 반환
+    """
     _require_loki()
 
     s = start or _default_start()
@@ -289,7 +300,12 @@ async def get_labels(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
 ):
-    """Loki 라벨 키 목록."""
+    """로그에 붙어 있는 라벨 이름 전체 조회
+
+    - data : 라벨 이름 목록 (예: namespace, job, pod)
+
+    검색 쿼리를 쓰기 전에 어떤 라벨로 걸러낼 수 있는지 확인하는 용도.
+    """
     _require_loki()
     data = await loki_client.labels(start, end)
     return LabelListResponse(data=data)
@@ -302,7 +318,11 @@ async def get_label_values(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
 ):
-    """특정 라벨의 값 목록."""
+    """라벨 하나가 가질 수 있는 값 전체 조회
+
+    - label : 조회한 라벨 이름
+    - data : 그 라벨에 실제로 들어 있는 값 목록
+    """
     _require_loki()
     data = await loki_client.label_values(label, start, end)
     return LabelValuesResponse(label=label, data=data)
@@ -316,7 +336,12 @@ async def get_volume(
     end: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
 ):
-    """로그 볼륨(바이트) — job/namespace 등 라벨별 분포."""
+    """로그가 어디서 얼마나 쌓이는지 양(bytes) 조회
+
+    - 라벨 조합별 로그 용량(bytes)
+
+    로그를 많이 쏟아내는 대상을 찾는 용도.
+    """
     _require_loki()
 
     s = start or _default_start()
@@ -353,14 +378,20 @@ async def get_volume(
 async def cluster_log_search(
     request: Request,
     cluster: str,
-    query: Optional[str] = Query(None, description="추가 LogQL (미지정 시 전체)"),
+    query: Optional[str] = Query(None, description="추가로 걸러낼 LogQL 조건. 미지정 시 전체 조회"),
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=5000),
     direction: str = Query("backward", pattern="^(forward|backward)$"),
     log_level: Optional[str] = Query(None),
 ):
-    """클러스터 범위 로그 검색. 현재 Loki에 cluster 라벨이 없어 전체 반환 + 경고."""
+    """특정 클러스터의 로그만 골라서 검색
+
+    - 로그별 : 발생 시각, 로그 레벨, 원문 메시지, 라벨
+    - pagination : 반환 개수, 페이지 크기, 오프셋
+
+    Loki에 cluster 라벨이 아직 없어 지금은 전체 로그를 반환하고 경고를 함께 내려줌.
+    """
     _require_loki()
     warnings: list[str] = ["CLUSTER_FILTER_BEST_EFFORT"]
 
@@ -397,7 +428,14 @@ async def node_logs(
     direction: str = Query("backward", pattern="^(forward|backward)$"),
     log_level: Optional[str] = Query(None),
 ):
-    """노드 시스템 로그 (systemd-journal). vm_name 라벨로 필터."""
+    """노드 한 대의 운영체제 시스템 로그 조회
+
+    - 클러스터 이름, 노드 이름
+    - 로그별 : 발생 시각, 로그 레벨, 원문 메시지, 라벨
+    - pagination : 반환 개수, 페이지 크기, 오프셋
+
+    노드 이름을 vm_name 라벨과 맞춰 걸러냄.
+    """
     _require_loki()
 
     safe_node = _sanitize_label(node)
@@ -443,7 +481,14 @@ async def pod_logs(
     log_level: Optional[str] = Query(None),
     container: Optional[str] = Query(None, description="컨테이너 필터"),
 ):
-    """Pod 로그 조회 — kubectl logs 대체."""
+    """Pod 한 개의 컨테이너 로그 조회
+
+    - 클러스터 이름, 네임스페이스, Pod 이름
+    - 로그별 : 발생 시각, 로그 레벨, 원문 메시지, 라벨
+    - pagination : 반환 개수, 페이지 크기, 오프셋
+
+    container 파라미터로 Pod 안의 특정 컨테이너만 지정 가능.
+    """
     _require_loki()
 
     safe_ns = _sanitize_label(namespace)
@@ -490,9 +535,13 @@ async def accelerator_logs(
     direction: str = Query("backward", pattern="^(forward|backward)$"),
     log_level: Optional[str] = Query(None),
 ):
-    """GPU/NPU 드라이버 로그 — XID, ECC, 쓰로틀링.
+    """가속기 드라이버가 남긴 로그 조회
 
-    현재 GPU VM에서 로그 수집 파이프라인 미구성 → 빈 결과 + NO_LOG_SOURCE 경고.
+    - 클러스터 이름, 가속기 ID
+    - 로그별 : 발생 시각, 로그 레벨, 원문 메시지, 라벨
+    - 하드웨어 오류(XID), 메모리 오류(ECC), 발열로 인한 성능 제한 기록이 여기에 남음
+
+    가속기 VM에서 로그를 아직 걷어오지 않아 빈 목록 + NO_LOG_SOURCE 경고 반환.
     """
     _require_loki()
 

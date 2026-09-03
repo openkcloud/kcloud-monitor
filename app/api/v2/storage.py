@@ -1,10 +1,9 @@
-"""
-KCloud Monitor v2 — Storage/Ceph (S1~S10, 10개).
+"""Ceph 분산 스토리지 조회 라우터
 
-Rook-Ceph 분산 스토리지 모니터링(v2 신규 도메인, 2026-06-22 확정).
-노드 로컬 디스크(/clusters/{c}/nodes/{n}/storage)와 구분된다.
-데이터소스(구현 예정): Mimir(ceph_* — rook-ceph-mgr:9283 + rook-ceph-exporter:9926).
-설계: docs/temp/01-domain-plans/openkcloud_storage_ceph_plan.md §2(S1~S10)·§3(모델)·§4(메트릭).
+여러 서버의 디스크를 묶어 하나의 저장소로 쓰는 Ceph를 조회.
+노드 한 대에 붙은 로컬 디스크는 노드 하위의 storage 경로에서 조회.
+
+Ceph 메트릭 수집이 아직 연결되지 않아 모든 경로가 status="not_implemented" 반환.
 """
 from fastapi import APIRouter, Depends, Request
 
@@ -16,9 +15,15 @@ router = APIRouter()
 CEPH_PLAN = "openkcloud_storage_ceph_plan.md"
 
 
-@router.get("/clusters/{cluster}/storage/ceph/summary", summary="Ceph 요약 [S1]")
+@router.get("/clusters/{cluster}/storage/ceph/summary", summary="Ceph 요약")
 async def get_ceph_summary(request: Request, cluster: str):
-    """Ceph 클러스터 요약 — health, OSD up/in, 용량·사용률, 풀 수. 모델: CephSummary."""
+    """Ceph 스토리지 전체 상태를 한눈에 보는 요약 조회
+
+    - 전체 상태(HEALTH_OK | HEALTH_WARN | HEALTH_ERR)
+    - 디스크 단위(OSD) 개수와 그중 정상 동작 중인 개수
+    - 전체 용량, 사용 용량, 사용률(%)
+    - 저장 공간 묶음(풀) 개수
+    """
     return stub(
         request,
         "Ceph 요약(health·OSD·용량·풀 수)",
@@ -27,9 +32,13 @@ async def get_ceph_summary(request: Request, cluster: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/health", summary="Ceph health 상세 [S2]")
+@router.get("/clusters/{cluster}/storage/ceph/health", summary="Ceph health 상세")
 async def get_ceph_health(request: Request, cluster: str):
-    """Ceph health — 상태 코드(HEALTH_OK/WARN/ERR)와 체크 항목 상세."""
+    """Ceph가 왜 그 상태인지 항목별 상세 조회
+
+    - 전체 상태(HEALTH_OK | HEALTH_WARN | HEALTH_ERR)
+    - 경고나 오류를 일으킨 개별 점검 항목과 그 내용
+    """
     return stub(
         request,
         "Ceph health 상태(코드+체크 상세)",
@@ -38,9 +47,13 @@ async def get_ceph_health(request: Request, cluster: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/capacity", summary="Ceph 용량 [S3]")
+@router.get("/clusters/{cluster}/storage/ceph/capacity", summary="Ceph 용량")
 async def get_ceph_capacity(request: Request, cluster: str):
-    """Ceph 용량 — total/used/avail, device-class별 분해. 모델: CephCapacity."""
+    """Ceph 스토리지 용량 조회
+
+    - 전체 용량, 사용 용량, 남은 용량
+    - 디스크 종류(SSD, HDD 등)별로 나눈 용량 내역
+    """
     return stub(
         request,
         "Ceph 용량(total/used/avail, device-class별)",
@@ -49,11 +62,16 @@ async def get_ceph_capacity(request: Request, cluster: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/capacity/timeseries", summary="Ceph 용량 시계열 [S9]")
+@router.get("/clusters/{cluster}/storage/ceph/capacity/timeseries", summary="Ceph 용량 시계열")
 async def get_ceph_capacity_timeseries(
     request: Request, cluster: str, params: TimeseriesParams = Depends()
 ):
-    """Ceph 용량/사용률 시계열."""
+    """Ceph 용량과 사용률의 시간별 변화 추이 조회
+
+    - (시각, 사용 용량) 쌍 목록
+    - (시각, 사용률(%)) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    """
     return stub(
         request,
         "Ceph 용량·사용률 시계열",
@@ -63,9 +81,14 @@ async def get_ceph_capacity_timeseries(
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/osds", summary="OSD 목록 [S4]")
+@router.get("/clusters/{cluster}/storage/ceph/osds", summary="OSD 목록")
 async def list_ceph_osds(request: Request, cluster: str, params: PaginationParams = Depends()):
-    """OSD 목록 — up/in 상태, 용량, apply/commit latency. 모델: CephOSD."""
+    """Ceph를 구성하는 디스크 단위(OSD) 목록 조회
+
+    - OSD 번호, 정상 동작 여부, 클러스터 참여 여부
+    - 전체 용량, 사용 용량
+    - 읽기와 쓰기 응답 지연(ms)
+    """
     return stub(
         request,
         "OSD 목록(상태·용량·latency)",
@@ -75,9 +98,15 @@ async def list_ceph_osds(request: Request, cluster: str, params: PaginationParam
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/osds/{osd_id}", summary="OSD 상세 [S5]")
+@router.get("/clusters/{cluster}/storage/ceph/osds/{osd_id}", summary="OSD 상세")
 async def get_ceph_osd(request: Request, cluster: str, osd_id: str):
-    """단일 OSD 상세 — 소속 노드/디바이스, 상태, 사용량, latency."""
+    """디스크 단위(OSD) 한 개의 상세 조회
+
+    - OSD 번호, 이 디스크가 붙어 있는 노드와 장치 이름
+    - 정상 동작 여부, 클러스터 참여 여부
+    - 전체 용량, 사용 용량
+    - 읽기와 쓰기 응답 지연(ms)
+    """
     return stub(
         request,
         "OSD 상세",
@@ -86,9 +115,14 @@ async def get_ceph_osd(request: Request, cluster: str, osd_id: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/pools", summary="풀 목록 [S6]")
+@router.get("/clusters/{cluster}/storage/ceph/pools", summary="풀 목록")
 async def list_ceph_pools(request: Request, cluster: str, params: PaginationParams = Depends()):
-    """풀 목록 — stored/avail/objects, 읽기/쓰기 IOPS. 모델: CephPool."""
+    """저장 공간을 용도별로 나눈 묶음(풀) 목록 조회
+
+    - 풀 이름, 저장된 용량, 남은 용량
+    - 저장된 오브젝트 개수
+    - 초당 읽기, 쓰기 횟수(IOPS)
+    """
     return stub(
         request,
         "Ceph 풀 목록(stored/avail/objects/IOPS)",
@@ -98,9 +132,14 @@ async def list_ceph_pools(request: Request, cluster: str, params: PaginationPara
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/pools/{pool}", summary="풀 상세 [S7]")
+@router.get("/clusters/{cluster}/storage/ceph/pools/{pool}", summary="풀 상세")
 async def get_ceph_pool(request: Request, cluster: str, pool: str):
-    """단일 풀 상세 — 용량/오브젝트/IOPS, replica/EC 구성."""
+    """저장 공간 묶음(풀) 한 개의 상세 조회
+
+    - 풀 이름, 저장된 용량, 남은 용량, 오브젝트 개수
+    - 초당 읽기, 쓰기 횟수(IOPS)
+    - 데이터 복제 방식과 복제 수
+    """
     return stub(
         request,
         "Ceph 풀 상세",
@@ -109,9 +148,15 @@ async def get_ceph_pool(request: Request, cluster: str, pool: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/ceph/pgs", summary="PG 상태 요약 [S8]")
+@router.get("/clusters/{cluster}/storage/ceph/pgs", summary="PG 상태 요약")
 async def get_ceph_pgs(request: Request, cluster: str):
-    """Placement Group 상태 — total/active/clean/degraded 집계."""
+    """데이터 배치 단위(Placement Group)의 상태 집계 조회
+
+    - 전체 개수
+    - active : 정상 동작 중인 개수
+    - clean : 복제까지 완전히 맞춰진 개수
+    - degraded : 복제본이 부족한 개수
+    """
     return stub(
         request,
         "PG 상태 요약(active/clean/degraded)",
@@ -120,9 +165,13 @@ async def get_ceph_pgs(request: Request, cluster: str):
     )
 
 
-@router.get("/clusters/{cluster}/storage/summary", summary="스토리지 통합 요약 [S10]")
+@router.get("/clusters/{cluster}/storage/summary", summary="스토리지 통합 요약")
 async def get_storage_summary(request: Request, cluster: str):
-    """스토리지 통합 요약 — Ceph + 향후 다른 백엔드(Cinder 등) 확장 지점."""
+    """클러스터가 쓰는 스토리지 전체를 한데 모은 요약 조회
+
+    - 스토리지 종류별 전체 용량, 사용 용량, 사용률(%)
+    - 현재는 Ceph만 반환. 다른 스토리지 추가 시 같은 응답에 함께 나옴
+    """
     return stub(
         request,
         "스토리지 통합 요약(백엔드 확장 지점)",

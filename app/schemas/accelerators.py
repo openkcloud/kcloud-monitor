@@ -34,10 +34,10 @@ class AcceleratorItem(BaseModel):
     temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
     power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
     memory_used_bytes: Optional[float] = Field(
-        None, description="사용 메모리 (bytes) — 벤더 원본단위를 bytes로 통일(L40S=MiB→bytes 변환)"
+        None, description="사용 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
     )
     memory_total_bytes: Optional[float] = Field(
-        None, description="총 메모리 (bytes) — 벤더 원본단위를 bytes로 통일(L40S=MiB→bytes 변환)"
+        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
     )
     healthy: Optional[bool] = None
     labels: dict[str, str] = {}
@@ -113,18 +113,18 @@ class AcceleratorMetricsData(BaseModel):
         None, description="사용률 (%). NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
     )
     memory_used_bytes: Optional[float] = Field(
-        None, description="사용 메모리 (bytes) — 벤더 원본단위를 bytes로 통일(L40S=MiB→bytes 변환)"
+        None, description="사용 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
     )
     memory_total_bytes: Optional[float] = Field(
-        None, description="총 메모리 (bytes) — 벤더 원본단위를 bytes로 통일(L40S=MiB→bytes 변환)"
+        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
     )
     power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
     temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
     healthy: Optional[bool] = None
     extra: dict[str, float] = Field(
         default_factory=dict,
-        description="벤더별 부가 메트릭 — sm_clock/mem_clock/freq=주파수(MHz), "
-        "mem_copy_util/dec_util/enc_util=사용률(%), pcie_replay/throttle=누적 카운트",
+        description="벤더별 부가 메트릭. sm_clock, mem_clock, freq = 동작 주파수(MHz) / "
+        "mem_copy_util, dec_util, enc_util = 사용률(%) / pcie_replay, throttle = 누적 발생 횟수",
     )
 
 
@@ -160,7 +160,7 @@ class PowerSeriesItem(BaseModel):
 
     metric_labels: dict[str, str]
     values: list[tuple[str, str]] = Field(
-        ..., description="(timestamp, value) 쌍 목록 — timestamp는 ISO 8601 UTC"
+        ..., description="(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC 형식"
     )
 
 
@@ -191,7 +191,7 @@ class AcceleratorTemperatureResponse(BaseModel):
 
 
 class PartitionItem(BaseModel):
-    """파티션(MIG/vGPU/NPU slice) 요약 — 현재 데이터 없음."""
+    """가속기를 나눈 파티션 한 조각의 정보. 현재 수집 데이터 없음."""
 
     partition_id: str
     profile: Optional[str] = None
@@ -219,7 +219,7 @@ class PartitionDetailResponse(BaseModel):
 
 
 class PartitionPowerData(BaseModel):
-    """파티션 전력 추정값 — 현재 데이터 없음."""
+    """파티션 한 조각에 배분된 전력 추정값. 현재 수집 데이터 없음."""
 
     power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
 

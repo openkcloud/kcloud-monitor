@@ -1,11 +1,6 @@
-"""
-KCloud Monitor v2 — Export (3개).
+"""측정 데이터 내보내기 라우터
 
-전력/메트릭 데이터 CSV·JSON 내보내기, 요약 리포트(pdf)는 의존성 미도입으로 NOT_CONFIGURED 고정.
-데이터소스: Prometheus range_query만 사용(외부 의존 없음).
-포맷: csv | json만 지원 — requirements.txt에 pandas/openpyxl/pyarrow 없음(§5-D 결정 전까지
-excel/parquet/pdf 등은 400 UNSUPPORTED_FORMAT).
-설계: sample_api.md Export 카테고리 / .omc/plans/remaining-domains-plan.md §1-A.
+지원 포맷은 csv와 json. 그 외 포맷 요청은 400 UNSUPPORTED_FORMAT 반환.
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -48,13 +43,14 @@ def _safe_filename_part(value: str) -> str:
 @router.get("/export/power", summary="전력 데이터 내보내기")
 async def export_power(
     request: Request,
-    format: str = Query("csv", description="내보내기 포맷 (csv|json)"),
+    format: str = Query("csv", description="내보내기 포맷: csv | json"),
     params: TimeseriesParams = Depends(),
 ):
-    """전력 3계층(server/cpu/accelerator) 시계열을 timestamp,node,layer,watts 행으로 내보낸다.
+    """전력 측정값을 파일로 내보내기
 
-    format=csv: text/csv 파일 스트림(Content-Disposition: attachment).
-    format=json: 기존 응답 봉투(status/observed_at/is_stale/warnings) + rows 배열.
+    - 행 구성 : 시각, 노드 이름, 측정 구분(server | cpu | accelerator), 전력(W)
+    - format=csv : CSV 파일로 바로 내려받기
+    - format=json : JSON 응답 본문의 rows 배열로 반환
     """
     _check_format(format)
 
@@ -85,13 +81,17 @@ async def export_power(
 @router.get("/export/metrics", summary="메트릭 데이터 내보내기")
 async def export_metrics(
     request: Request,
-    format: str = Query("csv", description="내보내기 포맷 (csv|json)"),
-    metric: Optional[str] = Query(None, description="대상 메트릭(허용 목록)"),
+    format: str = Query("csv", description="내보내기 포맷: csv | json"),
+    metric: Optional[str] = Query(None, description="내보낼 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
     params: TimeseriesParams = Depends(),
 ):
-    """지정 메트릭(허용 목록)의 시계열을 timestamp,labels,value 행으로 내보낸다.
+    """지정한 메트릭 값을 파일로 내보내기
 
-    임의 PromQL 주입을 막기 위해 metric은 EXPORT_METRIC_ALLOWLIST에 있는 값만 허용한다.
+    - 행 구성 : 시각, 메트릭 라벨, 값
+    - format=csv : CSV 파일로 바로 내려받기
+    - format=json : JSON 응답 본문의 rows 배열로 반환
+
+    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
     """
     _check_format(format)
 
@@ -128,11 +128,12 @@ async def export_metrics(
 @router.get("/export/report", summary="요약 리포트 생성", response_model=ReportExportResponse)
 async def export_report(
     request: Request,
-    report_type: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="리포트 주기"),
+    report_type: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="리포트 주기: daily | weekly | monthly"),
 ):
-    """운영 요약 리포트(pdf) — pdf 생성 의존성(reportlab 등) 미도입으로 항상 NOT_CONFIGURED.
+    """일간, 주간, 월간 운영 요약 리포트 생성
 
-    §5-D(의존성 추가 승인) 결정 전까지는 status="partial" + warnings=["NOT_CONFIGURED"]를 반환한다.
+    - report_type : daily | weekly | monthly
+    - PDF 생성 라이브러리가 설치되지 않아 status="partial" + warnings=["NOT_CONFIGURED"] 반환
     """
     return ReportExportResponse(
         status="partial",

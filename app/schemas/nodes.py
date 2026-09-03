@@ -23,7 +23,7 @@ class NodeSummaryItem(BaseModel):
     """노드 목록의 항목 하나.
 
     관리 클러스터는 kube_node_info 기반(물리 노드), 서비스 클러스터는 가속기 메트릭의
-    hostname 기반(가상 노드)이라 internal_ip/os/kubelet_version은 서비스 클러스터에서 생략된다.
+    hostname 기반(가상 노드). 그래서 internal_ip, os, kubelet_version은 서비스 클러스터에서 생략.
     """
 
     nodename: str = Field(
@@ -36,7 +36,7 @@ class NodeSummaryItem(BaseModel):
     os: Optional[str] = Field(None, description="OS 이미지 (mgmt만)")
     kubelet_version: Optional[str] = Field(None, description="kubelet 버전 (mgmt만)")
     node_type: Optional[str] = Field(
-        None, description='physical | virtual. machine_cpu_cores의 node 라벨 집합 기준'
+        None, description='physical | virtual'
     )
     accelerator_count: Optional[int] = Field(None, description="이 호스트의 가속기(카드) 수 (서비스 클러스터만 산출)")
     power_watts: Optional[float] = Field(
@@ -94,12 +94,12 @@ class NodeDetailData(BaseModel):
     cpu_cores: Optional[int] = None
     memory_total_bytes: Optional[float] = Field(None, description="총 메모리 (bytes)")
     node_type: Optional[str] = Field(
-        None, description='physical | virtual. machine_cpu_cores의 node 라벨 집합 기준'
+        None, description='physical | virtual'
     )
     ready: Optional[bool] = Field(
         None, description="kube_node_status_condition(Ready) 기준. mgmt에만 존재(서비스 클러스터는 None)"
     )
-    accelerator_count: int = Field(0, description="이 노드(호스트)의 가속기(카드) 수 — hostname 매칭")
+    accelerator_count: int = Field(0, description="이 노드에 장착된 가속기(카드) 수")
 
 
 class NodeDetailResponse(BaseModel):
@@ -284,7 +284,7 @@ class HardwareSensor(BaseModel):
     """IPMI 센서 값 하나(전력/전압/전류/팬 등)."""
 
     name: str
-    value: float = Field(..., description="센서 값 — 단위는 unit 필드 참조")
+    value: float = Field(..., description="센서 값. 단위는 unit 필드 참조")
     unit: Optional[str] = None
 
 

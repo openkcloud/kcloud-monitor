@@ -1,9 +1,6 @@
-"""
-KCloud Monitor v2 — System (3개, 공개 엔드포인트).
+"""서비스 자체 상태 조회 라우터
 
-health/version은 스캐폴드 단계에서도 실동작한다(K8s probe·배포 파이프라인용).
-metrics는 자체 Prometheus exposition(미들웨어 수집분)을 노출한다.
-설계: sample_api.md System 카테고리.
+인증 없이 접근 가능. Kubernetes probe와 배포 파이프라인이 사용.
 """
 from datetime import datetime, timezone
 
@@ -17,7 +14,12 @@ router = APIRouter()
 
 @router.get("/system/health", summary="헬스체크")
 async def get_health(request: Request):
-    """서비스 헬스 — 앱 생존 + 유일한 데이터소스(Prometheus) 연결 상태를 실측한다."""
+    """이 API 서버가 정상 동작 중인지 확인
+
+    - status : healthy(정상) | degraded(서버는 살아 있으나 데이터소스 미도달)
+    - backends.prometheus : connected | unreachable
+    - observed_at : 확인 시각
+    """
     prometheus_ok = await prometheus_client.ping()
     return {
         # 앱은 살아 있으나 데이터소스 미도달이면 degraded로 강등
@@ -31,18 +33,26 @@ async def get_health(request: Request):
 
 @router.get("/system/version", summary="버전 정보")
 async def get_version(request: Request):
-    """서비스/API 버전 — 배포 식별용."""
+    """배포된 서비스와 API 버전 확인
+
+    - service : 서비스 이름
+    - version : 서비스 버전
+    - api_version : API 버전
+    """
     return {
         "status": "success",
         "service": "kcloud-monitor",
         "version": request.app.version,
         "api_version": "v2",
-        "phase": "partial (clusters·nodes·accelerators·monitoring·workloads 실구현, storage/openstack/resource-map/export 스텁)",
         "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @router.get("/system/metrics", summary="자체 Prometheus 메트릭")
 async def get_self_metrics():
-    """이 API 서버 자체의 요청/지연 메트릭(Prometheus exposition, 미들웨어 수집)."""
+    """이 API 서버가 처리한 요청 수와 응답 지연 메트릭 조회
+
+    - Prometheus가 그대로 수집할 수 있는 텍스트 형식으로 반환
+    - 경로별 요청 수, 상태 코드별 요청 수, 응답 지연 분포
+    """
     return Response(content=get_metrics_text(), media_type=get_metrics_content_type())
