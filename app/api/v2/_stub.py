@@ -5,7 +5,7 @@ v2 스캐폴드 공통 스텁 응답 빌더.
 포탈/클라이언트가 경로·파라미터·인증을 미리 연동할 수 있도록,
 호출된 경로와 구현 예정 데이터소스를 응답 본문에 그대로 돌려준다.
 
-응답 형태는 design_contracts §6 공통 응답 정책(observed_at, is_stale, warnings)을
+응답 형태는 design_contracts §6 공통 응답 정책(observed_at, warnings)을
 따르되, 스텁임을 status="not_implemented" + warnings=["NOT_IMPLEMENTED"]로 명시한다.
 실제 구현 시: 핸들러 본문을 crud/서비스 호출로 교체하고 이 모듈 의존을 제거한다.
 """
@@ -57,7 +57,6 @@ def stub(
         "design_ref": ref or DESIGN_DOC,
         "data": example,
         "observed_at": _now(),
-        "is_stale": False,
         "warnings": ["NOT_IMPLEMENTED"],
     }
     if params is not None:

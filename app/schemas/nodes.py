@@ -4,7 +4,6 @@ Nodes API v2 Pydantic 스키마.
 공통 응답 정책(docs/API_GUIDE.md §공통-응답-정책):
   - status: "success" | "partial" | "error"
   - observed_at: ISO 8601 수집 시각
-  - is_stale: 메트릭 2분 초과 시 True
   - warnings[]: NO_DATA, NO_POWER_DATA, IPMI_NOT_AVAILABLE 등 (정상 시 빈 목록)
 """
 from datetime import datetime, timedelta, timezone
@@ -52,7 +51,6 @@ class NodeListResponse(BaseModel):
     nodes: list[NodeSummaryItem]
     total: int
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -72,7 +70,6 @@ class NodesSummaryResponse(BaseModel):
     status: str
     data: NodesSummaryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -111,7 +108,6 @@ class NodeDetailResponse(BaseModel):
     status: str
     data: Optional[NodeDetailData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -133,7 +129,6 @@ class NodeMetricsResponse(BaseModel):
     status: str
     data: NodeMetricsData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -168,7 +163,6 @@ class NodeCpuResponse(BaseModel):
     status: str
     data: NodeCpuData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -192,7 +186,6 @@ class NodeMemoryResponse(BaseModel):
     status: str
     data: NodeMemoryData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -227,7 +220,6 @@ class NodeStorageResponse(BaseModel):
     status: str
     data: NodeStorageData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -253,7 +245,6 @@ class NodeNetworkResponse(BaseModel):
     status: str
     data: NodeNetworkData
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -270,7 +261,6 @@ class NodePowerResponse(BaseModel):
     status: str
     data: Optional[NodePowerData] = None
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -287,7 +277,6 @@ class NodePowerTimeseriesResponse(BaseModel):
     status: str
     series: list[NodePowerTimeseriesPoint] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -305,7 +294,6 @@ class HardwareSensorsResponse(BaseModel):
     status: str
     sensors: list[HardwareSensor] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -315,7 +303,6 @@ class HardwarePowerResponse(BaseModel):
     status: str
     watts: Optional[float] = Field(None, description="전력 (와트 W)")
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []
 
 
@@ -332,5 +319,4 @@ class HardwareTemperatureResponse(BaseModel):
     status: str
     sensors: list[HardwareTemperatureSensor] = []
     observed_at: str = Field(default_factory=_now)
-    is_stale: bool = False
     warnings: list[str] = []

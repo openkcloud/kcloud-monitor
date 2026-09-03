@@ -4,7 +4,7 @@ KCloud Monitor v2 — Resource-Map / Discovery (8개, Monitor 소유).
 자원 계보 원장: 물리 GPU/NPU → (passthrough) VM → Magnum 서비스 K8s → Pod/Container 연계.
 저장소는 PostgreSQL 원장(메트릭 라벨은 조회 차원일 뿐, 원장이 SoT).
 attachment 확정 근거 우선순위(design_contracts §3): libvirt hostdev > Placement(OFF 확정) > sysfs > guest > runtime.
-갱신 계약: resource-map 갱신 지연 ≤ 5분, RPO ≤ 5분. stale 10분 초과 시 is_stale=true.
+갱신 계약: resource-map 갱신 지연 ≤ 5분, RPO ≤ 5분.
 설계: openkcloud_resource_mapping_architecture.md, sample_api.md §7(교차 자원 추적).
 Metering/Alerter/Healer가 service-to-service JWT로 호출하는 내부 계약 API이기도 하다.
 """
