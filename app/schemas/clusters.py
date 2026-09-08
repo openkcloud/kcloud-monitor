@@ -172,8 +172,8 @@ class ClusterPower(BaseModel):
     breakdown: Optional[PowerBreakdown] = None
 
 
-class ClusterSummaryData(BaseModel):
-    """클러스터가 가진 자원을 종류별로 합친 요약."""
+class ClusterResourceData(BaseModel):
+    """클러스터가 가진 자원을 종류별로 합친 자원 현황."""
 
     cluster: str
     type: str
@@ -181,11 +181,11 @@ class ClusterSummaryData(BaseModel):
     power: ClusterPower
 
 
-class ClusterSummaryResponse(BaseModel):
-    """GET /clusters/{cluster}/summary 응답."""
+class ClusterResourceResponse(BaseModel):
+    """GET /clusters/{cluster}/resource 응답."""
 
     status: str
-    data: ClusterSummaryData
+    data: ClusterResourceData
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 

@@ -18,8 +18,8 @@ from app.schemas.clusters import (
     ClusterPowerData,
     ClusterPowerResponse,
     ClusterResources,
-    ClusterSummaryData,
-    ClusterSummaryResponse,
+    ClusterResourceData,
+    ClusterResourceResponse,
     ClusterTopologyData,
     ClusterTopologyResponse,
     CpuResources,
@@ -384,13 +384,13 @@ async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources
 
 
 @router.get(
-    "/clusters/{cluster}/summary",
-    summary="클러스터 리소스 요약",
-    response_model=ClusterSummaryResponse,
+    "/clusters/{cluster}/resource",
+    summary="클러스터 자원 현황",
+    response_model=ClusterResourceResponse,
     response_model_exclude_none=True,  # 데이터 없는 자원 항목(storage 등)은 생략
 )
-async def get_cluster_summary(request: Request, cluster: str):
-    """클러스터가 가진 자원을 종류별로 합친 요약 조회
+async def get_cluster_resource(request: Request, cluster: str):
+    """클러스터가 가진 자원을 종류별로 합친 자원 현황 조회
 
     - nodes : 전체 노드 수, Ready 노드 수, NotReady 노드 수
     - cpu : 전체 코어 수, 사용 중 코어 수, 사용률(%)
@@ -457,8 +457,8 @@ async def get_cluster_summary(request: Request, cluster: str):
     if all(x is None for x in (nodes, cpu, memory, accelerators)):
         warnings.append("NO_DATA")
     status = "partial" if warnings else "success"
-    data = ClusterSummaryData(cluster=cluster, type=info.type, resources=resources, power=power)
-    return ClusterSummaryResponse(status=status, data=data, warnings=warnings)
+    data = ClusterResourceData(cluster=cluster, type=info.type, resources=resources, power=power)
+    return ClusterResourceResponse(status=status, data=data, warnings=warnings)
 
 
 def _card_id(metric: dict) -> str:
