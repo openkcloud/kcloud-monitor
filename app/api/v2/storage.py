@@ -164,17 +164,3 @@ async def get_ceph_pgs(request: Request, cluster: str):
         ref=f"{CEPH_PLAN} S8",
     )
 
-
-@router.get("/clusters/{cluster}/storage/summary", summary="스토리지 통합 요약")
-async def get_storage_summary(request: Request, cluster: str):
-    """클러스터가 쓰는 스토리지 전체를 한데 모은 요약 조회
-
-    - 스토리지 종류별 전체 용량, 사용 용량, 사용률(%)
-    - 현재는 Ceph만 반환. 다른 스토리지 추가 시 같은 응답에 함께 나옴
-    """
-    return stub(
-        request,
-        "스토리지 통합 요약(백엔드 확장 지점)",
-        sources=("Mimir(ceph_*)",),
-        ref=f"{CEPH_PLAN} S10",
-    )
