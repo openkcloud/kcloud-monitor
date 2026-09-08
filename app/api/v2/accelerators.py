@@ -22,7 +22,6 @@ from app.schemas.accelerators import (
     AcceleratorPowerResponse,
     AcceleratorPowerTimeseriesResponse,
     AcceleratorSummaryData,
-    AcceleratorSummaryResponse,
     AcceleratorTemperatureResponse,
     AcceleratorTopologyData,
     AcceleratorTopologyResponse,
@@ -224,6 +223,25 @@ def _to_item(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional
     )
 
 
+def _summarize(acc_map: dict[str, dict], vendor: str) -> AcceleratorSummaryData:
+    """가속기 여러 장을 하나로 합친 집계값. 값이 없는 항목은 평균·합계에서 제외."""
+    utils = [e["utilization_percent"] for e in acc_map.values() if e.get("utilization_percent") is not None]
+    temps = [e["temperature_celsius"] for e in acc_map.values() if e.get("temperature_celsius") is not None]
+    powers = [e["power_watts"] for e in acc_map.values() if e.get("power_watts") is not None]
+
+    def avg(values: list[float]) -> Optional[float]:
+        return sum(values) / len(values) if values else None
+
+    return AcceleratorSummaryData(
+        count=len(acc_map),
+        vendor=vendor,
+        avg_utilization_percent=avg(utils),
+        avg_temperature_celsius=avg(temps),
+        avg_power_watts=avg(powers),
+        total_power_watts=sum(powers) if powers else None,
+    )
+
+
 async def _extra_metrics(vendor: str, cluster: str, node: Optional[str], acc_id: str) -> dict[str, float]:
     extras: dict[str, float] = {}
     for key in VENDOR_CONFIG[vendor].get("extra_keys", []):
@@ -235,6 +253,18 @@ async def _extra_metrics(vendor: str, cluster: str, node: Optional[str], acc_id:
                 extras[key] = val
                 break
     return extras
+
+
+async def _single_metric(
+    vendor: str, cluster: str, node: Optional[str], acc_id: str, key: str
+) -> tuple[Optional[float], list[str]]:
+    """가속기 1장의 단일 메트릭만 조회. 전체 수집(_collect_accelerators) 없이 1쿼리로 끝낸다."""
+    for item in await _instant_metric(vendor, cluster, key, acc_id=acc_id):
+        if not _match_node(item.get("metric", {}), node):
+            continue
+        value = _get_value(item)
+        return value, [] if value is not None else ["NO_DATA"]
+    return None, ["ACCELERATOR_NOT_FOUND"]
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +282,7 @@ async def list_accelerators(
     - 사용률(%), 온도(°C), 전력(W)
     - 사용 메모리, 총 메모리(bytes)
     - 정상 동작 여부
+    - total, summary : 전체 개수와 집계 (평균 사용률·온도·전력, 전력 합계)
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -260,51 +291,21 @@ async def list_accelerators(
     acc_map, warnings = await _collect_accelerators(cluster, vendor, node=node)
     items = [_to_item(acc_id, entry, vendor, cluster, node) for acc_id, entry in acc_map.items()]
 
+    # 집계는 페이지와 무관하게 전체 카드 기준 — slicing 전에 계산한다.
+    total = len(acc_map)
+    summary = _summarize(acc_map, vendor)
+
     offset = params.offset
     limit = params.limit
     items = items[offset : offset + limit]
 
     return AcceleratorListResponse(
-        status="success" if items else "partial", data=items, warnings=warnings
+        status="success" if items else "partial",
+        data=items,
+        total=total,
+        summary=summary,
+        warnings=warnings,
     )
-
-
-@router.get("/clusters/{cluster}/nodes/{node}/accelerators/summary", summary="가속기 집계 요약")
-async def get_accelerators_summary(
-    request: Request, cluster: str, node: str
-) -> AcceleratorSummaryResponse:
-    """노드에 장착된 가속기 전체를 하나로 합친 집계값 조회
-
-    - 가속기 개수, 벤더
-    - 평균 사용률(%), 평균 온도(°C), 평균 전력(W)
-    - 전력 합계(W)
-    """
-    vendor = await _get_vendor(cluster)
-    if vendor is None:
-        return AcceleratorSummaryResponse(
-            status="partial",
-            data=AcceleratorSummaryData(count=0),
-            warnings=["UNKNOWN_CLUSTER"],
-        )
-
-    acc_map, warnings = await _collect_accelerators(cluster, vendor, node=node)
-    utils = [e["utilization_percent"] for e in acc_map.values() if e.get("utilization_percent") is not None]
-    temps = [e["temperature_celsius"] for e in acc_map.values() if e.get("temperature_celsius") is not None]
-    powers = [e["power_watts"] for e in acc_map.values() if e.get("power_watts") is not None]
-
-    def avg(values: list[float]) -> Optional[float]:
-        return sum(values) / len(values) if values else None
-
-    data = AcceleratorSummaryData(
-        count=len(acc_map),
-        vendor=vendor,
-        avg_utilization_percent=avg(utils),
-        avg_temperature_celsius=avg(temps),
-        avg_power_watts=avg(powers),
-        total_power_watts=sum(powers) if powers else None,
-    )
-
-    return AcceleratorSummaryResponse(status="success" if acc_map else "partial", data=data, warnings=warnings)
 
 
 @router.get("/clusters/{cluster}/nodes/{node}/accelerators/topology", summary="가속기 인터커넥트 토폴로지")
@@ -418,14 +419,12 @@ async def get_accelerator_power(
             status="partial", acc_id=acc_id, data=PowerData(), warnings=["UNKNOWN_CLUSTER"]
         )
 
-    acc_map, warnings = await _collect_accelerators(cluster, vendor, node=node)
-    entry = acc_map.get(acc_id)
-    if entry is None:
-        warnings.append("ACCELERATOR_NOT_FOUND")
+    watts, warnings = await _single_metric(vendor, cluster, node, acc_id, "power")
+    if watts is None:
         return AcceleratorPowerResponse(status="partial", acc_id=acc_id, data=PowerData(), warnings=warnings)
 
     return AcceleratorPowerResponse(
-        status="success", acc_id=acc_id, data=PowerData(power_watts=entry.get("power_watts")), warnings=warnings
+        status="success", acc_id=acc_id, data=PowerData(power_watts=watts), warnings=warnings
     )
 
 
@@ -490,10 +489,8 @@ async def get_accelerator_temperature(
             status="partial", acc_id=acc_id, data=TemperatureData(), warnings=["UNKNOWN_CLUSTER"]
         )
 
-    acc_map, warnings = await _collect_accelerators(cluster, vendor, node=node)
-    entry = acc_map.get(acc_id)
-    if entry is None:
-        warnings.append("ACCELERATOR_NOT_FOUND")
+    celsius, warnings = await _single_metric(vendor, cluster, node, acc_id, "temp")
+    if celsius is None:
         return AcceleratorTemperatureResponse(
             status="partial", acc_id=acc_id, data=TemperatureData(), warnings=warnings
         )
@@ -501,7 +498,7 @@ async def get_accelerator_temperature(
     return AcceleratorTemperatureResponse(
         status="success",
         acc_id=acc_id,
-        data=TemperatureData(temperature_celsius=entry.get("temperature_celsius")),
+        data=TemperatureData(temperature_celsius=celsius),
         warnings=warnings,
     )
 

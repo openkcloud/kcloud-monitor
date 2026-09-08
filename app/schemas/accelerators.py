@@ -43,15 +43,6 @@ class AcceleratorItem(BaseModel):
     labels: dict[str, str] = {}
 
 
-class AcceleratorListResponse(BaseModel):
-    """GET .../accelerators 응답."""
-
-    status: str
-    data: list[AcceleratorItem] = []
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
-
-
 class AcceleratorSummaryData(BaseModel):
     """가속기 집계 요약 데이터."""
 
@@ -65,11 +56,15 @@ class AcceleratorSummaryData(BaseModel):
     total_power_watts: Optional[float] = Field(None, description="전력 합계 (와트 W)")
 
 
-class AcceleratorSummaryResponse(BaseModel):
-    """GET .../accelerators/summary 응답."""
+class AcceleratorListResponse(BaseModel):
+    """GET .../accelerators 응답."""
 
     status: str
-    data: AcceleratorSummaryData
+    data: list[AcceleratorItem] = []
+    total: int = Field(0, description="페이지와 무관한 전체 가속기 개수")
+    summary: Optional[AcceleratorSummaryData] = Field(
+        None, description="노드 가속기 집계. 개수, 벤더, 평균 사용률·온도·전력, 전력 합계"
+    )
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
