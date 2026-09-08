@@ -17,13 +17,9 @@ from app.schemas.openstack import (
     HypervisorDetailResponse,
     HypervisorItem,
     HypervisorListResponse,
-    OpenStackSummaryData,
-    OpenStackSummaryResponse,
     ProjectDetailResponse,
     ProjectItem,
     ProjectListResponse,
-    ProjectSummaryData,
-    ProjectSummaryResponse,
     VMAccelerator,
     VMDetailResponse,
     VMItem,
@@ -33,7 +29,6 @@ from app.schemas.openstack import (
     VMPowerData,
     VMPowerResponse,
     VMSummaryData,
-    VMSummaryResponse,
 )
 from app.services.openstack import OpenStackError, openstack_client, parse_accelerator_alias
 from app.services.vm_metrics import vm_attributed_power, vm_usage
@@ -55,11 +50,11 @@ async def _collect_vms() -> tuple[list[VMItem], list[str]]:
     items: list[VMItem] = []
     for s in servers:
         flavor_name = (s.get("flavor") or {}).get("original_name") or (s.get("flavor") or {}).get("id")
+        spec = flavor_specs.get(flavor_name) or {} if flavor_name else {}
         acc = None
-        if flavor_name and flavor_name in flavor_specs:
-            parsed = parse_accelerator_alias(flavor_specs[flavor_name])
-            if parsed:
-                acc = VMAccelerator(alias=parsed[0], count=parsed[1])
+        parsed = parse_accelerator_alias(spec.get("extra_specs") or {})
+        if parsed:
+            acc = VMAccelerator(alias=parsed[0], count=parsed[1])
         items.append(
             VMItem(
                 vm_id=s.get("id", ""),
@@ -67,6 +62,8 @@ async def _collect_vms() -> tuple[list[VMItem], list[str]]:
                 host=s.get("OS-EXT-SRV-ATTR:host"),
                 status=s.get("status"),
                 flavor=flavor_name,
+                vcpus=spec.get("vcpus"),
+                ram_mb=spec.get("ram"),
                 project_id=s.get("tenant_id"),
                 accelerator=acc,
             )
@@ -74,29 +71,36 @@ async def _collect_vms() -> tuple[list[VMItem], list[str]]:
     return items, []
 
 
-@router.get("/openstack/summary", summary="OpenStack 전체 현황",
-            response_model=OpenStackSummaryResponse)
-async def get_openstack_summary(request: Request):
-    """OpenStack 전체 규모를 한눈에 보는 요약 조회
-
-    - hypervisor_count : 물리 서버 개수
-    - vm_count : 전체 VM 개수
-    - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
-    """
-    vms, warnings = await _collect_vms()
-    hv_count = 0
-    if not warnings:
-        try:
-            hv_count = len(await openstack_client.hypervisors())
-        except OpenStackError:
-            warnings.append("UPSTREAM_ERROR")
-    data = OpenStackSummaryData(
-        hypervisor_count=hv_count,
-        vm_count=len(vms),
-        accelerator_vm_count=sum(1 for v in vms if v.accelerator is not None),
+def _vm_summary(vms: list[VMItem]) -> VMSummaryData:
+    """VM 목록을 상태별·프로젝트별로 세어 집계값으로 정리."""
+    by_status: dict[str, int] = {}
+    by_project: dict[str, int] = {}
+    accelerator_vm_count = 0
+    for v in vms:
+        if v.status:
+            by_status[v.status] = by_status.get(v.status, 0) + 1
+        if v.project_id:
+            by_project[v.project_id] = by_project.get(v.project_id, 0) + 1
+        if v.accelerator is not None:
+            accelerator_vm_count += 1
+    return VMSummaryData(
+        total=len(vms),
+        by_status=by_status,
+        accelerator_vm_count=accelerator_vm_count,
+        by_project=by_project,
     )
-    status = "partial" if warnings else "success"
-    return OpenStackSummaryResponse(status=status, data=data, warnings=warnings)
+
+
+def _project_item(project_id: str, name: str, project_vms: list[VMItem]) -> ProjectItem:
+    """프로젝트 하나의 VM 개수와 flavor 기준 자원 합계를 담은 항목."""
+    return ProjectItem(
+        project_id=project_id,
+        name=name,
+        vm_count=len(project_vms),
+        accelerator_vm_count=sum(1 for v in project_vms if v.accelerator is not None),
+        total_vcpus=sum(v.vcpus or 0 for v in project_vms),
+        total_ram_mb=sum(v.ram_mb or 0 for v in project_vms),
+    )
 
 
 @router.get("/openstack/hypervisors", summary="하이퍼바이저 목록",
@@ -145,13 +149,15 @@ async def list_hypervisor_vms(request: Request,host: str):
     - VM ID, 이름, 상태(ACTIVE | SHUTOFF 등)
     - flavor 이름, 소속 프로젝트
     - 넘겨받은 가속기 종류와 개수
+    - summary : 이 서버에 올라간 VM 집계 (total, by_status, accelerator_vm_count, by_project)
     """
     vms, warnings = await _collect_vms()
     filtered = [v for v in vms if v.host == host]
     if warnings:
         return VMListResponse(status="partial", data=[], warnings=warnings)
     return VMListResponse(status="success" if filtered else "partial",
-                          data=filtered, warnings=[] if filtered else ["NO_DATA"])
+                          data=filtered, summary=_vm_summary(filtered),
+                          warnings=[] if filtered else ["NO_DATA"])
 
 
 @router.get("/openstack/vms", summary="VM 목록", response_model=VMListResponse)
@@ -162,42 +168,17 @@ async def list_openstack_vms(request: Request,params: WorkloadFilterParams = Dep
     - 이 VM이 올라간 물리 서버
     - flavor 이름, 소속 프로젝트
     - 넘겨받은 가속기 종류와 개수 (없으면 null)
+    - summary : 전체 VM 집계 (total, by_status, accelerator_vm_count, by_project). 검색·페이지와 무관한 전체 기준
+    - total 은 검색에 걸린 개수, summary.total 은 전체 개수
     """
     vms, warnings = await _collect_vms()
+    summary = _vm_summary(vms)
+    if params.search:
+        q = params.search.lower()
+        vms = [v for v in vms if q in v.name.lower()]
+    page = vms[params.offset : params.offset + params.limit]
     status = "partial" if warnings else "success"
-    return VMListResponse(status=status, data=vms, warnings=warnings)
-
-
-@router.get("/openstack/vms/summary", summary="VM 집계 요약",
-            response_model=VMSummaryResponse)
-async def get_openstack_vms_summary(request: Request):
-    """VM 전체를 여러 기준으로 세어본 집계값 조회
-
-    - total : 전체 VM 개수
-    - by_status : 상태별(ACTIVE, SHUTOFF 등) VM 개수
-    - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
-    - by_project : 프로젝트별 VM 개수
-    """
-    vms, warnings = await _collect_vms()
-    by_status: dict[str, int] = {}
-    by_project: dict[str, int] = {}
-    accelerator_vm_count = 0
-    for v in vms:
-        if v.status:
-            by_status[v.status] = by_status.get(v.status, 0) + 1
-        if v.project_id:
-            by_project[v.project_id] = by_project.get(v.project_id, 0) + 1
-        if v.accelerator is not None:
-            accelerator_vm_count += 1
-
-    data = VMSummaryData(
-        total=len(vms),
-        by_status=by_status,
-        accelerator_vm_count=accelerator_vm_count,
-        by_project=by_project,
-    )
-    status = "partial" if warnings else "success"
-    return VMSummaryResponse(status=status, data=data, warnings=warnings)
+    return VMListResponse(status=status, data=page, summary=summary, warnings=warnings)
 
 
 @router.get("/openstack/vms/{vm_id}", summary="VM 상세", response_model=VMDetailResponse)
@@ -220,17 +201,18 @@ async def get_openstack_vm(request: Request,vm_id: str):
     return VMDetailResponse(status="success", data=match, warnings=[])
 
 
-# ── 실구현: Keystone 프로젝트 / 하이퍼바이저 상세 / VM 집계 ──────────────────
+# ── 실구현: Keystone 프로젝트 / 하이퍼바이저 상세 ────────────────────────────
 
 @router.get("/openstack/projects", summary="프로젝트 목록",
             response_model=ProjectListResponse)
-async def list_openstack_projects(request: Request,params: WorkloadFilterParams = Depends()):
+async def list_openstack_projects(request: Request, params: WorkloadFilterParams = Depends()):
     """자원을 나눠 쓰는 단위인 프로젝트 목록 조회
 
     - project_id : 프로젝트 ID
     - name : 프로젝트 이름
     - vm_count : 소속 VM 개수
     - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
+    - total_vcpus, total_ram_mb : 소속 VM의 flavor 기준 vCPU 합계와 메모리 합계(MB)
     """
     if not openstack_client.configured:
         return ProjectListResponse(status="partial", data=[], warnings=["NOT_CONFIGURED"])
@@ -241,22 +223,13 @@ async def list_openstack_projects(request: Request,params: WorkloadFilterParams 
         return ProjectListResponse(status="partial", data=[], warnings=[code])
 
     vms, vm_warnings = await _collect_vms()
-    vm_count_by_project: dict[str, int] = {}
-    acc_count_by_project: dict[str, int] = {}
+    vms_by_project: dict[str, list[VMItem]] = {}
     for v in vms:
-        if not v.project_id:
-            continue
-        vm_count_by_project[v.project_id] = vm_count_by_project.get(v.project_id, 0) + 1
-        if v.accelerator is not None:
-            acc_count_by_project[v.project_id] = acc_count_by_project.get(v.project_id, 0) + 1
+        if v.project_id:
+            vms_by_project.setdefault(v.project_id, []).append(v)
 
     items = [
-        ProjectItem(
-            project_id=pid,
-            name=name,
-            vm_count=vm_count_by_project.get(pid, 0),
-            accelerator_vm_count=acc_count_by_project.get(pid, 0),
-        )
+        _project_item(pid, name, vms_by_project.get(pid, []))
         for pid, name in projects.items()
     ]
     if params.search:
@@ -269,13 +242,14 @@ async def list_openstack_projects(request: Request,params: WorkloadFilterParams 
 
 @router.get("/openstack/projects/{project_id}", summary="프로젝트 상세",
             response_model=ProjectDetailResponse)
-async def get_openstack_project(request: Request,project_id: str):
+async def get_openstack_project(request: Request, project_id: str):
     """프로젝트 한 개의 상세 조회
 
     - project_id : 프로젝트 ID
     - name : 프로젝트 이름
     - vm_count : 소속 VM 개수
     - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
+    - total_vcpus, total_ram_mb : 소속 VM의 flavor 기준 vCPU 합계와 메모리 합계(MB)
     """
     if not openstack_client.configured:
         return ProjectDetailResponse(status="partial", data=None, warnings=["NOT_CONFIGURED"])
@@ -291,48 +265,9 @@ async def get_openstack_project(request: Request,project_id: str):
 
     vms, vm_warnings = await _collect_vms()
     project_vms = [v for v in vms if v.project_id == project_id]
-    data = ProjectItem(
-        project_id=project_id,
-        name=name,
-        vm_count=len(project_vms),
-        accelerator_vm_count=sum(1 for v in project_vms if v.accelerator is not None),
-    )
+    data = _project_item(project_id, name, project_vms)
     status = "partial" if vm_warnings else "success"
     return ProjectDetailResponse(status=status, data=data, warnings=vm_warnings)
-
-
-@router.get("/openstack/projects/{project_id}/summary", summary="프로젝트 자원 요약",
-            response_model=ProjectSummaryResponse)
-async def get_openstack_project_summary(request: Request,project_id: str):
-    """프로젝트 한 개가 쓰는 자원 요약 조회
-
-    - project_id, name : 프로젝트 ID와 이름
-    - vm_count : 소속 VM 개수
-    - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
-    - total_vcpus, total_ram_mb : vCPU와 메모리 합계. flavor 상세를 가져올 수 없어 현재 null
-    """
-    if not openstack_client.configured:
-        return ProjectSummaryResponse(status="partial", data=None, warnings=["NOT_CONFIGURED"])
-    try:
-        projects = await openstack_client.keystone_projects()
-    except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
-        return ProjectSummaryResponse(status="partial", data=None, warnings=[code])
-
-    name = projects.get(project_id)
-    if name is None:
-        return ProjectSummaryResponse(status="partial", data=None, warnings=["NOT_FOUND"])
-
-    vms, vm_warnings = await _collect_vms()
-    project_vms = [v for v in vms if v.project_id == project_id]
-    data = ProjectSummaryData(
-        project_id=project_id,
-        name=name,
-        vm_count=len(project_vms),
-        accelerator_vm_count=sum(1 for v in project_vms if v.accelerator is not None),
-    )
-    status = "partial" if vm_warnings else "success"
-    return ProjectSummaryResponse(status=status, data=data, warnings=vm_warnings)
 
 
 @router.get("/openstack/hypervisors/{host}", summary="하이퍼바이저 상세",

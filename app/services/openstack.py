@@ -186,13 +186,18 @@ class OpenStackClient:
         return data.get("servers", [])
 
     async def flavors(self) -> dict[str, dict]:
-        """flavor 이름 → extra_specs 매핑 (pci_passthrough:alias 로 가속기 종류·개수 판별)."""
+        """flavor 이름 → flavor 상세 매핑.
+
+        각 값은 Nova /flavors/detail 원본이라 vcpus·ram(MB)·disk(GB)와
+        extra_specs를 모두 담는다. extra_specs의 pci_passthrough:alias로
+        가속기 종류·개수를 판별한다.
+        """
         data = await self._nova_get("/flavors/detail")
         out: dict[str, dict] = {}
         for f in data.get("flavors", []):
             name = f.get("name")
             if name:
-                out[name] = f.get("extra_specs", {}) or {}
+                out[name] = f
         return out
 
     async def keystone_projects(self) -> dict[str, str]:
@@ -252,7 +257,8 @@ class OpenStackClient:
         out: dict[str, str] = {}
         for s in servers:
             flavor_name = (s.get("flavor") or {}).get("original_name") or (s.get("flavor") or {}).get("id")
-            specs = flavor_specs.get(flavor_name) if flavor_name else None
+            flavor = flavor_specs.get(flavor_name) if flavor_name else None
+            specs = (flavor or {}).get("extra_specs") or {}
             if not specs:
                 continue
             parsed = parse_accelerator_alias(specs)

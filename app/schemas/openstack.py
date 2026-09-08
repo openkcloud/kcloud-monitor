@@ -38,23 +38,19 @@ class VMItem(BaseModel):
     host: Optional[str] = Field(None, description="배치된 물리 하이퍼바이저 (OS-EXT-SRV-ATTR:host)")
     status: Optional[str] = Field(None, description="ACTIVE/SHUTOFF 등")
     flavor: Optional[str] = Field(None, description="flavor 이름")
+    vcpus: Optional[int] = Field(None, description="flavor에 정의된 vCPU 수")
+    ram_mb: Optional[int] = Field(None, description="flavor에 정의된 메모리 (MB)")
     project_id: Optional[str] = Field(None, description="소속 프로젝트 (과금 단위)")
     accelerator: Optional[VMAccelerator] = Field(None, description="passthrough 가속기 (없으면 null)")
 
 
-class OpenStackSummaryData(BaseModel):
-    """OpenStack 전체 현황 집계."""
+class VMSummaryData(BaseModel):
+    """VM 집계 요약."""
 
-    hypervisor_count: int = Field(0, description="물리 하이퍼바이저 수")
-    vm_count: int = Field(0, description="전체 VM 수")
+    total: int = Field(0, description="전체 VM 수")
+    by_status: dict[str, int] = Field({}, description="상태별 VM 수 (ACTIVE/SHUTOFF 등)")
     accelerator_vm_count: int = Field(0, description="가속기 passthrough VM 수")
-
-
-class OpenStackSummaryResponse(BaseModel):
-    status: str
-    data: Optional[OpenStackSummaryData] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    by_project: dict[str, int] = Field({}, description="프로젝트(uuid)별 VM 수")
 
 
 class HypervisorListResponse(BaseModel):
@@ -67,6 +63,8 @@ class HypervisorListResponse(BaseModel):
 class VMListResponse(BaseModel):
     status: str
     data: list[VMItem] = []
+    summary: VMSummaryData = Field(default_factory=VMSummaryData,
+                                   description="전체 VM 집계. 검색·페이지와 무관한 전체 기준")
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
@@ -85,6 +83,8 @@ class ProjectItem(BaseModel):
     name: str = Field(..., description="프로젝트 이름")
     vm_count: int = Field(0, description="소속 VM 수")
     accelerator_vm_count: int = Field(0, description="가속기 passthrough VM 수")
+    total_vcpus: int = Field(0, description="소속 VM의 flavor 기준 vCPU 합계")
+    total_ram_mb: int = Field(0, description="소속 VM의 flavor 기준 메모리 합계 (MB)")
 
 
 class ProjectListResponse(BaseModel):
@@ -97,24 +97,6 @@ class ProjectListResponse(BaseModel):
 class ProjectDetailResponse(BaseModel):
     status: str
     data: Optional[ProjectItem] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
-
-
-class ProjectSummaryData(BaseModel):
-    """프로젝트가 쓰는 자원 요약. flavor 상세를 가져올 수 없어 VM 수 위주로 집계."""
-
-    project_id: str = Field(..., description="Keystone 프로젝트 uuid")
-    name: str = Field(..., description="프로젝트 이름")
-    vm_count: int = Field(0, description="소속 VM 수")
-    accelerator_vm_count: int = Field(0, description="가속기 passthrough VM 수")
-    total_vcpus: Optional[int] = Field(None, description="flavor 상세 미노출로 현재 미집계")
-    total_ram_mb: Optional[int] = Field(None, description="flavor 상세 미노출로 현재 미집계")
-
-
-class ProjectSummaryResponse(BaseModel):
-    status: str
-    data: Optional[ProjectSummaryData] = None
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
@@ -141,22 +123,6 @@ class HypervisorDetailData(BaseModel):
 class HypervisorDetailResponse(BaseModel):
     status: str
     data: Optional[HypervisorDetailData] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
-
-
-class VMSummaryData(BaseModel):
-    """VM 집계 요약."""
-
-    total: int = Field(0, description="전체 VM 수")
-    by_status: dict[str, int] = Field({}, description="상태별 VM 수 (ACTIVE/SHUTOFF 등)")
-    accelerator_vm_count: int = Field(0, description="가속기 passthrough VM 수")
-    by_project: dict[str, int] = Field({}, description="프로젝트(uuid)별 VM 수")
-
-
-class VMSummaryResponse(BaseModel):
-    status: str
-    data: Optional[VMSummaryData] = None
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
