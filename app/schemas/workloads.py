@@ -193,7 +193,7 @@ class NamespaceListResponse(BaseModel):
     warnings: list[str] = []
 
 
-class NamespaceSummaryData(BaseModel):
+class NamespaceDetailData(BaseModel):
     namespace: str
     cluster: str
     pod_count: int = 0
@@ -204,9 +204,9 @@ class NamespaceSummaryData(BaseModel):
     memory_requests_bytes: Optional[float] = Field(None, description="메모리 요청량 (bytes)")
 
 
-class NamespaceSummaryResponse(BaseModel):
+class NamespaceDetailResponse(BaseModel):
     status: str
-    data: NamespaceSummaryData
+    data: NamespaceDetailData
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
@@ -226,22 +226,18 @@ class ServiceItem(BaseModel):
     memory_usage_bytes: Optional[float] = Field(None, description="메모리 사용량 (bytes)")
 
 
-class ServiceListResponse(BaseModel):
-    status: str
-    services: list[ServiceItem] = []
-    total: int = 0
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
-
-
 class ServiceSummaryData(BaseModel):
     total_services: int = 0
     cluster_distribution: dict[str, int] = {}
 
 
-class ServiceSummaryResponse(BaseModel):
+class ServiceListResponse(BaseModel):
     status: str
-    data: ServiceSummaryData
+    services: list[ServiceItem] = []
+    total: int = 0
+    summary: ServiceSummaryData = Field(
+        default_factory=ServiceSummaryData, description="전체 서비스 집계. 검색·페이지와 무관한 전체 기준"
+    )
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 

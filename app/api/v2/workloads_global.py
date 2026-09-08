@@ -33,7 +33,6 @@ from app.schemas.workloads import (
     ServicePowerData,
     ServicePowerResponse,
     ServiceSummaryData,
-    ServiceSummaryResponse,
 )
 from app.services.cluster_discovery import cluster_discovery
 
@@ -277,6 +276,8 @@ async def list_services_global(
     - pod_count, running_pod_count : 소속 Pod 개수, 실행 중 개수
     - cpu_usage, memory_usage_bytes : 소속 Pod를 합친 CPU와 메모리 사용량
     - total : 전체 서비스 개수
+    - summary : 전체 서비스 집계 (total_services, cluster_distribution). 검색·페이지와 무관한 전체 기준
+    - total 은 검색에 걸린 개수, summary.total_services 는 전체 개수
 
     같은 서비스 이름을 가진 Pod를 하나로 묶어서 반환. 서비스 이름이 없는 Pod는
     Pod 이름을 서비스 이름으로 사용.
@@ -294,6 +295,11 @@ async def list_services_global(
     groups = _group_by_service(all_pods)
     items = [_build_service_item(k, v) for k, v in groups.items()]
 
+    cluster_dist: dict[str, int] = {}
+    for item in items:
+        cluster_dist[item.cluster] = cluster_dist.get(item.cluster, 0) + 1
+    summary = ServiceSummaryData(total_services=len(items), cluster_distribution=cluster_dist)
+
     if params.search:
         q = params.search.lower()
         items = [i for i in items if q in i.service_name.lower()]
@@ -303,38 +309,7 @@ async def list_services_global(
     warnings: list[str] = [] if items else ["NO_DATA"]
     return ServiceListResponse(
         status="success" if items else "partial",
-        services=page, total=total, warnings=warnings,
-    )
-
-
-@router.get("/workloads/services/summary", summary="전역 서비스 집계", response_model=ServiceSummaryResponse)
-async def get_services_summary_global(request: Request):
-    """모든 클러스터의 서비스 개수 집계 조회
-
-    - total_services : 전체 서비스 개수
-    - cluster_distribution : 클러스터별 서비스 개수
-    """
-    names = await _resolve_clusters(None)
-    inner = _all_params()
-    results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
-
-    all_pods = []
-    for pods, _, _ in results:
-        all_pods.extend(pods)
-
-    groups = _group_by_service(all_pods)
-
-    cluster_dist: dict[str, int] = {}
-    for cluster_name, _, _ in groups:
-        cluster_dist[cluster_name] = cluster_dist.get(cluster_name, 0) + 1
-
-    data = ServiceSummaryData(
-        total_services=len(groups), cluster_distribution=cluster_dist,
-    )
-    warnings: list[str] = [] if groups else ["NO_DATA"]
-    return ServiceSummaryResponse(
-        status="success" if groups else "partial",
-        data=data, warnings=warnings,
+        services=page, total=total, summary=summary, warnings=warnings,
     )
 
 

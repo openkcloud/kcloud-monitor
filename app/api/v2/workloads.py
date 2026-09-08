@@ -18,8 +18,8 @@ from app.schemas.workloads import (
     ContainerMetricsResponse,
     NamespaceItem,
     NamespaceListResponse,
-    NamespaceSummaryData,
-    NamespaceSummaryResponse,
+    NamespaceDetailData,
+    NamespaceDetailResponse,
     PodAcceleratorItem,
     PodAcceleratorResponse,
     PodDetailData,
@@ -664,7 +664,7 @@ async def fetch_namespaces(
 
 async def fetch_namespace_summary(
     cluster: str, namespace: str,
-) -> tuple[NamespaceSummaryData, list[str]]:
+) -> tuple[NamespaceDetailData, list[str]]:
     c = _cl(cluster)
     label = f'cluster="{c}",namespace="{_esc(namespace)}"'
 
@@ -688,7 +688,7 @@ async def fetch_namespace_summary(
     pc = _first_value(pod_cnt)
     cc = _first_value(container_cnt)
 
-    data = NamespaceSummaryData(
+    data = NamespaceDetailData(
         namespace=namespace,
         cluster=cluster,
         pod_count=int(pc) if pc is not None else 0,
@@ -914,12 +914,12 @@ async def list_namespaces(
 
 
 @router.get(
-    "/clusters/{cluster}/namespaces/{namespace}/summary",
-    summary="네임스페이스 요약",
-    response_model=NamespaceSummaryResponse,
+    "/clusters/{cluster}/namespaces/{namespace}",
+    summary="네임스페이스 상세",
+    response_model=NamespaceDetailResponse,
 )
-async def get_namespace_summary(request: Request, cluster: str, namespace: str):
-    """네임스페이스 한 개가 쓰는 자원 요약 조회
+async def get_namespace(request: Request, cluster: str, namespace: str):
+    """네임스페이스 한 개가 쓰는 자원 상세 조회
 
     - 네임스페이스 이름, 소속 클러스터
     - pod_count, container_count : Pod 개수, 컨테이너 개수
@@ -928,7 +928,7 @@ async def get_namespace_summary(request: Request, cluster: str, namespace: str):
     """
     data, warnings = await fetch_namespace_summary(cluster, namespace)
     status = "success" if not warnings else "partial"
-    return NamespaceSummaryResponse(status=status, data=data, warnings=warnings)
+    return NamespaceDetailResponse(status=status, data=data, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
