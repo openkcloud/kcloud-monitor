@@ -44,16 +44,6 @@ class NodeSummaryItem(BaseModel):
     )
 
 
-class NodeListResponse(BaseModel):
-    """GET /clusters/{cluster}/nodes 응답."""
-
-    status: str
-    nodes: list[NodeSummaryItem]
-    total: int
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
-
-
 class NodesSummaryData(BaseModel):
     """노드 집계 데이터."""
 
@@ -64,11 +54,15 @@ class NodesSummaryData(BaseModel):
     memory_usage_percent: Optional[float] = Field(None, description="메모리 사용률 (%)")
 
 
-class NodesSummaryResponse(BaseModel):
-    """GET /clusters/{cluster}/nodes/summary 응답."""
+class NodeListResponse(BaseModel):
+    """GET /clusters/{cluster}/nodes 응답."""
 
     status: str
-    data: NodesSummaryData
+    nodes: list[NodeSummaryItem]
+    total: int
+    summary: Optional[NodesSummaryData] = Field(
+        None, description="클러스터 전체 노드 집계. ready/total 개수와 메모리 합계"
+    )
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 

@@ -45,7 +45,6 @@ from app.schemas.nodes import (
     NodeStorageResponse,
     NodeSummaryItem,
     NodesSummaryData,
-    NodesSummaryResponse,
 )
 from app.services.cluster_discovery import ClusterInfo, cluster_discovery, cluster_label
 from app.services.prometheus import prometheus_client
@@ -227,6 +226,7 @@ async def list_nodes(
     - OS 이미지, kubelet 버전
     - 이 노드의 가속기 카드 수, 전력(W)
     - total : 전체 노드 개수
+    - summary : 전체 노드 집계 (ready_count, total_count, 메모리 합계·사용률)
 
     노드 이름은 하위 경로(상세, CPU, 메모리 등)의 식별자로 그대로 사용 가능.
     관리 클러스터는 Kubernetes에 등록된 노드가 기준이고, 가속기 클러스터는 가속기 메트릭에
@@ -236,10 +236,18 @@ async def list_nodes(
     """
     info = await _require_cluster(cluster)
     phys_nodes = await _phys_node_set()
+    c = _cl(cluster)
+
+    # summary 블록의 메모리 합계. 클러스터 전체 sum 이라 노드 필터·페이지와 무관하다.
+    total_mem = _first_value(
+        await prometheus_client.instant(f'sum(node_memory_MemTotal_bytes{{cluster="{c}"}})')
+    )
+    avail_mem = _first_value(
+        await prometheus_client.instant(f'sum(node_memory_MemAvailable_bytes{{cluster="{c}"}})')
+    )
 
     nodes: list[NodeSummaryItem]
     if info.type == "management":
-        c = _cl(cluster)
         info_results = await prometheus_client.instant(f'kube_node_info{{cluster="{c}"}}')
         role_results = await prometheus_client.instant(f'kube_node_role{{cluster="{c}"}}')
         ready_results = await prometheus_client.instant(
@@ -316,6 +324,16 @@ async def list_nodes(
             for host, is_phys, accel_count, power in host_rows
         ]
 
+    # summary는 필터·페이지와 무관한 전체 노드 기준 — 필터 적용 전에 센다.
+    mem_used = (total_mem - avail_mem) if total_mem is not None and avail_mem is not None else None
+    summary = NodesSummaryData(
+        ready_count=sum(1 for n in nodes if n.up),
+        total_count=len(nodes),
+        memory_total_bytes=total_mem,
+        memory_used_bytes=mem_used,
+        memory_usage_percent=(mem_used / total_mem * 100) if mem_used is not None and total_mem else None,
+    )
+
     if node_type:
         nodes = [n for n in nodes if n.node_type == node_type]
 
@@ -338,58 +356,9 @@ async def list_nodes(
         status="success" if total else "partial",
         nodes=page,
         total=total,
+        summary=summary,
         warnings=warnings,
     )
-
-
-@router.get("/clusters/{cluster}/nodes/summary", summary="노드 집계 요약", response_model=NodesSummaryResponse)
-async def get_nodes_summary(request: Request, cluster: str):
-    """클러스터 노드 전체를 하나로 합친 집계값 조회
-
-    - ready_count : 정상 노드 수
-    - total_count : 전체 노드 수
-    - memory_total_bytes : 전체 메모리 합계(bytes)
-    - memory_used_bytes : 사용 메모리 합계(bytes)
-    - memory_usage_percent : 메모리 사용률(%)
-
-    Kubernetes에 등록되지 않은 가속기 전용 클러스터는 노드 수가 0으로 나옴.
-    """
-    await _require_cluster(cluster)
-    c = _cl(cluster)
-    info_results = await prometheus_client.instant(f'kube_node_info{{cluster="{c}"}}')
-    ready_results = await prometheus_client.instant(
-        f'kube_node_status_condition{{cluster="{c}",condition="Ready",status="true"}}'
-    )
-    total_mem_results = await prometheus_client.instant(f'sum(node_memory_MemTotal_bytes{{cluster="{c}"}})')
-    avail_mem_results = await prometheus_client.instant(f'sum(node_memory_MemAvailable_bytes{{cluster="{c}"}})')
-
-    node_names: set[str] = set()
-    for item in info_results:
-        n = item.get("metric", {}).get("node")
-        if n:
-            node_names.add(n)
-
-    ready_count = 0
-    for item in ready_results:
-        val = _first_value([item]) or 0.0
-        if val == 1.0:
-            ready_count += 1
-
-    mem_total = _first_value(total_mem_results)
-    mem_avail = _first_value(avail_mem_results)
-    mem_used = (mem_total - mem_avail) if mem_total is not None and mem_avail is not None else None
-    mem_pct = (mem_used / mem_total * 100) if mem_used is not None and mem_total else None
-
-    warnings: list[str] = [] if info_results else ["NO_DATA"]
-
-    data = NodesSummaryData(
-        ready_count=ready_count,
-        total_count=len(node_names),
-        memory_total_bytes=mem_total,
-        memory_used_bytes=mem_used,
-        memory_usage_percent=mem_pct,
-    )
-    return NodesSummaryResponse(status="success" if info_results else "partial", data=data, warnings=warnings)
 
 
 @router.get("/clusters/{cluster}/nodes/{node}", summary="노드 상세", response_model=NodeDetailResponse)
@@ -734,7 +703,7 @@ async def get_node_power(request: Request, cluster: str, node: str):
 
     BMC가 전원공급장치를 읽은 벽면 전력. CPU·메모리뿐 아니라 가속기·팬·디스크·PSU 손실까지
     포함하며, 노드 간 비교에 쓸 수 있는 단일 기준. CPU/메모리 계층만 따로 보려면
-    클러스터 요약(`/clusters/{cluster}/summary`)의 `power.breakdown.cpu_watts` 사용.
+    클러스터 요약(`/clusters/{cluster}/resource`)의 `power.breakdown.cpu_watts` 사용.
     BMC가 없는 가상 노드는 NO_POWER_DATA 경고와 함께 빈 데이터 반환.
     """
     await _require_cluster(cluster)
