@@ -9,7 +9,7 @@ FastAPI response_model을 적용하지 않는다(json 포맷만 아래 모델을
 (예: DCGM_FI_DEV_POWER_USAGE), 별칭이 아닌 실제 메트릭명을 키로 사용해 임의 PromQL
 주입을 차단한다.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -43,11 +43,8 @@ EXPORT_METRIC_ALLOWLIST: dict[str, str] = {
 }
 
 
-_KST = timezone(timedelta(hours=9))
-
-
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

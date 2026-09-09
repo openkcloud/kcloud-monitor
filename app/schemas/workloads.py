@@ -3,17 +3,14 @@
 
 Pod / Container / Namespace / Service 응답 모델.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-_KST = timezone(timedelta(hours=9))
-
-
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

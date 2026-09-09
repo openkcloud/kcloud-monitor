@@ -6,7 +6,7 @@
   - observed_at: ISO 8601 수집 시각
   - warnings[]: STALE_DATA, PARTIAL_SOURCE, ESTIMATED_POWER 등 (정상 시 빈 목록)
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -47,11 +47,9 @@ METRIC_ALLOWLIST: dict[str, str] = {
 # 공통 헬퍼
 # ---------------------------------------------------------------------------
 
-_KST = timezone(timedelta(hours=9))
-
 
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ v2 스캐폴드 공통 스텁 응답 빌더.
 실제 구현 시: 핸들러 본문을 crud/서비스 호출로 교체하고 이 모듈 의존을 제거한다.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from fastapi import Request
@@ -19,11 +19,8 @@ from fastapi.responses import StreamingResponse
 DESIGN_DOC = "docs/temp/04-reference/sample_api.md"
 
 
-_KST = timezone(timedelta(hours=9))
-
-
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 def stub(

@@ -6,17 +6,14 @@ Nodes API v2 Pydantic 스키마.
   - observed_at: ISO 8601 수집 시각
   - warnings[]: NO_DATA, NO_POWER_DATA, IPMI_NOT_AVAILABLE 등 (정상 시 빈 목록)
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-_KST = timezone(timedelta(hours=9))
-
-
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 class NodeSummaryItem(BaseModel):

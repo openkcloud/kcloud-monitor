@@ -7,17 +7,14 @@
   - warnings[]: NO_DATA, ACCELERATOR_NOT_FOUND, PARTITION_DATA_NOT_AVAILABLE 등
 메모리는 벤더별 원본 단위(L40S=MiB, Furiosa/Rebellions=bytes)를 bytes로 통일해 반환한다.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-_KST = timezone(timedelta(hours=9))
-
-
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 class AcceleratorItem(BaseModel):

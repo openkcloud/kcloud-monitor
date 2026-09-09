@@ -5,16 +5,14 @@
   - observed_at, warnings[] 동일
   - 로그 응답은 data[] + pagination 구조 (sample_api §11)
 """
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-_KST = timezone(timedelta(hours=9))
-
 
 def _now() -> str:
-    return datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------
