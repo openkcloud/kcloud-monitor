@@ -25,19 +25,19 @@ from pydantic import BaseModel, Field
 METRIC_ALLOWLIST: dict[str, str] = {
     # 온도 (Temperature)
     "gpu_temperature": 'DCGM_FI_DEV_GPU_TEMP{cluster="l40s"}',
-    "furiosa_temperature": 'furiosa_npu_hw_temperature{label="peak",cluster="k8s-furiosa-rngd"}',
+    "furiosa_temperature": 'furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"}',
     # 사용률 (Utilization)
     "gpu_utilization": 'DCGM_FI_DEV_GPU_UTIL{cluster="l40s"}',
     "gpu_utilization_prof": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster="l40s"} * 100',
-    "furiosa_utilization": 'furiosa_npu_core_utilization{cluster="k8s-furiosa-rngd"}',
+    "furiosa_utilization": 'furiosa_npu_core_utilization{cluster=~"furiosa.*"}',
     "rebellions_utilization": 'RBLN_DEVICE_STATUS:UTILIZATION{cluster="rebellions"}',
     # 메모리 (Memory). 단위 주의: L40S=MiB, NPU=bytes
     "gpu_memory_used_mib": 'DCGM_FI_DEV_FB_USED{cluster="l40s"}',
     "gpu_memory_free_mib": 'DCGM_FI_DEV_FB_FREE{cluster="l40s"}',
-    "furiosa_memory_used_bytes": 'furiosa_npu_dram_usage{cluster="k8s-furiosa-rngd"}',
+    "furiosa_memory_used_bytes": 'furiosa_npu_dram_usage{cluster=~"furiosa.*"}',
     "rebellions_memory_used_bytes": 'RBLN_DEVICE_STATUS:DRAM_USED{cluster="rebellions"}',
     # 헬스 (Health). 방향 주의!
-    "furiosa_alive": 'furiosa_npu_alive{cluster="k8s-furiosa-rngd"}',          # 1=정상
+    "furiosa_alive": 'furiosa_npu_alive{cluster=~"furiosa.*"}',          # 1=정상
     "rebellions_health": 'RBLN_DEVICE_STATUS:HEALTH{cluster="rebellions"}',    # 0=정상!
     "gpu_xid_errors": 'changes(DCGM_FI_DEV_XID_ERRORS{cluster="l40s"}[10m])', # 0=정상
 }

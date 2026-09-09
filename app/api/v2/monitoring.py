@@ -62,7 +62,7 @@ async def get_overview(request: Request):
 
     # 1. up 쿼리로 클러스터별 인스턴스 수 집계
     up_results = await prometheus_client.instant(
-        'up{cluster=~"l40s|rebellions|k8s-furiosa-rngd"}'
+        'up{cluster=~"l40s|rebellions|furiosa.*"}'
     )
 
     # 클러스터별 up/total 집계 (가속기 target 기준 — accelerator_count/healthy_count 근거)
@@ -141,7 +141,7 @@ async def get_overview(request: Request):
 
     # 4. Furiosa 평균 온도
     furiosa_temp_results = await prometheus_client.instant(
-        'avg(furiosa_npu_hw_temperature{label="peak",cluster="k8s-furiosa-rngd"})'
+        'avg(furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"})'
     )
     furiosa_avg_temp: Optional[float] = None
     if furiosa_temp_results:
@@ -174,7 +174,7 @@ async def get_overview(request: Request):
         # 키는 클러스터 라벨값으로 통일(시스템 전체 구분 키가 cluster 라벨) — 벤더명 혼용 제거
         avg_temperature={
             "l40s": l40s_avg_temp,
-            "k8s-furiosa-rngd": furiosa_avg_temp,
+            "furiosa": furiosa_avg_temp,  # 퓨리오사 클러스터 전체 평균(furiosa, furiosa-1348 ...)
             "rebellions": rebellions_avg_temp,  # ×1000 보정값 (REBELLIONS_SCALE_CORRECTED_X1000)
         },
     )
@@ -397,7 +397,7 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
     )
     # Furiosa NPU 온도
     furiosa_results = await prometheus_client.range_query(
-        'furiosa_npu_hw_temperature{label="peak",cluster="k8s-furiosa-rngd"}', start, end, step
+        'furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"}', start, end, step
     )
 
     series: list[TemperatureSeriesItem] = []
@@ -425,7 +425,7 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
             series.append(
                 TemperatureSeriesItem(
                     vendor="furiosa",
-                    cluster="k8s-furiosa-rngd",
+                    cluster=item.get("metric", {}).get("cluster", "furiosa"),
                     metric_labels=item.get("metric", {}),
                     values=[
                         (datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat(), str(v[1]))
