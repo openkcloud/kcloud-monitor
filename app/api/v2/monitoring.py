@@ -312,10 +312,26 @@ async def query_metrics(
     )
 
 
+def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -> str:
+    """by 라벨이 있으면 라벨별로 묶고 step 구간을 aggregation으로 요약하는 PromQL로 감싼다.
+
+    range_query는 step 시점의 순간값만 돌려주므로, 히트맵처럼 구간 대표값이 필요하면
+    `<agg>_over_time(...[step:])` 서브쿼리로 구간 전체를 요약해야 스파이크가 빠지지 않는다.
+    """
+    if not by:
+        return query
+    return f"{aggregation} by ({by}) ({aggregation}_over_time(({query})[{step}:]))"
+
+
 @router.get("/monitoring/metrics/timeseries", summary="메트릭 시계열(횡단)", response_model=TimeseriesResponse)
 async def get_metrics_timeseries(
     request: Request,
     metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
+    by: Optional[str] = Query(
+        None,
+        pattern="^(Hostname|hostname|cluster)$",
+        description="이 라벨 값이 같은 시리즈를 하나로 묶고, 각 step 구간을 aggregation 방식으로 요약. 히트맵처럼 호스트별 한 줄이 필요할 때 사용",
+    ),
     params: TimeseriesParams = Depends(),
 ):
     """지정한 메트릭의 시간별 변화 추이 조회
@@ -323,6 +339,7 @@ async def get_metrics_timeseries(
     - metric : 조회한 메트릭 이름
     - series : 메트릭 라벨별 (시각, 값) 쌍 목록
     - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    - by 지정 시 해당 라벨 단위로 묶이고, 값은 step 구간의 평균(aggregation)이 됨. 미지정 시 시리즈별 step 시점의 순간값
 
     metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
     """
@@ -342,7 +359,9 @@ async def get_metrics_timeseries(
     end = params.end_iso(now)
     step = params.step
 
-    results = await prometheus_client.range_query(METRIC_ALLOWLIST[metric], start, end, step)
+    results = await prometheus_client.range_query(
+        _grouped_query(METRIC_ALLOWLIST[metric], by, params.aggregation, step), start, end, step
+    )
 
     warnings: list[str] = []
     if not results:

@@ -200,7 +200,7 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 |-----------|------|
 | `/monitoring/overview` | 전체 시스템 KPI |
 | `/monitoring/power/summary` [P8] · `/breakdown` · `/timeseries` · `/efficiency` | 전력 요약/분해/시계열/효율 |
-| `/monitoring/metrics/timeseries` · `/query` [M5] | 메트릭 질의 (허용 목록 기반) |
+| `/monitoring/metrics/timeseries` · `/query` [M5] | 메트릭 질의 (허용 목록 기반). timeseries에 `by=Hostname` 을 붙이면 호스트별 한 줄, step 구간 평균으로 묶여 히트맵에 바로 쓸 수 있음 |
 | `/monitoring/temperature/timeseries` | 온도 통합 시계열 |
 | `/monitoring/stream/power` · `/stream/metrics` | **SSE** 실시간 스트림 |
 
