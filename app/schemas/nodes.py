@@ -39,6 +39,10 @@ class NodeSummaryItem(BaseModel):
     power_watts: Optional[float] = Field(
         None, description="전력(W). mgmt는 ipmi_dcmi_power_consumption_watts, 서비스는 가속기 전력 합"
     )
+    utilization_percent: Optional[float] = Field(
+        None,
+        description="이 호스트 가속기 카드들의 현재 사용률 평균(%). 호스트맵 색상용. 서비스 클러스터만 산출, 가속기가 없는 관리 노드는 비움",
+    )
 
 
 class NodesSummaryData(BaseModel):
