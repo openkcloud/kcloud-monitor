@@ -132,7 +132,7 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters/{c}/nodes` · `/nodes/summary` · `/nodes/{n}` | 목록 / 집계 / 상세 |
+| `/clusters/{c}/nodes` · `/nodes/summary` · `/nodes/{n}` | 목록 / 집계 / 상세. 목록 항목의 `utilization_percent` (호스트 가속기 사용률 평균)로 호스트맵 색상 결정 |
 | `/clusters/{c}/nodes/{n}/metrics` | CPU/MEM/Disk/Net 종합 [M1] |
 | `/clusters/{c}/nodes/{n}/power` · `/power/timeseries` | Kepler 전력 [P2] |
 | `/clusters/{c}/nodes/{n}/cpu` · `/memory` · `/storage` · `/network` | 자원별 상세 |

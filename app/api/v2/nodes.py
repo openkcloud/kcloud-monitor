@@ -110,11 +110,12 @@ async def _accelerator_count_for_host(host: str) -> int:
 
 async def _service_cluster_hosts(
     info: ClusterInfo, phys_nodes: set[str]
-) -> list[tuple[str, bool, int, Optional[float]]]:
+) -> list[tuple[str, bool, int, Optional[float], Optional[float]]]:
     """서비스 클러스터(가속기 VM/K8s)의 노드(호스트) 목록 — 가속기 메트릭 hostname 기반.
 
     kube_node_info가 없는 l40s/rebellions/k8s-furiosa-rngd 등에서 노드 목록의 유일한 단서다.
-    Returns: (host, is_physical, accelerator_count, power_watts) 목록.
+    호스트 발견에 쓴 사용률 응답을 그대로 평균 내어 호스트 사용률도 함께 돌려준다 (추가 쿼리 없음).
+    Returns: (host, is_physical, accelerator_count, power_watts, utilization_percent) 목록.
     """
     if not info.utilization_query:
         return []
@@ -130,14 +131,25 @@ async def _service_cluster_hosts(
             continue
 
     host_cards: dict[str, set[str]] = {}
+    host_utils: dict[str, list[float]] = {}
     for it in util_res:
         m = it.get("metric", {})
-        host_cards.setdefault(_card_host(m), set()).add(_card_id(m))
+        host = _card_host(m)
+        host_cards.setdefault(host, set()).add(_card_id(m))
+        try:
+            host_utils.setdefault(host, []).append(float(it["value"][1]))
+        except (KeyError, IndexError, ValueError):
+            continue
 
-    rows: list[tuple[str, bool, int, Optional[float]]] = []
+    rows: list[tuple[str, bool, int, Optional[float], Optional[float]]] = []
     for host, cards in host_cards.items():
         powers = [power_by_id[c] for c in cards if c in power_by_id]
-        rows.append((host, host in phys_nodes, len(cards), sum(powers) if powers else None))
+        utils = host_utils.get(host, [])
+        rows.append((
+            host, host in phys_nodes, len(cards),
+            sum(powers) if powers else None,
+            round(sum(utils) / len(utils), 1) if utils else None,
+        ))
     return rows
 
 
@@ -224,7 +236,7 @@ async def list_nodes(
     - 노드 이름, 내부 IP, 역할(worker | control-plane), 소속 클러스터
     - 정상 동작 여부, 종류(physical | virtual)
     - OS 이미지, kubelet 버전
-    - 이 노드의 가속기 카드 수, 전력(W)
+    - 이 노드의 가속기 카드 수, 전력(W), 가속기 사용률 평균(%). 사용률은 호스트맵 색상용이며 가속기 클러스터만 산출
     - total : 전체 노드 개수
     - summary : 전체 노드 집계 (ready_count, total_count, 메모리 합계·사용률)
 
@@ -320,8 +332,9 @@ async def list_nodes(
                 node_type="physical" if is_phys else "virtual",
                 accelerator_count=accel_count,
                 power_watts=power,
+                utilization_percent=util,
             )
-            for host, is_phys, accel_count, power in host_rows
+            for host, is_phys, accel_count, power, util in host_rows
         ]
 
     # summary는 필터·페이지와 무관한 전체 노드 기준 — 필터 적용 전에 센다.
