@@ -28,10 +28,11 @@ VENDOR_PROFILES: dict[str, dict[str, Optional[str]]] = {
     },
     "furiosa": {
         "accelerator_type": "NPU",
-        "detect_metric": "furiosa_npu_core_utilization",
-        "utilization_query": 'furiosa_npu_core_utilization{{cluster="{cluster}"}}', # 단위: %
-        "temperature_query": 'furiosa_npu_hw_temperature{{label="peak",cluster="{cluster}"}}', # 단위: °C
-        "power_query": 'furiosa_npu_hw_power{{cluster="{cluster}"}}', # 단위: µW
+        # 2026-10 ETRI kcloud exporter (이전 furiosa_npu_*). 사용률은 코어별(8개)이라 카드 단위로 평균
+        "detect_metric": "kcloud_furiosa_core_utilization",
+        "utilization_query": 'avg by (cluster,device,instance,node) (kcloud_furiosa_core_utilization{{cluster="{cluster}"}})', # 단위: %
+        "temperature_query": 'kcloud_furiosa_temperature_celsius{{sensor="soc_peak",cluster="{cluster}"}}', # 단위: °C
+        "power_query": 'kcloud_furiosa_power_watts{{cluster="{cluster}"}}', # 단위: W
     },
     "rebellions": {
         "accelerator_type": "NPU",

@@ -98,7 +98,7 @@ async def _accelerator_count_for_host(host: str) -> int:
     h = _esc(host)
     queries = [
         f'DCGM_FI_DEV_GPU_UTIL{{Hostname="{h}"}}',
-        f'furiosa_npu_core_utilization{{hostname="{h}"}}',
+        f'kcloud_furiosa_core_utilization{{node="{h}"}}',
         f'{{__name__="RBLN_DEVICE_STATUS:UTILIZATION",hostname="{h}"}}',
     ]
     ids: set[str] = set()

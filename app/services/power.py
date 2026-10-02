@@ -27,14 +27,14 @@ ACCEL_POWER_QUERIES = {
     "nvidia": 'DCGM_FI_DEV_POWER_USAGE{cluster=~"l40s|"}',
     # cluster=~"furiosa.*": 퓨리오사 클러스터는 재생성될 때마다 늘어난다(furiosa, furiosa-1348 ...).
     # 라벨을 박아두면 클러스터 재배포마다 조회가 깨지므로 접두사로 잡는다.
-    "furiosa": 'furiosa_npu_hw_power{cluster=~"furiosa.*"}',
+    "furiosa": 'kcloud_furiosa_power_watts{cluster=~"furiosa.*"}',
     # ×1000: exporter가 실측의 1/1000로 표출 (rbln-stat 카드 실측 18.4W와 대조 확정, 2026-08-24)
     "rebellions": '({__name__="RBLN_DEVICE_STATUS:CARD_POWER",cluster="rebellions"}) * 1000',
 }
 
 ACCEL_UTIL_QUERIES = {  # 효율용, %
     "nvidia": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster=~"l40s|"} * 100',
-    "furiosa": 'furiosa_npu_core_utilization{cluster=~"furiosa.*"}',
+    "furiosa": 'kcloud_furiosa_core_utilization{cluster=~"furiosa.*"}',
     "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
 }
 
