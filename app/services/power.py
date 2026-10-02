@@ -38,7 +38,9 @@ ACCEL_UTIL_QUERIES = {  # 효율용, %
     "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
 }
 
-KNOWN_TDP_WATTS = {"nvidia": 350.0}  # per-card; furiosa/rebellions 미확인
+# per-card 공식 스펙: L40S 350W / Furiosa RNGD 180W / Rebellions ATOM+ RBLN-CA22 85W
+# (CA22는 rbln-stat 실측 모델. CA12는 TDP 60~130W 가변인 다른 모델이라 해당 없음)
+KNOWN_TDP_WATTS = {"nvidia": 350.0, "furiosa": 180.0, "rebellions": 85.0}
 
 
 # ---------------------------------------------------------------------------
