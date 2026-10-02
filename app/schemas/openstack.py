@@ -24,10 +24,13 @@ class HypervisorItem(BaseModel):
 
 
 class VMAccelerator(BaseModel):
-    """VM에 passthrough된 가속기(flavor alias 기반)."""
+    """VM에 연결된 가속기(flavor 설정 기반)."""
 
-    alias: str = Field(..., description="PCI alias (예: L40S, furiosa-rngd, rebellions)")
-    count: int = Field(..., description="passthrough된 카드 수")
+    alias: str = Field(
+        ...,
+        description="가속기 종류 (예: L40S, furiosa-rngd, rebellions). flavor의 PCI alias 또는 Cyborg device profile 이름으로 판별",
+    )
+    count: int = Field(..., description="VM에 연결된 카드 수")
 
 
 class VMItem(BaseModel):
