@@ -53,7 +53,7 @@ KCloud Monitor API v2
 - `/openstack` : 하이퍼바이저, VM, 프로젝트 등 OpenStack 자원 조회
 - `/logs` : Loki 기반 로그 검색과 실시간 스트리밍
 - `/export` : 전력, 메트릭, 리포트 데이터를 CSV 또는 JSON으로 내보내기
-- `/resource-map` : Pod 하나가 올라가 있는 노드, VM, 물리서버, 서버 전력을 순서대로 추적
+- `/resource-map` : Pod 하나가 올라가 있는 노드, VM, 물리서버를 순서대로 추적
 - `/system` : 서비스 헬스, 버전, Prometheus 메트릭
 - `/auth` : 토큰 발급과 검증
 

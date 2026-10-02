@@ -1,11 +1,11 @@
 """Pod 하나가 어느 노드, VM, 물리서버에 올라가 있는지 추적하는 라우터
 
-Prometheus 라벨을 단계별로 이어 붙여 Pod → 워크로드 → 가속기 → K8s 노드 → VM → 물리서버 → 서버 전력을 조회.
+Prometheus 라벨을 단계별로 이어 붙여 Pod → 워크로드 → 가속기 → K8s 노드 → VM → 물리서버를 조회.
+서버 전력은 /clusters/mgmt/nodes/{server}/power 로 따로 조회.
   - Pod 찾기       : kube_pod_info{pod} 의 cluster, namespace, node, created_by_*
   - 워크로드       : ReplicaSet/Job 이면 kube_replicaset_owner / kube_job_owner 로 한 단계 위
   - 노드 → VM      : kube_node_info.system_uuid = openstack_nova_server_status.uuid (없으면 이름 일치)
   - VM → 물리서버  : openstack_nova_server_status.hypervisor_hostname
-  - 서버 전력      : ipmi_dcmi_power_consumption_watts{node}
 주의: kube_node_info, kube_replicaset_owner 의 pod 라벨은 수집기(kube-state-metrics) 자신의 이름이라
 Pod 이름으로 거르는 쿼리는 kube_pod_info 에서만 쓴다.
 """
@@ -159,20 +159,13 @@ async def trace_pod(pod: str, cluster: Optional[str] = None, namespace: Optional
         # 관리 클러스터 노드는 물리서버에 직접 설치되어 노드 이름 = 서버 이름
         host = node
         path.append(TraceHop(layer="vm", status="skipped", via="nova VM 목록에 없음: 물리서버에 직접 설치된 노드"))
-        path.append(TraceHop(layer="physical_server", status="ok", name=host, via="관리 클러스터 노드 이름 = 서버 이름"))
+        path.append(TraceHop(
+            layer="physical_server", status="ok", name=host, via="관리 클러스터 노드 이름 = 서버 이름",
+            href=f"{V2}/clusters/{DEFAULT_CLUSTER_NAME}/nodes/{host}",
+        ))
     else:
         path.append(TraceHop(layer="vm", status="unavailable", via="노드와 일치하는 nova VM 없음"))
         path.append(TraceHop(layer="physical_server", status="unavailable"))
-
-    power = await prometheus_client.instant(f'ipmi_dcmi_power_consumption_watts{{node="{_esc(host)}"}}') if host else []
-    try:
-        watts = float(power[0]["value"][1]) if power else None
-    except (KeyError, IndexError, TypeError, ValueError):
-        watts = None
-    path.append(TraceHop(
-        layer="power", status="ok" if watts is not None else "unavailable", name=host, value_watts=watts,
-        via="ipmi_dcmi_power_consumption_watts{node}",
-    ))
 
     warnings = [f"{h.layer.upper()}_NOT_AVAILABLE" for h in path if h.status == "unavailable"]
     return PodTraceResponse(
@@ -188,14 +181,14 @@ async def get_pod_trace(
     cluster: Optional[str] = Query(None, description="클러스터 이름. 같은 이름 Pod가 여러 클러스터에 있을 때 지정"),
     namespace: Optional[str] = Query(None, description="네임스페이스. 같은 이름 Pod가 여러 네임스페이스에 있을 때 지정"),
 ):
-    """Pod 하나가 올라가 있는 자원을 서버 전력까지 순서대로 조회
+    """Pod 하나가 올라가 있는 자원을 물리서버까지 순서대로 조회
 
     - pod : Pod 이름, uid, 상태(Running | Pending | Succeeded | Failed | Unknown)
     - workload : 최상위 관리자(Deployment, StatefulSet, DaemonSet, CronJob 등)
     - accelerator : Pod가 쓰는 가속기 카드 (NVIDIA만 확인 가능)
     - k8s_node : 소속 클러스터, 노드 이름, system_uuid, 상태(Ready | NotReady)
     - vm : OpenStack VM 이름, uuid, 상태, 프로젝트 ID (관리 클러스터 노드는 skipped)
-    - physical_server, power : 물리서버 이름과 서버 총전력(W)
+    - physical_server : 물리서버 이름 (서버 총전력은 노드 전력 API로 조회)
 
     단계마다 status(ok | none | skipped | unavailable), 연결에 쓴 메트릭(via), 상세 API 경로(href) 포함.
     같은 이름 Pod가 여러 개면 status="ambiguous"와 후보 목록(candidates) 반환. Pod가 없으면 404, Prometheus 조회 실패 시 503 반환.
