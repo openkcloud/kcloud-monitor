@@ -129,10 +129,8 @@ tests/**/*.tmp.py
 tests/**/*.temp.py
 tests/**/*.draft.py
 
-# Local-only tests (미공개 테스트)
-tests/test_monitoring.py
-tests/test_phase5_monitoring.py
-tests/test_vm_metrics.py
+# Local-only tests (미공개 테스트): tests/ 전체를 저장소에 올리지 않음
+tests/
 
 # Test Outputs & Results
 tests/**/*.tmp
