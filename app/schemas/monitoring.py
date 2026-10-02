@@ -228,6 +228,10 @@ class AcceleratorEfficiency(BaseModel):
     tdp_ratio_pct: Optional[float] = Field(
         ..., description="카드 1장 평균 전력(power_watts ÷ 카드 수)을 규격 최대 전력으로 나눈 비중 (%)"
     )
+    efficiency_pct_per_watt: Optional[float] = Field(
+        None,
+        description="전력 1W당 사용률 (%/W). utilization_pct ÷ 카드 1장 평균 전력. 카드 크기가 달라 같은 벤더끼리 시간 비교용",
+    )
 
 
 class PowerEfficiencyData(BaseModel):
@@ -236,6 +240,10 @@ class PowerEfficiencyData(BaseModel):
     pue_estimate: Optional[float] = Field(
         ...,
         description="서버 전체 전력(IPMI)을 CPU 전력(Kepler)과 가속기 전력 합으로 나눈 값. 냉방 전력은 미포함인 근사치",
+    )
+    avg_efficiency_pct_per_watt: Optional[float] = Field(
+        None,
+        description="값이 있는 벤더들의 efficiency_pct_per_watt 평균 (%/W). 조회 시점 순간값",
     )
     accelerators: list[AcceleratorEfficiency]
 

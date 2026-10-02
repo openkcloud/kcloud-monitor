@@ -246,7 +246,8 @@ async def get_power_efficiency(request: Request):
     """가속기가 전력을 얼마나 효율적으로 쓰는지 조회
 
     - pue_estimate : 서버 전체 전력 ÷ (CPU 전력 + 가속기 전력). 냉방 전력 미포함 근사치
-    - accelerators : 벤더별 전력 합계(W), 사용률 평균(%), 규격 최대 전력(TDP 또는 최대 소비전력, W), 카드 1장 평균의 규격 대비 비중(%)
+    - avg_efficiency_pct_per_watt : 벤더별 전력 1W당 사용률의 평균(%/W)
+    - accelerators : 벤더별 전력 합계(W), 사용률 평균(%), 규격 최대 전력(TDP 또는 최대 소비전력, W), 카드 1장 평균의 규격 대비 비중(%), 전력 1W당 사용률(%/W)
 
     모든 값은 조회 시점의 최신 순간값(수집 주기 5초~1분)
     """
@@ -256,6 +257,7 @@ async def get_power_efficiency(request: Request):
         status=r["status"],
         data=PowerEfficiencyData(
             pue_estimate=data.get("pue_estimate"),
+            avg_efficiency_pct_per_watt=data.get("avg_efficiency_pct_per_watt"),
             accelerators=[AcceleratorEfficiency(**a) for a in data.get("accelerators", [])],
         ),
         warnings=r["warnings"],
