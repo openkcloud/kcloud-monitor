@@ -223,7 +223,7 @@ async def get_power_breakdown(
 async def get_power_timeseries(request: Request, params: TimeseriesParams = Depends()):
     """인프라 전체 전력의 시간별 변화 추이 조회
 
-    - layers : 측정 구분(server | cpu | accelerator)별로 (시각, 전력값) 쌍 목록
+    - layers : 측정 구분(server | cpu | accelerator)별로 (시각, 전력값 W) 쌍 목록. 시각은 ISO 8601 UTC
     - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
 
     구분별 값을 쌓아 올리는 누적 그래프에 그대로 쓸 수 있는 형태.

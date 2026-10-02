@@ -15,6 +15,7 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 각 서비스 함수는 `{"status": str, "data": <dict|list>, "warnings": list[str]}` 형태로 반환한다.
 """
 import math
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.services.prometheus import prometheus_client
@@ -88,17 +89,20 @@ def _sum_values(results: list[dict]) -> Optional[float]:
     return total if found else None
 
 
-def _range_values(results: list[dict]) -> list[tuple[float, str]]:
-    """range 쿼리 결과 첫 시리즈의 values를 (ts, raw_str) 목록으로 변환."""
+def _range_values(results: list[dict]) -> list[tuple[str, str]]:
+    """range 쿼리 결과 첫 시리즈의 values를 (ISO 8601 UTC 시각, raw_str) 목록으로 변환.
+
+    다른 시계열 API(온도·가속기 전력 등)와 같은 형식으로 맞춘다.
+    """
     if not results:
         return []
     values = results[0].get("values", [])
-    out: list[tuple[float, str]] = []
+    out: list[tuple[str, str]] = []
     for v in values:
         try:
-            ts = float(v[0])
+            ts = datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat()
             raw = str(v[1])
-        except (IndexError, TypeError, ValueError):
+        except (IndexError, TypeError, ValueError, OverflowError, OSError):
             continue
         out.append((ts, raw))
     return out
