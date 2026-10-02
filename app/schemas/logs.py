@@ -34,12 +34,15 @@ class LogEntry(BaseModel):
 
 
 class LogPagination(BaseModel):
-    """페이지 정보. Loki는 시각을 기준으로 넘기므로 offset은 항상 0."""
+    """페이지 정보. Loki는 시각을 기준으로 넘기므로 offset은 항상 0이고 next_cursor로 이어 받음."""
 
-    total: int = Field(..., description="반환된 로그 수")
+    total: int = Field(..., description="이번 페이지에 담긴 로그 수. 전체 건수가 아님")
     limit: int
     offset: int = 0
-    has_next: bool = False
+    has_next: bool = Field(False, description="다음 페이지 존재 여부")
+    next_cursor: Optional[str] = Field(
+        None, description="다음 페이지를 받을 때 cursor 파라미터로 그대로 넘기는 값. 마지막 페이지면 null",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +106,7 @@ class LabelListResponse(BaseModel):
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
     data: list[str] = []
+    warnings: list[str] = Field(default_factory=list, description="LOKI_UNAVAILABLE: Loki 조회 실패. 빈 목록이 실제로 비어서인지 장애인지 구분")
 
 
 class LabelValuesResponse(BaseModel):
@@ -112,6 +116,7 @@ class LabelValuesResponse(BaseModel):
     observed_at: str = Field(default_factory=_now)
     label: str
     data: list[str] = []
+    warnings: list[str] = Field(default_factory=list, description="LOKI_UNAVAILABLE: Loki 조회 실패. 빈 목록이 실제로 비어서인지 장애인지 구분")
 
 
 class VolumeEntry(BaseModel):
@@ -127,4 +132,4 @@ class VolumeResponse(BaseModel):
     status: str = "success"
     observed_at: str = Field(default_factory=_now)
     data: list[VolumeEntry] = []
-    warnings: list[str] = []
+    warnings: list[str] = Field(default_factory=list, description="LOKI_UNAVAILABLE: Loki 조회 실패. 빈 목록이 실제로 비어서인지 장애인지 구분")
