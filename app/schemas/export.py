@@ -27,11 +27,11 @@ EXPORT_METRIC_ALLOWLIST: dict[str, str] = {
     "DCGM_FI_DEV_FB_FREE": "DCGM_FI_DEV_FB_FREE",
     "DCGM_FI_DEV_XID_ERRORS": "DCGM_FI_DEV_XID_ERRORS",
     # Furiosa
-    "furiosa_npu_hw_power": "furiosa_npu_hw_power",
-    "furiosa_npu_hw_temperature": "furiosa_npu_hw_temperature",
-    "furiosa_npu_core_utilization": "furiosa_npu_core_utilization",
-    "furiosa_npu_dram_usage": "furiosa_npu_dram_usage",
-    "furiosa_npu_alive": "furiosa_npu_alive",
+    "kcloud_furiosa_power_watts": "kcloud_furiosa_power_watts",
+    "kcloud_furiosa_temperature_celsius": "kcloud_furiosa_temperature_celsius",
+    "kcloud_furiosa_core_utilization": "kcloud_furiosa_core_utilization",
+    "kcloud_furiosa_memory_used_bytes": "kcloud_furiosa_memory_used_bytes",
+    "kcloud_furiosa_device_alive": "kcloud_furiosa_device_alive",
     # Rebellions — 콜론 포함 메트릭명은 PromQL 파서가 원형을 거부하므로 __name__ 매칭 사용
     "RBLN_DEVICE_STATUS:CARD_POWER": '{__name__="RBLN_DEVICE_STATUS:CARD_POWER"}',
     "RBLN_DEVICE_STATUS:UTILIZATION": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION"}',

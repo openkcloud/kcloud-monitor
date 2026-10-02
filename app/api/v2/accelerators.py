@@ -2,10 +2,10 @@
 
 벤더별 exporter 3종을 하나의 응답 모델로 통일:
 - NVIDIA GPU: DCGM
-- Furiosa NPU: furiosa_npu_*
+- Furiosa NPU: kcloud_furiosa_* (2026-10 ETRI kcloud exporter. 이전 furiosa_npu_*)
 - Rebellions NPU: RBLN_*
 
-벤더는 cluster 경로 파라미터로 판별: l40s -> nvidia, k8s-furiosa-rngd -> furiosa, rebellions -> rebellions
+벤더는 cluster 경로 파라미터로 판별: l40s -> nvidia, furiosa* -> furiosa, rebellions -> rebellions
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -63,18 +63,20 @@ VENDOR_CONFIG: dict[str, dict] = {
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
         ],
     },
+    # kcloud exporter 라벨: device(npu0), node/instance(워커명), pci, core(사용률만), sensor(온도만).
+    # uuid·모델 라벨이 없어 device를 카드 ID로 쓰고 모델은 고정값. 클럭·쓰로틀 메트릭은 제공되지 않는다.
+    # ponytail: device는 노드 안에서만 유일. 한 클러스터에 워커가 여럿이면 클러스터 단위 조회에서 겹친다.
     "furiosa": {
-        "id_label": "uuid",
-        "model_label": "arch",
-        "util": 'avg(furiosa_npu_core_utilization{{cluster="{cluster}"{extra}}}) by (device,uuid,instance,hostname)',
-        "temp": 'furiosa_npu_hw_temperature{{label="peak",cluster="{cluster}"{extra}}}',
-        "power": 'furiosa_npu_hw_power{{cluster="{cluster}"{extra}}}',
-        "mem_used": 'furiosa_npu_dram_usage{{cluster="{cluster}"{extra}}}',
-        "mem_total": 'furiosa_npu_dram_total{{cluster="{cluster}"{extra}}}',
-        "alive": 'furiosa_npu_alive{{cluster="{cluster}"{extra}}}',
-        "freq": 'furiosa_npu_core_frequency{{cluster="{cluster}"{extra}}}',
-        "throttle": 'furiosa_npu_throttling_events_count{{cluster="{cluster}"{extra}}}',
-        "extra_keys": ["freq", "throttle"],
+        "id_label": "device",
+        "model_label": "model",
+        "model_default": "RNGD",
+        "util": 'avg(kcloud_furiosa_core_utilization{{cluster="{cluster}"{extra}}}) by (device,instance,node)',
+        "temp": 'kcloud_furiosa_temperature_celsius{{sensor="soc_peak",cluster="{cluster}"{extra}}}',
+        "power": 'kcloud_furiosa_power_watts{{cluster="{cluster}"{extra}}}',
+        "mem_used": 'kcloud_furiosa_memory_used_bytes{{cluster="{cluster}"{extra}}}',
+        "mem_total": 'kcloud_furiosa_memory_total_bytes{{cluster="{cluster}"{extra}}}',
+        "alive": 'kcloud_furiosa_device_alive{{cluster="{cluster}"{extra}}}',
+        "extra_keys": [],
     },
     "rebellions": {
         "id_label": "uuid",
@@ -212,7 +214,7 @@ def _to_item(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional
         vendor=vendor,
         cluster=cluster,
         node=node or labels.get("instance") or labels.get("hostname"),
-        model=labels.get(model_label),
+        model=labels.get(model_label) or VENDOR_CONFIG[vendor].get("model_default"),
         utilization_percent=entry.get("utilization_percent"),
         temperature_celsius=entry.get("temperature_celsius"),
         power_watts=entry.get("power_watts"),

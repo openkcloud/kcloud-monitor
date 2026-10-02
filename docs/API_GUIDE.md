@@ -105,7 +105,7 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
   "api": "GET /api/v2/clusters/mgmt/nodes/w1/accelerators",
   "path_template": "/api/v2/clusters/{cluster}/nodes/{node}/accelerators",
   "description": "노드 가속기 목록(GPU/NPU 통합, UUID 식별)",
-  "data_sources": ["Mimir(DCGM_FI_DEV_* + furiosa_npu_*)", "resource-map 원장"],
+  "data_sources": ["Mimir(DCGM_FI_DEV_* + kcloud_furiosa_*)", "resource-map 원장"],
   "design_ref": "sample_api.md §4.1",
   "data": null,
   "observed_at": "2026-08-06T00:00:00Z",

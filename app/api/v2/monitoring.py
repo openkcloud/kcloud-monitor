@@ -141,7 +141,7 @@ async def get_overview(request: Request):
 
     # 4. Furiosa 평균 온도
     furiosa_temp_results = await prometheus_client.instant(
-        'avg(furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"})'
+        'avg(kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"})'
     )
     furiosa_avg_temp: Optional[float] = None
     if furiosa_temp_results:
@@ -416,7 +416,7 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
     )
     # Furiosa NPU 온도
     furiosa_results = await prometheus_client.range_query(
-        'furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"}', start, end, step
+        'kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"}', start, end, step
     )
 
     series: list[TemperatureSeriesItem] = []
