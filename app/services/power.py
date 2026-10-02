@@ -331,6 +331,7 @@ async def power_efficiency() -> dict:
     accelerators: list[dict] = []
     accel_total = 0.0
     accel_found = False
+    efficiencies: list[float] = []
 
     for vendor, power_query in ACCEL_POWER_QUERIES.items():
         power_results = await prometheus_client.instant(power_query)
@@ -340,15 +341,20 @@ async def power_efficiency() -> dict:
         util_values = [v for v in (_first_value([item]) for item in util_results) if v is not None]
         utilization_pct = sum(util_values) / len(util_values) if util_values else None
 
+        avg_power = power_watts / (len(power_results) or 1) if power_watts is not None else None
         tdp_watts = KNOWN_TDP_WATTS.get(vendor)
         tdp_ratio_pct: Optional[float] = None
         if tdp_watts is None:
             if "TDP_UNVERIFIED" not in warnings:
                 warnings.append("TDP_UNVERIFIED")
-        elif power_watts is not None:
-            card_count = len(power_results) or 1
-            avg_power = power_watts / card_count
+        elif avg_power is not None:
             tdp_ratio_pct = (avg_power / tdp_watts) * 100
+
+        # 사용률 ÷ 카드 1장 평균 전력. 카드 크기가 달라 벤더 간 비교용으로는 부정확
+        efficiency: Optional[float] = None
+        if utilization_pct is not None and avg_power:
+            efficiency = utilization_pct / avg_power
+            efficiencies.append(efficiency)
 
         if power_watts is not None:
             accel_total += power_watts
@@ -361,6 +367,7 @@ async def power_efficiency() -> dict:
                 "utilization_pct": utilization_pct,
                 "tdp_watts": tdp_watts,
                 "tdp_ratio_pct": tdp_ratio_pct,
+                "efficiency_pct_per_watt": efficiency,
             }
         )
 
@@ -371,6 +378,10 @@ async def power_efficiency() -> dict:
     else:
         warnings.append("NO_DATA_PUE")
 
-    data = {"pue_estimate": pue_estimate, "accelerators": accelerators}
+    data = {
+        "pue_estimate": pue_estimate,
+        "avg_efficiency_pct_per_watt": sum(efficiencies) / len(efficiencies) if efficiencies else None,
+        "accelerators": accelerators,
+    }
 
     return {"status": _status_from_warnings(warnings), "data": data, "warnings": warnings}
