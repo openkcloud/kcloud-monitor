@@ -161,7 +161,7 @@ def read_root():
             "accelerators": "GET /api/v2/clusters/{cluster}/nodes/{node}/accelerators - 가속기 상태",
             "workloads": "GET /api/v2/workloads/pods - 전체 Pod 목록",
             "monitoring": "GET /api/v2/monitoring/overview - 전체 시스템 현황",
-            "storage": "GET /api/v2/clusters/{cluster}/storage/ceph/summary - 스토리지 자원",
+            "storage": "GET /api/v2/storage/ceph/summary - Ceph 스토리지 상태",
             "openstack": "GET /api/v2/openstack/vms - OpenStack VM 목록과 집계",
             "logs": "GET /api/v2/logs/search - 로그 검색",
             "export": "GET /api/v2/export/power - 데이터 내보내기",
