@@ -1,148 +1,203 @@
-"""가속기가 어디에 배정되어 있는지 추적하는 라우터
+"""Pod 하나가 어느 노드, VM, 물리서버에 올라가 있는지 추적하는 라우터
 
-물리 서버에 꽂힌 가속기 카드부터 그 카드를 넘겨받은 VM, 그 VM 위에서 돌아가는
-Kubernetes 노드와 Pod까지 연결 관계를 조회.
-
-연결 관계는 PostgreSQL에 기록되며, 갱신 지연 목표는 10분 이내.
-기록이 아직 연결되지 않아 모든 경로가 status="not_implemented" 반환.
+Prometheus 라벨을 단계별로 이어 붙여 Pod → 워크로드 → 가속기 → K8s 노드 → VM → 물리서버 → 서버 전력을 조회.
+  - Pod 찾기       : kube_pod_info{pod} 의 cluster, namespace, node, created_by_*
+  - 워크로드       : ReplicaSet/Job 이면 kube_replicaset_owner / kube_job_owner 로 한 단계 위
+  - 노드 → VM      : kube_node_info.system_uuid = openstack_nova_server_status.uuid (없으면 이름 일치)
+  - VM → 물리서버  : openstack_nova_server_status.hypervisor_hostname
+  - 서버 전력      : ipmi_dcmi_power_consumption_watts{node}
+주의: kube_node_info, kube_replicaset_owner 의 pod 라벨은 수집기(kube-state-metrics) 자신의 이름이라
+Pod 이름으로 거르는 쿼리는 kube_pod_info 에서만 쓴다.
 """
 from typing import Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.api.v2._stub import stub
-from app.api.v2.deps import PaginationParams
+from app.api.v2.workloads import _esc
+from app.schemas.resource_map import PodCandidate, PodTraceResponse, TraceHop
+from app.services.cluster_discovery import DEFAULT_CLUSTER_NAME, cluster_discovery, cluster_label
+from app.services.prometheus import prometheus_client
 
 router = APIRouter()
 
-RMAP_DOC = "docs/temp/00-architecture/openkcloud_resource_mapping_architecture.md"
+V2 = "/api/v2"
+
+# 주인 종류 → (주인의 주인을 알려 주는 메트릭, 그 메트릭에서 주인 이름이 담긴 라벨)
+_OWNER_METRICS = {
+    "ReplicaSet": ("kube_replicaset_owner", "replicaset"),
+    "Job": ("kube_job_owner", "job_name"),
+}
 
 
-@router.get("/resource-map/accelerators/{acc_id}", summary="가속기 계보")
-async def get_accelerator_lineage(request: Request, acc_id: str):
-    """가속기 카드 한 장이 어디까지 이어지는지 조회
+def _sel(cluster: str, **labels: str) -> str:
+    """cluster 라벨 + 추가 라벨 셀렉터. mgmt는 cluster="" (라벨 없음과 일치)."""
+    parts = [f'cluster="{_esc(cluster_label(cluster))}"']
+    parts += [f'{k}="{_esc(v)}"' for k, v in labels.items()]
+    return ",".join(parts)
 
-    - 카드가 꽂혀 있는 물리 서버
-    - 카드를 넘겨받은(passthrough) VM
-    - 그 VM이 참여한 Kubernetes 노드
-    - 그 카드를 쓰고 있는 Pod와 컨테이너
-    - 연결을 확정한 근거
-    """
-    return stub(
-        request,
-        "가속기 계보(GPU→VM→Pod 교차 추적)",
-        sources=("PostgreSQL 원장", "근거: libvirt hostdev/sysfs/runtime(evidence)"),
-        ref=RMAP_DOC,
+
+def _metric(results: list[dict]) -> dict:
+    return results[0].get("metric", {}) if results else {}
+
+
+async def _workload_hop(cluster: str, namespace: str, kind: Optional[str], name: Optional[str]) -> TraceHop:
+    if not kind or not name:
+        return TraceHop(layer="workload", status="none", cluster=cluster, via="kube_pod_info.created_by 없음(단독 Pod)")
+    via = f"kube_pod_info.created_by({kind}/{name})"
+    owner = _OWNER_METRICS.get(kind)
+    if owner:
+        metric, label = owner
+        m = _metric(await prometheus_client.instant(f"{metric}{{{_sel(cluster, namespace=namespace, **{label: name})}}}"))
+        if m.get("owner_kind") and m.get("owner_name") not in (None, "", "<none>"):
+            kind, name, via = m["owner_kind"], m["owner_name"], f"{via} → {metric}"
+    return TraceHop(layer="workload", status="ok", cluster=cluster, name=f"{kind}/{name}", via=via)
+
+
+async def _accelerator_hops(cluster: str, namespace: str, pod: str) -> list[TraceHop]:
+    results = await prometheus_client.instant(
+        f"DCGM_FI_DEV_GPU_UTIL{{{_sel(cluster, exported_namespace=namespace, exported_pod=pod)}}}"
+    )
+    if results:
+        return [
+            TraceHop(
+                layer="accelerator", status="ok", name=m.get("modelName"), id=m.get("UUID") or m.get("gpu"),
+                via="DCGM_FI_DEV_GPU_UTIL{exported_namespace, exported_pod}",
+            )
+            for m in (r.get("metric", {}) for r in results)
+        ]
+    info = await cluster_discovery.get_cluster(cluster)
+    if info and info.vendor in ("furiosa", "rebellions"):
+        # ponytail: NPU exporter가 Pod 라벨을 주지 않아 카드 매핑 불가. exporter가 라벨을 주면 여기서 조회
+        return [TraceHop(layer="accelerator", status="unavailable", via=f"{info.vendor} exporter에 Pod 라벨 없음")]
+    return [TraceHop(layer="accelerator", status="none", via="가속기 할당 없음")]
+
+
+async def _node_hop(cluster: str, node: Optional[str]) -> tuple[TraceHop, Optional[str]]:
+    """K8s 노드 단계와 그 노드의 system_uuid."""
+    if not node:
+        return TraceHop(layer="k8s_node", status="unavailable", cluster=cluster, via="kube_pod_info.node 없음(미배치 Pod)"), None
+    m = _metric(await prometheus_client.instant(f"kube_node_info{{{_sel(cluster, node=node)}}}"))
+    ready = await prometheus_client.instant(
+        f'kube_node_status_condition{{{_sel(cluster, node=node)},condition="Ready",status="true"}} == 1'
+    )
+    hop = TraceHop(
+        layer="k8s_node", status="ok" if m else "unavailable", cluster=cluster, name=node, id=m.get("system_uuid"),
+        state=("Ready" if ready else "NotReady") if m else None,
+        via="kube_pod_info.node", href=f"{V2}/clusters/{cluster}/nodes/{node}",
+    )
+    return hop, m.get("system_uuid")
+
+
+def _match_vm(servers: list[dict], node: Optional[str], system_uuid: Optional[str]) -> tuple[Optional[dict], str]:
+    """nova VM 중 노드와 같은 기계 찾기: uuid 우선, 없으면 이름."""
+    uuid = (system_uuid or "").lower()
+    for m in servers:
+        if uuid and (m.get("uuid") or "").lower() == uuid:
+            return m, "kube_node_info.system_uuid = openstack_nova_server_status.uuid"
+    for m in servers:
+        if node and m.get("name") == node:
+            return m, "K8s 노드 이름 = openstack_nova_server_status.name"
+    return None, ""
+
+
+async def trace_pod(pod: str, cluster: Optional[str] = None, namespace: Optional[str] = None) -> PodTraceResponse:
+    sel = [f'pod="{_esc(pod)}"']
+    if cluster:
+        sel.append(f'cluster="{_esc(cluster_label(cluster))}"')
+    if namespace:
+        sel.append(f'namespace="{_esc(namespace)}"')
+    found = await prometheus_client.instant(f"kube_pod_info{{{','.join(sel)}}}")
+    by_place = {
+        (r["metric"].get("cluster") or DEFAULT_CLUSTER_NAME, r["metric"].get("namespace", "")): r["metric"]
+        for r in found
+    }
+    if not by_place:
+        # instant()는 오류 시에도 [] 를 주므로, Prometheus 장애를 "Pod 없음"으로 오판하지 않게 확인
+        if not await prometheus_client.instant("vector(1)"):
+            raise HTTPException(status_code=503, detail="Prometheus 조회 실패")
+        raise HTTPException(status_code=404, detail=f"Pod를 찾을 수 없음: {pod}")
+    if len(by_place) > 1:
+        return PodTraceResponse(
+            status="ambiguous", pod=pod, warnings=["MULTIPLE_PODS_MATCHED"],
+            candidates=[
+                PodCandidate(cluster=c, namespace=ns, href=f"{V2}/resource-map/pods/{pod}?{urlencode({'cluster': c, 'namespace': ns})}")
+                for c, ns in sorted(by_place)
+            ],
+        )
+
+    (cluster, namespace), m = next(iter(by_place.items()))
+    node = m.get("node")
+    phase = _metric(await prometheus_client.instant(
+        f"kube_pod_status_phase{{{_sel(cluster, namespace=namespace, pod=pod)}}} == 1"
+    )).get("phase")
+
+    path = [TraceHop(
+        layer="pod", status="ok", cluster=cluster, name=pod, id=m.get("uid"), state=phase,
+        via="kube_pod_info{pod}", href=f"{V2}/workloads/pods/{cluster}/{namespace}/{pod}",
+    )]
+    path.append(await _workload_hop(cluster, namespace, m.get("created_by_kind"), m.get("created_by_name")))
+    path += await _accelerator_hops(cluster, namespace, pod)
+    node_hop, system_uuid = await _node_hop(cluster, node)
+    path.append(node_hop)
+
+    servers = [r.get("metric", {}) for r in await prometheus_client.instant("openstack_nova_server_status")]
+    vm, via = _match_vm(servers, node, system_uuid)
+    host: Optional[str] = None
+    if vm:
+        host = vm.get("hypervisor_hostname")
+        path.append(TraceHop(
+            layer="vm", status="ok", name=vm.get("name"), id=vm.get("uuid"), state=vm.get("status"),
+            project=vm.get("tenant_id"), via=via, href=f"{V2}/openstack/vms/{vm.get('uuid')}",
+        ))
+        path.append(TraceHop(
+            layer="physical_server", status="ok" if host else "unavailable", name=host,
+            via="openstack_nova_server_status.hypervisor_hostname",
+            href=f"{V2}/openstack/hypervisors/{host}" if host else None,
+        ))
+    elif cluster == DEFAULT_CLUSTER_NAME and node:
+        # 관리 클러스터 노드는 물리서버에 직접 설치되어 노드 이름 = 서버 이름
+        host = node
+        path.append(TraceHop(layer="vm", status="skipped", via="nova VM 목록에 없음: 물리서버에 직접 설치된 노드"))
+        path.append(TraceHop(layer="physical_server", status="ok", name=host, via="관리 클러스터 노드 이름 = 서버 이름"))
+    else:
+        path.append(TraceHop(layer="vm", status="unavailable", via="노드와 일치하는 nova VM 없음"))
+        path.append(TraceHop(layer="physical_server", status="unavailable"))
+
+    power = await prometheus_client.instant(f'ipmi_dcmi_power_consumption_watts{{node="{_esc(host)}"}}') if host else []
+    try:
+        watts = float(power[0]["value"][1]) if power else None
+    except (KeyError, IndexError, TypeError, ValueError):
+        watts = None
+    path.append(TraceHop(
+        layer="power", status="ok" if watts is not None else "unavailable", name=host, value_watts=watts,
+        via="ipmi_dcmi_power_consumption_watts{node}",
+    ))
+
+    warnings = [f"{h.layer.upper()}_NOT_AVAILABLE" for h in path if h.status == "unavailable"]
+    return PodTraceResponse(
+        status="partial" if warnings else "success",
+        pod=pod, cluster=cluster, namespace=namespace, path=path, warnings=warnings,
     )
 
 
-@router.get("/resource-map/accelerators/{acc_id}/history", summary="가속기 계보 이력")
-async def get_accelerator_lineage_history(request: Request, acc_id: str):
-    """가속기 카드 한 장의 배정 변경 기록 조회
-
-    - 배정과 회수 시각
-    - 그때 어느 VM 또는 Pod에 붙어 있었는지
-    - 변경 사유
-    """
-    return stub(
-        request,
-        "가속기 계보 이력(할당 변경 타임라인)",
-        sources=("PostgreSQL 원장(이력)",),
-        ref=RMAP_DOC,
-    )
-
-
-@router.get("/resource-map/partitions/{partition_id}", summary="파티션 계보")
-async def get_partition_lineage(request: Request, partition_id: str):
-    """가속기를 나눈 파티션 한 조각이 어디에 붙어 있는지 조회
-
-    - 이 조각이 속한 상위 가속기 카드
-    - 이 조각을 쓰고 있는 워크로드
-    """
-    return stub(request, "파티션 계보", sources=("PostgreSQL 원장",), ref=RMAP_DOC)
-
-
-@router.get("/resource-map/containers/{pod_uid}/{container}", summary="컨테이너 계보")
-async def get_container_lineage(request: Request, pod_uid: str, container: str):
-    """컨테이너 한 개가 어떤 가속기를 쓰는지 거꾸로 조회
-
-    - 이 컨테이너에 배정된 가속기 카드와 파티션
-    - 배정을 확정한 근거
-    """
-    return stub(
-        request,
-        "컨테이너 계보(역방향, allocated_to_container 근거 포함)",
-        sources=("PostgreSQL 원장", "runtime inspect/CDI(evidence)"),
-        ref=RMAP_DOC,
-    )
-
-
-@router.get("/resource-map/vms/{vm_uuid}", summary="VM 계보")
-async def get_vm_lineage(request: Request, vm_uuid: str):
-    """VM 한 대가 어디에 올라가 있고 무엇을 넘겨받았는지 조회
-
-    - 이 VM이 올라가 있는 물리 서버
-    - 넘겨받은(passthrough) 가속기 장치
-    - 이 VM이 참여한 Kubernetes 노드
-    """
-    return stub(
-        request,
-        "VM 계보(물리·장치·서비스 K8s 매핑)",
-        sources=("PostgreSQL 원장", "Nova/libvirt/Magnum(discovery)"),
-        ref=RMAP_DOC,
-    )
-
-
-@router.get("/resource-map/physical-servers/{server_id}", summary="물리 서버 계보")
-async def get_physical_server_lineage(request: Request, server_id: str):
-    """물리 서버 한 대에 무엇이 올라가 있는지 조회
-
-    - 이 서버에 꽂힌 가속기 카드 목록
-    - VM을 올릴 수 있는 서버인지 여부
-    - 이 서버에 배치된 VM과 Kubernetes 노드 목록
-    """
-    return stub(request, "물리 서버 계보", sources=("PostgreSQL 원장",), ref=RMAP_DOC)
-
-
-@router.get("/resource-map/relationships", summary="관계 그래프 질의")
-async def list_relationships(
+@router.get("/resource-map/pods/{pod}", summary="Pod 자원 추적", response_model=PodTraceResponse)
+async def get_pod_trace(
     request: Request,
-    source_type: Optional[str] = Query(None, description="연결의 시작 자원 종류: accelerator | vm | pod 등"),
-    relation: Optional[str] = Query(None, description="연결 종류: attached_to | runs_on 등"),
-    params: PaginationParams = Depends(),
+    pod: str,
+    cluster: Optional[str] = Query(None, description="클러스터 이름. 같은 이름 Pod가 여러 클러스터에 있을 때 지정"),
+    namespace: Optional[str] = Query(None, description="네임스페이스. 같은 이름 Pod가 여러 네임스페이스에 있을 때 지정"),
 ):
-    """자원 사이의 연결 관계를 조건으로 검색
+    """Pod 하나가 올라가 있는 자원을 서버 전력까지 순서대로 조회
 
-    - 연결의 시작 자원과 끝 자원
-    - 연결 종류(attached_to, runs_on 등)
-    - 연결이 기록된 시각
+    - pod : Pod 이름, uid, 상태(Running | Pending | Succeeded | Failed | Unknown)
+    - workload : 최상위 관리자(Deployment, StatefulSet, DaemonSet, CronJob 등)
+    - accelerator : Pod가 쓰는 가속기 카드 (NVIDIA만 확인 가능)
+    - k8s_node : 소속 클러스터, 노드 이름, system_uuid, 상태(Ready | NotReady)
+    - vm : OpenStack VM 이름, uuid, 상태, 프로젝트 ID (관리 클러스터 노드는 skipped)
+    - physical_server, power : 물리서버 이름과 서버 총전력(W)
 
-    필터: source_type(시작 자원 종류), relation(연결 종류)
+    단계마다 status(ok | none | skipped | unavailable), 연결에 쓴 메트릭(via), 상세 API 경로(href) 포함.
+    같은 이름 Pod가 여러 개면 status="ambiguous"와 후보 목록(candidates) 반환. Pod가 없으면 404, Prometheus 조회 실패 시 503 반환.
     """
-    merged = {k: v for k, v in vars(params).items() if v is not None}
-    if source_type:
-        merged["source_type"] = source_type
-    if relation:
-        merged["relation"] = relation
-    return stub(
-        request,
-        "자원 관계 그래프 질의(원장 edge)",
-        sources=("PostgreSQL 원장(edge 테이블)",),
-        ref=RMAP_DOC,
-        params=merged,
-    )
-
-
-@router.post("/resource-map/discovery/trigger", summary="Discovery 수동 실행", status_code=202)
-async def trigger_discovery(request: Request):
-    """연결 관계를 지금 즉시 다시 수집하도록 요청
-
-    - 접수되면 바로 202 반환하고 수집은 뒤에서 진행
-    - OpenStack, 가상화 계층, 서버 하드웨어, Kubernetes를 차례로 다시 훑음
-    """
-    return stub(
-        request,
-        "Discovery 수동 트리거(비동기 스캔 작업 시작)",
-        sources=("Discovery 수집기(Nova/libvirt/sysfs/K8s API)",),
-        ref=RMAP_DOC,
-    )
+    return await trace_pod(pod, cluster, namespace)

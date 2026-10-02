@@ -53,7 +53,7 @@ KCloud Monitor API v2
 - `/openstack` : 하이퍼바이저, VM, 프로젝트 등 OpenStack 자원 조회
 - `/logs` : Loki 기반 로그 검색과 실시간 스트리밍
 - `/export` : 전력, 메트릭, 리포트 데이터를 CSV 또는 JSON으로 내보내기
-- `/resource-map` : 가속기가 어떤 VM, 어떤 Pod에 배정되어 있는지 추적
+- `/resource-map` : Pod 하나가 올라가 있는 노드, VM, 물리서버, 서버 전력을 순서대로 추적
 - `/system` : 서비스 헬스, 버전, Prometheus 메트릭
 - `/auth` : 토큰 발급과 검증
 
@@ -165,7 +165,7 @@ def read_root():
             "openstack": "GET /api/v2/openstack/vms - OpenStack VM 목록과 집계",
             "logs": "GET /api/v2/logs/search - 로그 검색",
             "export": "GET /api/v2/export/power - 데이터 내보내기",
-            "resource_map": "GET /api/v2/resource-map/relationships - 자원 간 연결 관계",
+            "resource_map": "GET /api/v2/resource-map/pods/{pod} - Pod에서 물리서버까지 자원 추적",
             "system": "GET /api/v2/system/health - 서비스 헬스체크",
         },
     }
