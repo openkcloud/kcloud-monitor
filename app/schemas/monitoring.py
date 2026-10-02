@@ -195,8 +195,10 @@ class PowerBreakdownResponse(BaseModel):
 class PowerTimeseriesLayer(BaseModel):
     """전력 시계열의 단일 계층(server/cpu/accelerator) 시리즈."""
 
-    layer: str
-    values: list[tuple[float, str]]
+    layer: str = Field(..., description="측정 구분 (server | cpu | accelerator)")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 전력값 W) 쌍 목록. 시각은 ISO 8601 UTC 형식, 값은 문자열"
+    )
 
 
 class PowerTimeseriesResponse(BaseModel):
