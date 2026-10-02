@@ -43,7 +43,7 @@ def _layers(resp):
     return {h.layer: h for h in resp.path}
 
 
-def test_mgmt_pod_skips_vm_and_reaches_server_power():
+def test_mgmt_pod_skips_vm_and_reaches_physical_server():
     resp = _run({
         "kube_pod_info": [_r({"namespace": "openstack", "pod": "keystone-api-x", "node": "controller", "uid": "u1",
                               "created_by_kind": "ReplicaSet", "created_by_name": "keystone-api-75dc"})],
@@ -52,17 +52,16 @@ def test_mgmt_pod_skips_vm_and_reaches_server_power():
         "kube_node_info": [_r({"node": "controller", "system_uuid": "4c4c4544-0031"})],
         "kube_node_status_condition": [_r({})],
         "openstack_nova_server_status": NOVA,
-        "ipmi_dcmi_power_consumption_watts": [_r({"node": "controller"}, "241")],
     }, pod="keystone-api-x")
     h = _layers(resp)
     assert resp.status == "success" and resp.cluster == "mgmt" and resp.namespace == "openstack"
-    assert [x.layer for x in resp.path] == ["pod", "workload", "accelerator", "k8s_node", "vm", "physical_server", "power"]
+    assert [x.layer for x in resp.path] == ["pod", "workload", "accelerator", "k8s_node", "vm", "physical_server"]
     assert h["workload"].name == "Deployment/keystone-api"
     assert h["accelerator"].status == "none"
     assert h["k8s_node"].state == "Ready"
     assert h["vm"].status == "skipped"
     assert h["physical_server"].name == "controller"
-    assert h["power"].value_watts == 241.0
+    assert h["physical_server"].href.endswith("/clusters/mgmt/nodes/controller")
 
 
 def test_vm_node_matched_by_system_uuid_case_insensitive():
@@ -71,7 +70,6 @@ def test_vm_node_matched_by_system_uuid_case_insensitive():
                               "node": "renamed-node", "created_by_kind": "DaemonSet", "created_by_name": "ds"})],
         "kube_node_info": [_r({"system_uuid": "b881a36a-0000"})],
         "openstack_nova_server_status": NOVA,
-        "ipmi_dcmi_power_consumption_watts": [_r({"node": "compute1"}, "450")],
     }, vendor="furiosa", pod="infer-1")
     h = _layers(resp)
     assert h["workload"].name == "DaemonSet/ds"
@@ -79,7 +77,6 @@ def test_vm_node_matched_by_system_uuid_case_insensitive():
     assert h["vm"].id == "B881A36A-0000" and h["vm"].project == "proj1" and "system_uuid" in h["vm"].via
     assert h["physical_server"].name == "compute1"
     assert h["physical_server"].href.endswith("/openstack/hypervisors/compute1")
-    assert h["power"].value_watts == 450.0
     assert resp.status == "partial" and resp.warnings == ["ACCELERATOR_NOT_AVAILABLE"]
 
 
@@ -90,7 +87,7 @@ def test_service_node_without_vm_match_is_unavailable_not_skipped():
     }, pod="p")
     h = _layers(resp)
     assert h["workload"].status == "none"
-    assert h["vm"].status == "unavailable" and h["power"].status == "unavailable"
+    assert h["vm"].status == "unavailable" and h["physical_server"].status == "unavailable"
 
 
 def test_same_name_in_two_places_returns_candidates():
