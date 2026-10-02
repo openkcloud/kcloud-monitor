@@ -245,8 +245,10 @@ async def get_power_timeseries(request: Request, params: TimeseriesParams = Depe
 async def get_power_efficiency(request: Request):
     """가속기가 전력을 얼마나 효율적으로 쓰는지 조회
 
-    - pue_estimate : 냉각 등 부대 설비를 포함한 전력 효율 추정치
-    - accelerators : 벤더별 전력(W), 사용률(%), 규격 최대 전력(TDP, W), TDP 대비 사용 비중(%)
+    - pue_estimate : 서버 전체 전력 ÷ (CPU 전력 + 가속기 전력). 냉방 전력 미포함 근사치
+    - accelerators : 벤더별 전력 합계(W), 사용률 평균(%), 규격 최대 전력(TDP 또는 최대 소비전력, W), 카드 1장 평균의 규격 대비 비중(%)
+
+    모든 값은 조회 시점의 최신 순간값(수집 주기 5초~1분)
     """
     r = await power_efficiency()
     data = r["data"]

@@ -211,19 +211,30 @@ class PowerTimeseriesResponse(BaseModel):
 class AcceleratorEfficiency(BaseModel):
     """가속기 벤더별 효율 데이터."""
 
-    vendor: str
-    power_watts: Optional[float] = Field(..., description="가속기 전력 (와트 W)")
-    utilization_pct: Optional[float] = Field(
-        ..., description="가속기 사용률 (%). NVIDIA는 0~100, NPU는 표기 범위 확인 필요"
+    vendor: str = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
+    power_watts: Optional[float] = Field(
+        ..., description="조회 시점의 가속기 전력 (W). 해당 벤더 모든 카드의 합계"
     )
-    tdp_watts: Optional[float] = Field(..., description="TDP (와트 W)")
-    tdp_ratio_pct: Optional[float] = Field(..., description="TDP 대비 사용 전력 비중 (%)")
+    utilization_pct: Optional[float] = Field(
+        ...,
+        description="조회 시점의 가속기 사용률 (%). 해당 벤더 모든 카드(퓨리오사는 모든 코어) 값의 평균. 시간 평균이 아닌 순간값",
+    )
+    tdp_watts: Optional[float] = Field(
+        ...,
+        description="카드 1장의 제조사 규격 최대 전력 (W). 벤더 표기에 따라 TDP 또는 최대 소비전력 값",
+    )
+    tdp_ratio_pct: Optional[float] = Field(
+        ..., description="카드 1장 평균 전력(power_watts ÷ 카드 수)을 규격 최대 전력으로 나눈 비중 (%)"
+    )
 
 
 class PowerEfficiencyData(BaseModel):
     """전력 효율 데이터. 전력 효율 추정치와 가속기별 효율."""
 
-    pue_estimate: Optional[float]
+    pue_estimate: Optional[float] = Field(
+        ...,
+        description="서버 전체 전력(IPMI)을 CPU 전력(Kepler)과 가속기 전력 합으로 나눈 값. 냉방 전력은 미포함인 근사치",
+    )
     accelerators: list[AcceleratorEfficiency]
 
 
