@@ -1,7 +1,7 @@
 """
 KCloud Monitor v2 — OpenStack (Keystone/Nova) 클라이언트.
 
-용도: 물리 하이퍼바이저 ↔ VM 배치 ↔ 가속기(flavor PCI passthrough) 매핑 조회.
+용도: 물리 하이퍼바이저 ↔ VM 배치 ↔ 가속기(flavor PCI alias 또는 Cyborg device profile) 매핑 조회.
 데이터소스: Keystone v3(인증), Nova compute API.
 
 설계 주의 (docs/API_RESTRUCTURE_PLAN.md §4.3):
@@ -49,6 +49,9 @@ class OpenStackClient:
         self.magnum_url: Optional[str] = (
             settings.OPENSTACK_MAGNUM_URL.rstrip("/") if settings.OPENSTACK_MAGNUM_URL else None
         )
+        self.cyborg_url: Optional[str] = (
+            settings.OPENSTACK_CYBORG_URL.rstrip("/") if settings.OPENSTACK_CYBORG_URL else None
+        )
         self._token: Optional[str] = None
         self._token_exp: float = 0.0  # monotonic 만료 시각
 
@@ -64,6 +67,10 @@ class OpenStackClient:
     @property
     def magnum_configured(self) -> bool:
         return self.configured and bool(self.magnum_url)
+
+    @property
+    def cyborg_configured(self) -> bool:
+        return self.configured and bool(self.cyborg_url)
 
     async def _get_token(self) -> str:
         """Keystone v3 password 인증으로 토큰 발급(캐시). 실패 시 OpenStackError."""
@@ -168,6 +175,63 @@ class OpenStackClient:
         except httpx.HTTPError as exc:
             logger.warning("Magnum 호출 실패: %s — url=%s", exc, url)
             raise OpenStackError("UPSTREAM_ERROR") from exc
+
+    async def _cyborg_get(self, path: str) -> dict:
+        """Cyborg GET (endpoint_override). 실패 시 OpenStackError.
+
+        버전 헤더는 숫자만 쓴다. "accelerator 2.0"처럼 접두어를 붙이면 Cyborg가 무시하고 2.0으로 처리한다.
+        """
+        if not self.cyborg_configured:
+            raise OpenStackError("NOT_CONFIGURED")
+        token = await self._get_token()
+        url = f"{self.cyborg_url}{path}"
+        headers = {"X-Auth-Token": token, "OpenStack-API-Version": "2.0"}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(url, headers=headers)
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPError as exc:
+            logger.warning("Cyborg 호출 실패: %s — url=%s", exc, url)
+            raise OpenStackError("UPSTREAM_ERROR") from exc
+
+    async def bound_accelerators(self) -> dict[str, tuple[str, int]]:
+        """VM uuid → (alias, 카드 수). Cyborg에서 실제로 장치가 바인딩된 VM만.
+
+        ARQ(instance_uuid, device_rp_uuid) → deployable(rp_uuid → device_id) → device(vendor)
+        순서로 따라가 벤더를 알아낸다. kcloud-cyborg는 GET /devices에 정수 id를 추가해
+        deployable.device_id와 맞출 수 있고, 호환을 위해 uuid도 함께 비교한다.
+        """
+        arqs = (await self._cyborg_get("/accelerator_requests")).get("arqs", [])
+        deployables = (await self._cyborg_get("/deployables")).get("deployables", [])
+        devices = (await self._cyborg_get("/devices")).get("devices", [])
+
+        device_by_key: dict[str, dict] = {}
+        for d in devices:
+            for key in (d.get("id"), d.get("uuid")):
+                if key is not None:
+                    device_by_key[str(key)] = d
+        device_by_rp = {
+            dp.get("rp_uuid"): device_by_key.get(str(dp.get("device_id")))
+            for dp in deployables
+            if dp.get("rp_uuid")
+        }
+
+        per_vm: dict[str, list[str]] = {}
+        for arq in arqs:
+            vm = arq.get("instance_uuid")
+            if not vm or arq.get("state") != "Bound":
+                continue
+            device = device_by_rp.get(arq.get("device_rp_uuid")) or {}
+            alias = VENDOR_ALIASES.get(str(device.get("vendor", "")).lower())
+            if alias is None:  # 장치를 못 찾으면 넘김. 호출부가 flavor 설정으로 대신 판별한다
+                continue
+            per_vm.setdefault(vm, []).append(alias)
+
+        return {
+            vm: ("+".join(sorted(set(aliases))), len(aliases))
+            for vm, aliases in per_vm.items()
+        }
 
     # ── 조회 메서드 ────────────────────────────────────────────────────────
 
@@ -300,13 +364,34 @@ class OpenStackClient:
 # flavor extra_specs → 가속기 파싱 헬퍼
 # ---------------------------------------------------------------------------
 
-def parse_accelerator_alias(extra_specs: dict) -> Optional[tuple[str, int]]:
-    """flavor extra_specs의 pci_passthrough:alias → (alias, count).
+# Cyborg device profile 이름 → (alias, 카드 수). alias는 기존 pci_passthrough alias와 같은 값으로
+# 맞춰 cluster_discovery의 클러스터명 ↔ alias 매칭이 그대로 동작하게 한다.
+# ponytail: 이름 규칙 기반 고정 표. 새 profile이 생기면 한 줄 추가, 자동화하려면 Cyborg
+# GET /device_profiles 의 groups(trait CUSTOM_<벤더>_*)를 읽도록 교체.
+DEVICE_PROFILE_ALIASES: dict[str, tuple[str, int]] = {
+    "dp-l40s": ("L40S", 1),
+    "dp-atomp": ("rebellions", 1),
+    "dp-rngd": ("furiosa-rngd", 1),
+    "dp-2rngd": ("furiosa-rngd", 2),
+    "dp-l40s-rngd": ("L40S+furiosa-rngd", 2),
+}
 
-    예: {"pci_passthrough:alias": "L40S:1"} → ("L40S", 1)
-        {"pci_passthrough:alias": "furiosa-rngd:1"} → ("furiosa-rngd", 1)
-    가속기 없는 flavor면 None.
+# Cyborg device.vendor(PCI 벤더 ID) → alias. 현 환경의 NVIDIA는 L40S뿐이라 L40S로 둔다.
+VENDOR_ALIASES: dict[str, str] = {"10de": "L40S", "1ed2": "furiosa-rngd", "1eff": "rebellions"}
+
+
+def parse_accelerator_alias(extra_specs: dict) -> Optional[tuple[str, int]]:
+    """flavor extra_specs → (alias, count). 가속기 없는 flavor면 None.
+
+    두 표기를 모두 읽는다.
+    - Nova PCI passthrough: {"pci_passthrough:alias": "L40S:1"} → ("L40S", 1)
+    - Cyborg (2026-10 재구성 이후): {"accel:device_profile": "dp-l40s"} → ("L40S", 1)
+      표에 없는 profile은 이름 그대로 1장으로 본다 (가속기 VM 여부는 놓치지 않게).
     """
+    profile = extra_specs.get("accel:device_profile")
+    if profile:
+        return DEVICE_PROFILE_ALIASES.get(profile, (profile, 1))
+
     raw = extra_specs.get("pci_passthrough:alias")
     if not raw:
         return None

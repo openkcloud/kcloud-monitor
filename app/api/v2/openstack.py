@@ -47,12 +47,22 @@ async def _collect_vms() -> tuple[list[VMItem], list[str]]:
         code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
         return [], [code]
 
+    # Cyborg에서 실제로 바인딩된 장치를 우선 쓰고, 없거나 실패하면 flavor 설정으로 판별한다.
+    # 실패를 warnings로 올리지 않는 이유: 호출부들이 warnings가 있으면 VM 목록 전체를 비우기 때문
+    # (Cyborg 장애가 VM 조회 장애로 번지면 안 됨). 실패 내용은 _cyborg_get이 로그로 남긴다.
+    bound: dict[str, tuple[str, int]] = {}
+    if openstack_client.cyborg_configured:
+        try:
+            bound = await openstack_client.bound_accelerators()
+        except OpenStackError:
+            pass
+
     items: list[VMItem] = []
     for s in servers:
         flavor_name = (s.get("flavor") or {}).get("original_name") or (s.get("flavor") or {}).get("id")
         spec = flavor_specs.get(flavor_name) or {} if flavor_name else {}
         acc = None
-        parsed = parse_accelerator_alias(spec.get("extra_specs") or {})
+        parsed = bound.get(s.get("id", "")) or parse_accelerator_alias(spec.get("extra_specs") or {})
         if parsed:
             acc = VMAccelerator(alias=parsed[0], count=parsed[1])
         items.append(

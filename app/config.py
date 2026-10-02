@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     OPENSTACK_NOVA_URL: Optional[str] = Field(None, description="Nova compute API URL 오버라이드")
     OPENSTACK_PLACEMENT_URL: Optional[str] = Field(None, description="Placement API URL 오버라이드")
     OPENSTACK_MAGNUM_URL: Optional[str] = Field(None, description="Magnum(container-infra) API URL 오버라이드")
+    OPENSTACK_CYBORG_URL: Optional[str] = Field(
+        None, description="Cyborg(accelerator) API URL 오버라이드 (예: http://host:6666/accelerator/v2)"
+    )
     CLUSTER_REGISTRY: Optional[str] = Field(
         None,
         description="클러스터 레지스트리 JSON — 관리/서비스 구분·접속 정보. "
