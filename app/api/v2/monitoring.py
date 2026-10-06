@@ -26,6 +26,8 @@ from app.schemas.monitoring import (
     PowerBreakdownResponse,
     PowerEfficiencyData,
     PowerEfficiencyResponse,
+    PowerEfficiencySeriesItem,
+    PowerEfficiencyTimeseriesResponse,
     PowerSummaryData,
     PowerSummaryResponse,
     PowerTimeseriesLayer,
@@ -38,6 +40,7 @@ from app.services.cluster_discovery import cluster_discovery
 from app.services.power import (
     power_breakdown,
     power_efficiency,
+    power_efficiency_timeseries,
     power_summary,
     power_timeseries,
 )
@@ -260,6 +263,34 @@ async def get_power_efficiency(request: Request):
             avg_efficiency_pct_per_watt=data.get("avg_efficiency_pct_per_watt"),
             accelerators=[AcceleratorEfficiency(**a) for a in data.get("accelerators", [])],
         ),
+        warnings=r["warnings"],
+    )
+
+
+@router.get(
+    "/monitoring/power/efficiency/timeseries",
+    summary="전력 효율 시계열",
+    response_model=PowerEfficiencyTimeseriesResponse,
+)
+async def get_power_efficiency_timeseries(request: Request, params: TimeseriesParams = Depends()):
+    """가속기 전력 효율의 시간별 변화 추이 조회
+
+    - series : 벤더별 (시각, 전력 1W당 사용률 %/W) 쌍 목록. 시각은 ISO 8601 UTC
+    - vendor=all : 값이 있는 벤더들의 효율 평균. 전력 효율 조회의 avg_efficiency_pct_per_watt에 대응
+    - 산식 : 벤더 평균 사용률(%) ÷ 카드 1장 평균 전력(W). 전력 효율 조회와 동일
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+
+    가속기가 쉬고 있으면(사용률 0) 효율도 0으로 나옴. 서버 전체 전력은 포함하지 않음.
+    """
+    now = datetime.now(timezone.utc)
+    start = params.start_iso(now)
+    end = params.end_iso(now)
+    step = params.step
+
+    r = await power_efficiency_timeseries(start, end, step)
+    return PowerEfficiencyTimeseriesResponse(
+        status=r["status"],
+        series=[PowerEfficiencySeriesItem(**item) for item in r["data"]],
         warnings=r["warnings"],
     )
 
