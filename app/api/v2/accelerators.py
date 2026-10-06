@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request
 from app.api.v2.deps import PaginationParams, TimeseriesParams
 from app.schemas.accelerators import (
     AcceleratorDetailResponse,
+    AcceleratorInfo,
     AcceleratorItem,
     AcceleratorListResponse,
     AcceleratorMetricsData,
@@ -155,18 +156,54 @@ async def _range_metric(
     return await prometheus_client.range_query(query, start, end, step)
 
 
-def _throttle_query(vendor: str, cluster: str) -> str:
-    """쓰로틀링 의심 카드만 남기는 쿼리. 사용률 유지 and 최근 고온 and 전력이 최근 최대보다 떨어짐.
+def _throttle_query(vendor: str, cluster: str, acc_id: Optional[str] = None) -> str:
+    """카드별 쓰로틀링 판정값(1 = 쓰로틀링, 0 = 아님). 사용률 유지, 최근 고온, 전력이 최근 최대보다 떨어짐을 곱한다.
 
-    값이 바뀌는 순간만 잡는 delta 대신 구간 집계를 써서 쓰로틀링이 이어지는 동안 계속 참이 된다.
+    세 조건을 bool 비교 결과(0/1)로 곱하므로 원시값이 하나라도 비면 점 자체가 없다(판정 불가).
+    값이 바뀌는 순간만 잡는 delta 대신 구간 집계를 써서 쓰로틀링이 이어지는 동안 계속 1이 된다.
     """
-    util, temp, power = (_build_query(vendor, k, cluster) for k in ("util", "temp", "power"))
-    on = f'on({VENDOR_CONFIG[vendor]["id_label"]})'
+    util, temp, power = (_build_query(vendor, k, cluster, acc_id=acc_id) for k in ("util", "temp", "power"))
+    on = f'on({VENDOR_CONFIG[vendor]["id_label"]}, instance)'
     return (
-        f"(avg_over_time(({util})[2m:15s]) >= {THROTTLE_UTIL_MIN})"
-        f" and {on} (max_over_time(({temp})[10m:15s]) >= {VENDOR_CONFIG[vendor]['throttle_temp']})"
-        f" and {on} (({power}) < {THROTTLE_POWER_DROP} * max_over_time(({power})[15m:15s]))"
+        f"(avg_over_time(({util})[2m:15s]) >= bool {THROTTLE_UTIL_MIN})"
+        f" * {on} (max_over_time(({temp})[10m:15s]) >= bool {VENDOR_CONFIG[vendor]['throttle_temp']})"
+        f" * {on} (({power}) < bool {THROTTLE_POWER_DROP} * max_over_time(({power})[15m:15s]))"
     )
+
+
+async def throttle_series(
+    vendor: str, cluster: str, start: str, end: str, step: str,
+    node: Optional[str] = None, acc_id: Optional[str] = None,
+) -> list[dict]:
+    """기간 안의 카드별 쓰로틀링 판정 시계열. 반환: [{node, acc_id, values: [(시각, "0"|"1")]}]."""
+    id_label = VENDOR_CONFIG[vendor]["id_label"]
+    out = []
+    for item in await prometheus_client.range_query(_throttle_query(vendor, cluster, acc_id=acc_id), start, end, step):
+        metric = item.get("metric", {})
+        if not _match_node(metric, node) or not metric.get(id_label):
+            continue
+        out.append({
+            "node": metric.get("instance") or metric.get("hostname"),
+            "acc_id": metric[id_label],
+            "values": [
+                (datetime.fromtimestamp(float(t), tz=timezone.utc).isoformat(), str(int(float(v))))
+                for t, v in item.get("values", [])
+            ],
+        })
+    return out
+
+
+def count_throttle(values: list[tuple[str, str]], step_seconds: float) -> tuple[int, float]:
+    """(쓰로틀링 시작 횟수, 쓰로틀링 시간 분). 1이 시작되는 지점을 센다. 직전 점이 0이거나 비어 있으면 새 시작."""
+    events, ones, prev_t, prev_v = 0, 0, None, None
+    for iso, v in values:
+        t = datetime.fromisoformat(iso).timestamp()
+        if v == "1":
+            ones += 1
+            if prev_v != "1" or t - prev_t > step_seconds:
+                events += 1
+        prev_t, prev_v = t, v
+    return events, ones * step_seconds / 60
 
 
 def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
@@ -189,13 +226,11 @@ def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
     else:
         entry["power_capped"] = percent >= POWER_CAP_NEAR_PERCENT if percent is not None else None
 
-    inferred = "_inferred" in entry
-    entry.pop("_inferred", None)
+    inferred = entry.pop("_inferred", None)  # 판정 쿼리 값 1/0. 없으면 원시값이 빠져 미판정
     if reasons is not None:
         entry["throttled"], entry["throttle_source"], entry["throttle_reasons"] = bool(reasons), "clock_reason", reasons
-    elif all(entry.get(k) is not None for k in ("utilization_percent", "temperature_celsius", "power_watts")):
-        # 원시값 3종이 모두 있어야 '아님'이라 말할 수 있다. 하나라도 비면 미판정(None).
-        entry["throttled"], entry["throttle_source"] = inferred, "inferred"
+    elif inferred is not None:
+        entry["throttled"], entry["throttle_source"] = inferred == 1.0, "inferred"
 
 
 def _match_node(metric: dict, node: Optional[str]) -> bool:
@@ -307,6 +342,12 @@ def _to_item(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional
         throttle_reasons=entry.get("throttle_reasons", []),
         labels=labels,
     )
+
+
+def _to_info(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional[str]) -> AcceleratorInfo:
+    """상세 응답용. 목록 항목에서 정체 정보만 남긴다."""
+    item = _to_item(acc_id, entry, vendor, cluster, node)
+    return AcceleratorInfo(**item.model_dump(include=set(AcceleratorInfo.model_fields)))
 
 
 def _summarize(acc_map: dict[str, dict], vendor: str) -> AcceleratorSummaryData:
@@ -435,11 +476,9 @@ async def get_accelerator(
     """가속기 ID(UUID)로 단일 가속기 상세 조회
 
     - 가속기 ID, 벤더, 클러스터, 노드, 모델명
-    - 사용률(%), 온도(°C), 전력(W)
-    - 사용 메모리, 총 메모리(bytes)
-    - 정상 동작 여부
-    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
+    - 총 메모리(bytes)
+    - 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP)
+    - 사용률, 온도, 전력 같은 계속 바뀌는 값은 .../metrics 에서 조회
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -452,7 +491,7 @@ async def get_accelerator(
         return AcceleratorDetailResponse(status="partial", data=None, warnings=warnings)
 
     return AcceleratorDetailResponse(
-        status="success", data=_to_item(acc_id, entry, vendor, cluster, node), warnings=warnings
+        status="success", data=_to_info(acc_id, entry, vendor, cluster, node), warnings=warnings
     )
 
 
@@ -460,11 +499,13 @@ async def get_accelerator(
 async def get_accelerator_metrics(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorMetricsResponse:
-    """가속기 한 장의 실시간 메트릭 조회
+    """가속기 한 장이 지금 얼마나 일하고 있는지 조회
 
     - 사용률(%), 사용 메모리, 총 메모리(bytes)
     - 전력(W), 온도(°C), 정상 동작 여부
-    - 벤더별 부가 메트릭: 코어/메모리 클럭(MHz), 인코딩·디코딩 사용률(%), PCIe 재전송과 쓰로틀 누적 횟수
+    - 전력 캡 상태: 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률, 온도, 전력 간접 판정)
+    - 벤더별 부가 메트릭(현재 NVIDIA만): 코어/메모리 클럭(MHz), 인코딩, 디코딩 사용률(%), PCIe 재전송 누적 횟수
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -488,6 +529,11 @@ async def get_accelerator_metrics(
         power_watts=entry.get("power_watts"),
         temperature_celsius=entry.get("temperature_celsius"),
         healthy=entry.get("healthy"),
+        power_limit_percent=entry.get("power_limit_percent"),
+        power_capped=entry.get("power_capped"),
+        throttled=entry.get("throttled"),
+        throttle_source=entry.get("throttle_source"),
+        throttle_reasons=entry.get("throttle_reasons", []),
         extra=extras,
     )
 
@@ -692,11 +738,9 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
     """노드 이름을 몰라도 가속기 ID(UUID)만으로 상세 조회
 
     - 가속기 ID, 벤더, 클러스터, 노드, 모델명
-    - 사용률(%), 온도(°C), 전력(W)
-    - 사용 메모리, 총 메모리(bytes)
-    - 정상 동작 여부
-    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
+    - 총 메모리(bytes)
+    - 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP)
+    - 사용률, 온도, 전력 같은 계속 바뀌는 값은 .../metrics 에서 조회
     - `_links.canonical` 에 노드까지 포함한 정식 경로 안내
 
     클러스터 전체를 훑어 ID가 일치하는 카드를 찾는 방식.
@@ -713,7 +757,7 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
         resp = AcceleratorDetailResponse(status="partial", data=None, warnings=warnings)
         return {**resp.model_dump(), "_links": _accelerator_links(cluster, acc_id, None)}
 
-    item = _to_item(acc_id, entry, vendor, cluster, None)
+    item = _to_info(acc_id, entry, vendor, cluster, None)
     resp = AcceleratorDetailResponse(status="success", data=item, warnings=warnings)
     return {**resp.model_dump(), "_links": _accelerator_links(cluster, acc_id, item.node)}
 

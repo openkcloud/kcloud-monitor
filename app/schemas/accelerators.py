@@ -111,11 +111,31 @@ class AcceleratorTopologyResponse(BaseModel):
     warnings: list[str] = []
 
 
+class AcceleratorInfo(BaseModel):
+    """가속기 한 장의 정체 정보. 계속 바뀌는 사용량은 .../metrics 에서 조회."""
+
+    acc_id: str
+    vendor: str
+    cluster: str
+    node: Optional[str] = None
+    model: Optional[str] = None
+    memory_total_bytes: Optional[float] = Field(
+        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
+    )
+    power_limit_watts: Optional[float] = Field(
+        None, description="전력 상한 (와트 W). 카드에서 읽은 설정값, 없으면 제조사 스펙 TDP"
+    )
+    power_limit_source: Optional[str] = Field(
+        None, description="상한 출처. measured = 카드 설정값 / spec_tdp = 스펙 TDP로 대체"
+    )
+    labels: dict[str, str] = {}
+
+
 class AcceleratorDetailResponse(BaseModel):
     """GET .../accelerators/{acc_id} 응답."""
 
     status: str
-    data: Optional[AcceleratorItem] = None
+    data: Optional[AcceleratorInfo] = None
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
 
@@ -135,10 +155,26 @@ class AcceleratorMetricsData(BaseModel):
     power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
     temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
     healthy: Optional[bool] = None
+    power_limit_percent: Optional[float] = Field(None, description="전력 상한 대비 현재 전력 (%)")
+    power_capped: Optional[bool] = Field(
+        None, description="전력 상한에 걸린 상태 여부. 클럭 사유가 없으면 상한 대비 95% 이상일 때 참"
+    )
+    throttled: Optional[bool] = Field(
+        None, description="쓰로틀링 여부. 판정에 필요한 값이 비면 null(미판정)"
+    )
+    throttle_source: Optional[str] = Field(
+        None,
+        description="판정 근거. clock_reason = GPU 클럭 제한 사유 직접 관측 / "
+        "inferred = 사용률 90% 이상 유지, 최근 10분 고온, 전력이 15분 최대의 85% 미만으로 간접 판정",
+    )
+    throttle_reasons: list[str] = Field(
+        default_factory=list,
+        description="클럭 제한 사유(clock_reason일 때만). sw_power_cap, hw_slowdown, sw_thermal, hw_thermal, hw_power_brake",
+    )
     extra: dict[str, float] = Field(
         default_factory=dict,
-        description="벤더별 부가 메트릭. sm_clock, mem_clock, freq = 동작 주파수(MHz) / "
-        "mem_copy_util, dec_util, enc_util = 사용률(%) / pcie_replay, throttle = 누적 발생 횟수",
+        description="벤더별 부가 메트릭(현재 NVIDIA만). sm_clock, mem_clock = 동작 주파수(MHz) / "
+        "mem_copy_util, dec_util, enc_util = 사용률(%) / pcie_replay = 누적 발생 횟수",
     )
 
 
@@ -256,5 +292,41 @@ class PartitionPowerTimeseriesResponse(BaseModel):
     acc_id: str
     partition_id: str
     series: list[PowerSeriesItem] = []
+    observed_at: str = Field(default_factory=_now)
+    warnings: list[str] = []
+
+
+class ThrottlingSeriesItem(BaseModel):
+    """카드 1장의 기간 내 쓰로틀링 판정 시계열."""
+
+    vendor: str
+    cluster: str
+    node: Optional[str] = None
+    acc_id: str
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 값) 쌍 목록. 값 1 = 쓰로틀링, 0 = 아님. 판정에 필요한 값이 빠진 시각은 점 없음"
+    )
+    throttle_events: int = Field(..., description="기간 안에서 쓰로틀링이 시작된 횟수")
+    throttled_minutes: float = Field(..., description="기간 안에서 쓰로틀링 상태였던 시간 (분). 1인 점 수 × step")
+
+
+class ThrottlingSummary(BaseModel):
+    """조회 대상 카드 전체의 쓰로틀링 합계."""
+
+    cards_total: int = Field(..., description="판정 값이 있는 카드 수")
+    cards_throttled: int = Field(..., description="기간 안에 한 번이라도 쓰로틀링이 난 카드 수")
+    throttle_events: int = Field(..., description="쓰로틀링 시작 횟수 합계")
+    throttled_minutes: float = Field(..., description="쓰로틀링 시간 합계 (분). 카드별 시간을 더한 값")
+    step_seconds: float = Field(..., description="판정 간격 (초). 이보다 짧게 끝난 쓰로틀링은 놓칠 수 있음")
+
+
+class ThrottlingTimeseriesResponse(BaseModel):
+    """GET /monitoring/throttling/timeseries 응답."""
+
+    status: str
+    series: list[ThrottlingSeriesItem] = Field(
+        default_factory=list, description="카드별 시계열. detail=true일 때만 채움"
+    )
+    summary: Optional[ThrottlingSummary] = None
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
