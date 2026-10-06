@@ -34,9 +34,10 @@ ACCEL_POWER_QUERIES = {
     "rebellions": '({__name__="RBLN_DEVICE_STATUS:CARD_POWER",cluster="rebellions"}) * 1000',
 }
 
-ACCEL_UTIL_QUERIES = {  # 효율용, %
+ACCEL_UTIL_QUERIES = {  # 효율·사용률용, %. 카드 1장당 시계열 1개
     "nvidia": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster=~"l40s|"} * 100',
-    "furiosa": 'kcloud_furiosa_core_utilization{cluster=~"furiosa.*"}',
+    # 코어(8개)별 시계열이라 카드 단위로 평균
+    "furiosa": 'avg by (cluster,device,instance,node) (kcloud_furiosa_core_utilization{cluster=~"furiosa.*"})',
     "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
 }
 
@@ -429,3 +430,54 @@ async def power_efficiency_timeseries(start: str, end: str, step: str) -> dict:
     series.insert(0, {"vendor": "all", "values": all_values})
 
     return {"status": _status_from_warnings(warnings), "data": series, "warnings": warnings}
+
+
+def _card_host(metric: dict) -> str:
+    """카드가 꽂힌 호스트. 벤더마다 라벨 이름이 달라 차례로 찾는다 (퓨리오사는 node)."""
+    return (
+        metric.get("Hostname") or metric.get("hostname") or metric.get("node")
+        or metric.get("instance") or "unknown"
+    )
+
+
+async def accelerator_utilization(by: Optional[str] = None, limit: Optional[int] = None) -> dict:
+    """가속기 사용률 — 전체 카드 평균(카드 1장 = 1표) + 벤더별 평균. by="node"면 호스트별 사용률 높은 순 목록도."""
+    warnings: list[str] = []
+    vendors: list[dict] = []
+    all_values: list[float] = []
+    host_values: dict[tuple[str, str], list[float]] = {}
+
+    for vendor, query in ACCEL_UTIL_QUERIES.items():
+        results = await prometheus_client.instant(query)
+        values = []
+        for item in results:
+            value = _first_value([item])
+            if value is None:
+                continue
+            values.append(value)
+            host_values.setdefault((vendor, _card_host(item.get("metric", {}))), []).append(value)
+        if not values:
+            warnings.append(f"NO_DATA_{vendor.upper()}")
+        all_values.extend(values)
+        vendors.append(
+            {
+                "vendor": vendor,
+                "card_count": len(values),
+                "utilization_pct": sum(values) / len(values) if values else None,
+            }
+        )
+
+    data = {
+        "avg_utilization_pct": sum(all_values) / len(all_values) if all_values else None,
+        "card_count": len(all_values),
+        "vendors": vendors,
+        "hosts": [],
+    }
+    if by == "node":
+        hosts = [
+            {"host": host, "vendor": vendor, "card_count": len(v), "utilization_pct": sum(v) / len(v)}
+            for (vendor, host), v in host_values.items()
+        ]
+        hosts.sort(key=lambda h: h["utilization_pct"], reverse=True)
+        data["hosts"] = hosts[:limit] if limit else hosts
+    return {"status": _status_from_warnings(warnings), "data": data, "warnings": warnings}

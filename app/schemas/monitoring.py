@@ -273,3 +273,45 @@ class PowerEfficiencyTimeseriesResponse(BaseModel):
     series: list[PowerEfficiencySeriesItem]
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
+
+
+class VendorUtilization(BaseModel):
+    """벤더별 가속기 사용률."""
+
+    vendor: str = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
+    card_count: int = Field(..., description="값이 수집된 카드 수")
+    utilization_pct: Optional[float] = Field(
+        None,
+        description="해당 벤더 카드들의 사용률 평균 (%). NVIDIA 연산 엔진 활성 비율, 퓨리오사 코어 8개 평균, 리벨리온 장치 사용률",
+    )
+
+
+class HostUtilization(BaseModel):
+    """호스트별 가속기 사용률."""
+
+    host: str = Field(..., description="카드가 꽂힌 호스트 이름")
+    vendor: str = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
+    card_count: int = Field(..., description="이 호스트에서 값이 수집된 카드 수")
+    utilization_pct: float = Field(..., description="이 호스트 카드들의 사용률 평균 (%)")
+
+
+class AcceleratorUtilizationData(BaseModel):
+    """전체 가속기 사용률 데이터."""
+
+    avg_utilization_pct: Optional[float] = Field(
+        None, description="전체 카드 사용률 평균 (%). 벤더 구분 없이 카드 1장을 한 표로 평균"
+    )
+    card_count: int = Field(..., description="값이 수집된 전체 카드 수")
+    vendors: list[VendorUtilization]
+    hosts: list[HostUtilization] = Field(
+        default_factory=list, description="호스트별 사용률, 높은 순. by=node일 때만 채움"
+    )
+
+
+class AcceleratorUtilizationResponse(BaseModel):
+    """GET /monitoring/accelerators/utilization 응답."""
+
+    status: str
+    data: AcceleratorUtilizationData
+    observed_at: str = Field(default_factory=_now)
+    warnings: list[str] = []
