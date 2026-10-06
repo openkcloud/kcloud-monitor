@@ -133,8 +133,8 @@ class AcceleratorResources(BaseModel):
     """가속기 자원 요약."""
 
     total: int = Field(0, description="가속기(카드) 수")
-    active: Optional[int] = Field(None, description="사용 중 카드 수 (미산출 시 생략)")
-    idle: Optional[int] = Field(None, description="유휴 카드 수 (미산출 시 생략)")
+    active: Optional[int] = Field(None, description="사용 중 카드 수 (미산출 시 null)")
+    idle: Optional[int] = Field(None, description="유휴 카드 수 (미산출 시 null)")
     avg_utilization_percent: Optional[float] = Field(None, description="평균 사용률 (%)")
     total_power_watts: Optional[float] = Field(None, description="전력 합계 (W)")
 
@@ -148,7 +148,7 @@ class StorageResources(BaseModel):
 
 
 class ClusterResources(BaseModel):
-    """클러스터 자원 요약 묶음. 데이터 없는 항목은 생략(null)."""
+    """클러스터 자원 요약 묶음. 데이터 없는 항목은 null."""
 
     nodes: Optional[NodeResources] = None
     cpu: Optional[CpuResources] = None

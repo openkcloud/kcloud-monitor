@@ -387,7 +387,6 @@ async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources
     "/clusters/{cluster}/resource",
     summary="클러스터 자원 현황",
     response_model=ClusterResourceResponse,
-    response_model_exclude_none=True,  # 데이터 없는 자원 항목(storage 등)은 생략
 )
 async def get_cluster_resource(request: Request, cluster: str):
     """클러스터가 가진 자원을 종류별로 합친 자원 현황 조회
@@ -399,8 +398,9 @@ async def get_cluster_resource(request: Request, cluster: str):
     - storage : 전체 용량, 사용 용량(TB), 사용률(%)
     - power : 총 전력(W)과 CPU/가속기/기타로 나눈 내역
 
-    값이 없는 항목은 응답에서 생략. CPU, 메모리, 서버 전력은 관리 클러스터에서 주로 채워지고
-    서비스 클러스터는 가속기 항목이 주로 채워짐.
+    값이 없는 항목도 생략하지 않고 null로 내려줌. 화면이 키 존재 여부를 따로 확인하지 않아도 됨.
+    서비스 클러스터는 쿠버네티스 노드 정보가 없어 가속기를 보고하는 호스트 수를 노드 수로 씀.
+    서버 전력(IPMI)은 관리 클러스터만 있음.
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -412,31 +412,33 @@ async def get_cluster_resource(request: Request, cluster: str):
     n_ready = await _scalar(
         f'sum(kube_node_status_condition{{cluster="{L}",condition="Ready",status="true"}})'
     )
-    nodes = None
     if n_total:
         t = int(n_total)
         r = int(n_ready or 0)
-        nodes = NodeResources(total=t, ready=r, not_ready=max(0, t - r))
+    else:
+        # 서비스 클러스터는 kube_node_info가 없음. 클러스터 목록, 노드 목록과 같은 기준으로
+        # 가속기를 보고하는 호스트를 노드로 셈. 보고 중 = 살아 있음이라 ready = total
+        t = r = await _distinct_instances(info.power_query)
+    nodes = NodeResources(total=t, ready=r, not_ready=max(0, t - r))
 
     # ── cpu ──
-    cpu_total = await _scalar(f"sum(machine_cpu_cores{sel})")
+    # machine_cpu_cores(cAdvisor)는 쿠버네티스 노드에만 있어 없으면 node_exporter 코어 수로 대신함
+    cpu_total = await _scalar(f"sum(machine_cpu_cores{sel})") or await _scalar(
+        f'count(node_cpu_seconds_total{{cluster="{L}",mode="idle"}})'
+    )
     cpu_used = await _scalar(f'sum(rate(node_cpu_seconds_total{{cluster="{L}",mode!="idle"}}[5m]))')
-    cpu = None
-    if cpu_total:
-        util = _rnd(cpu_used / cpu_total * 100) if cpu_used is not None else None
-        cpu = CpuResources(total_cores=_rnd(cpu_total), used_cores=_rnd(cpu_used), utilization_percent=util)
+    util = _rnd(cpu_used / cpu_total * 100) if cpu_total and cpu_used is not None else None
+    cpu = CpuResources(total_cores=_rnd(cpu_total), used_cores=_rnd(cpu_used), utilization_percent=util)
 
     # ── memory ──
     mem_total = await _scalar(f"sum(node_memory_MemTotal_bytes{sel})")
     mem_avail = await _scalar(f"sum(node_memory_MemAvailable_bytes{sel})")
-    memory = None
-    if mem_total:
-        used = (mem_total - mem_avail) if mem_avail is not None else None
-        memory = MemoryResources(
-            total_gb=_rnd(mem_total / 1e9),
-            used_gb=_rnd(used / 1e9) if used is not None else None,
-            utilization_percent=_rnd(used / mem_total * 100) if used is not None else None,
-        )
+    used = (mem_total - mem_avail) if mem_total and mem_avail is not None else None
+    memory = MemoryResources(
+        total_gb=_rnd(mem_total / 1e9) if mem_total else None,
+        used_gb=_rnd(used / 1e9) if used is not None else None,
+        utilization_percent=_rnd(used / mem_total * 100) if used is not None else None,
+    )
 
     # ── accelerators ──
     accelerators, gpu_watts = await _acc_summary(info)
@@ -454,7 +456,7 @@ async def get_cluster_resource(request: Request, cluster: str):
 
     resources = ClusterResources(nodes=nodes, cpu=cpu, memory=memory, accelerators=accelerators, storage=None)
 
-    if all(x is None for x in (nodes, cpu, memory, accelerators)):
+    if t == 0 and accelerators is None and memory.total_gb is None:
         warnings.append("NO_DATA")
     status = "partial" if warnings else "success"
     data = ClusterResourceData(cluster=cluster, type=info.type, resources=resources, power=power)
