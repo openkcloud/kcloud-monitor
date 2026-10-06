@@ -12,7 +12,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.v2.deps import TimeseriesParams
+from app.api.v2.accelerators import count_throttle, throttle_series
+from app.api.v2.deps import TimeseriesParams, parse_period
+from app.schemas.accelerators import ThrottlingSeriesItem, ThrottlingSummary, ThrottlingTimeseriesResponse
 from app.schemas.monitoring import (
     METRIC_ALLOWLIST,
     AcceleratorEfficiency,
@@ -560,6 +562,58 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
         series=series,
         warnings=warnings,
     )
+
+
+@router.get(
+    "/monitoring/throttling/timeseries",
+    summary="쓰로틀링 시계열(횡단)",
+    response_model=ThrottlingTimeseriesResponse,
+)
+async def get_throttling_timeseries(
+    request: Request,
+    cluster: Optional[str] = Query(None, description="이 클러스터의 카드만. 미지정 시 전체"),
+    node: Optional[str] = Query(None, description="이 노드의 카드만"),
+    acc_id: Optional[str] = Query(None, description="이 가속기 ID의 카드만"),
+    detail: bool = Query(False, description="true면 카드별 시계열(series)까지 반환. 기본은 summary만"),
+    params: TimeseriesParams = Depends(),
+):
+    """가속기가 스스로 속도를 낮춘(쓰로틀링) 시점과 횟수를 기간으로 조회
+
+    - 조건 없이 부르면 전체 카드, cluster, node, acc_id를 주면 그 대상만
+    - 기본 응답은 summary(합계)만. detail=true를 주면 카드별 series까지 반환
+    - series : 카드별 (시각, 1 또는 0) 목록과 그 카드의 쓰로틀링 시작 횟수, 쓰로틀링 시간(분)
+    - summary : 조회 대상 전체의 카드 수, 쓰로틀링이 난 카드 수, 시작 횟수 합계, 시간 합계(분), 판정 간격(초)
+    - 판정 기준 : 2분 평균 사용률 90% 이상, 최근 10분 최고 온도가 기준 이상, 전력이 15분 최대의 85% 미만
+    - 판정에 필요한 값이 빠진 시각은 0으로 채우지 않고 점을 비움
+    - 조회 기간과 판정 간격은 period, start, end, step 파라미터로 지정. step이 길면 짧은 쓰로틀링을 놓칠 수 있음
+    """
+    now = datetime.now(timezone.utc)
+    start, end, step = params.start_iso(now), params.end_iso(now), params.step
+    step_seconds = parse_period(step).total_seconds()
+
+    series: list[ThrottlingSeriesItem] = []
+    clusters = await cluster_discovery.get_clusters()
+    if cluster and cluster not in clusters:
+        return ThrottlingTimeseriesResponse(status="partial", warnings=["UNKNOWN_CLUSTER"])
+    for name, info in clusters.items():
+        if not info.vendor or (cluster and name != cluster):
+            continue
+        for s in await throttle_series(info.vendor, name, start, end, step, node=node, acc_id=acc_id):
+            events, minutes = count_throttle(s["values"], step_seconds)
+            series.append(ThrottlingSeriesItem(
+                vendor=info.vendor, cluster=name, throttle_events=events, throttled_minutes=minutes, **s
+            ))
+
+    if not series:
+        return ThrottlingTimeseriesResponse(status="partial", warnings=["NO_DATA"])
+    summary = ThrottlingSummary(
+        cards_total=len(series),
+        cards_throttled=sum(1 for s in series if s.throttle_events),
+        throttle_events=sum(s.throttle_events for s in series),
+        throttled_minutes=sum(s.throttled_minutes for s in series),
+        step_seconds=step_seconds,
+    )
+    return ThrottlingTimeseriesResponse(status="success", series=series if detail else [], summary=summary)
 
 
 @router.get("/monitoring/stream/power", summary="실시간 전력 스트림(SSE)")
