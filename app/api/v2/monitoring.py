@@ -212,17 +212,21 @@ async def get_power_summary(request: Request):
 async def get_power_breakdown(
     request: Request,
     dimension: str = Query("vendor", description="쪼개는 기준: vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="전력 정렬 방향: desc(큰 순) | asc(작은 순)"),
 ):
     """전력을 원하는 기준으로 쪼개서 어디서 얼마나 쓰는지 조회
 
     - dimension : vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)
+    - sort_order : 전력 기준 desc(큰 순, 기본) | asc(작은 순). 전력 값이 없는 항목은 맨 뒤
     - items : 기준값 이름, 전력(W), 측정 구분
     """
     r = await power_breakdown(dimension)
+    sign = -1 if sort_order == "desc" else 1
+    items = sorted(r["data"], key=lambda i: (i["watts"] is None, sign * (i["watts"] or 0.0)))
     return PowerBreakdownResponse(
         status=r["status"],
         dimension=dimension,
-        items=[PowerBreakdownItem(**i) for i in r["data"]],
+        items=[PowerBreakdownItem(**i) for i in items],
         warnings=r["warnings"],
     )
 
