@@ -219,6 +219,39 @@ async def _ipmi_node_power_range(
     return psu, "ipmi-psu-input"
 
 
+SORTABLE_FIELDS = ("power_watts", "utilization_percent")
+
+
+def _sort_nodes(nodes: list[NodeSummaryItem], sort_by: Optional[str], sort_order: str) -> None:
+    """sort_by가 power_watts, utilization_percent면 그 값으로, 그 외는 이름순. 값이 없는 노드는 항상 맨 뒤."""
+    if sort_by not in SORTABLE_FIELDS:
+        nodes.sort(key=lambda n: n.nodename or "")
+        return
+    sign = -1 if sort_order == "desc" else 1
+    nodes.sort(key=lambda n: (getattr(n, sort_by) is None, sign * (getattr(n, sort_by) or 0.0)))
+
+
+def _host_items(info: ClusterInfo, cluster: str, host_rows) -> list[NodeSummaryItem]:
+    """서비스 클러스터 호스트 행을 노드 항목으로. kube_node_info가 없어 가속기 메트릭 hostname을 노드로 삼는다."""
+    return [
+        NodeSummaryItem(
+            nodename=host,
+            internal_ip=None,
+            role=None,
+            cluster=cluster,
+            vendor=info.vendor,
+            up=True,  # 가속기 메트릭이 보고되는 시점 = 살아있는 호스트
+            os=None,
+            kubelet_version=None,
+            node_type="physical" if is_phys else "virtual",
+            accelerator_count=accel_count,
+            power_watts=power,
+            utilization_percent=util,
+        )
+        for host, is_phys, accel_count, power, util in host_rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -244,7 +277,7 @@ async def list_nodes(
     관리 클러스터는 Kubernetes에 등록된 노드가 기준이고, 가속기 클러스터는 가속기 메트릭에
     찍힌 호스트 이름이 기준.
 
-    정렬: sort_by=power_watts 지원. 그 외 값은 이름순으로 정렬.
+    정렬: sort_by=power_watts, utilization_percent 지원. 그 외 값은 이름순으로 정렬. 값이 없는 노드는 맨 뒤.
     """
     info = await _require_cluster(cluster)
     phys_nodes = await _phys_node_set()
@@ -318,24 +351,7 @@ async def list_nodes(
                 )
             )
     else:
-        # 서비스 클러스터: kube_node_info가 없어 가속기 메트릭 hostname을 노드로 삼는다.
-        host_rows = await _service_cluster_hosts(info, phys_nodes)
-        nodes = [
-            NodeSummaryItem(
-                nodename=host,
-                internal_ip=None,
-                role=None,
-                cluster=cluster,
-                up=True,  # 가속기 메트릭이 보고되는 시점 = 살아있는 호스트
-                os=None,
-                kubelet_version=None,
-                node_type="physical" if is_phys else "virtual",
-                accelerator_count=accel_count,
-                power_watts=power,
-                utilization_percent=util,
-            )
-            for host, is_phys, accel_count, power, util in host_rows
-        ]
+        nodes = _host_items(info, cluster, await _service_cluster_hosts(info, phys_nodes))
 
     # summary는 필터·페이지와 무관한 전체 노드 기준 — 필터 적용 전에 센다.
     mem_used = (total_mem - avail_mem) if total_mem is not None and avail_mem is not None else None
@@ -354,11 +370,7 @@ async def list_nodes(
         q = params.search.lower()
         nodes = [n for n in nodes if q in (n.nodename or "").lower() or q in (n.internal_ip or "").lower()]
 
-    if params.sort_by == "power_watts":
-        desc = params.sort_order == "desc"
-        nodes.sort(key=lambda n: (n.power_watts is None, -(n.power_watts or 0.0) if desc else (n.power_watts or 0.0)))
-    else:
-        nodes.sort(key=lambda n: n.nodename or "")
+    _sort_nodes(nodes, params.sort_by, params.sort_order)
 
     total = len(nodes)
     page = nodes[params.offset : params.offset + params.limit]
@@ -371,6 +383,51 @@ async def list_nodes(
         total=total,
         summary=summary,
         warnings=warnings,
+    )
+
+
+@router.get("/monitoring/accelerators/hosts", summary="가속기 호스트 순위(횡단)", response_model=NodeListResponse)
+async def list_accelerator_hosts(
+    request: Request,
+    params: PaginationParams = Depends(),
+    cluster: Optional[str] = Query(None, description="이 클러스터의 호스트만. 미지정 시 전체 가속기 클러스터"),
+):
+    """모든 가속기 클러스터의 호스트를 한데 모아 사용률이나 전력으로 순위 매김
+
+    - 호스트 이름, 소속 클러스터, 벤더, 종류(physical | virtual)
+    - 가속기 카드 수, 전력(W), 가속기 사용률 평균(%)
+    - total : 전체 호스트 개수
+    - 기본 정렬은 사용률 높은 순. sort_by=power_watts, utilization_percent와 sort_order, limit 지정 가능
+    - 사용률은 벤더별 원본 지표라 정의가 다름. NVIDIA GPU_UTIL은 커널이 돌던 시간 비율이라 실제보다 높게 나오는 경향
+
+    /clusters/{cluster}/nodes 와 같은 항목을 쓰므로 상세 조회는 그 경로로 이어서 가능.
+    """
+    phys_nodes = await _phys_node_set()
+    clusters = await cluster_discovery.get_clusters()
+    if cluster and cluster not in clusters:
+        return NodeListResponse(status="partial", nodes=[], total=0, warnings=["UNKNOWN_CLUSTER"])
+
+    hosts: list[NodeSummaryItem] = []
+    for name, info in clusters.items():
+        if info.type == "management" or not info.vendor or (cluster and name != cluster):
+            continue
+        hosts += _host_items(info, name, await _service_cluster_hosts(info, phys_nodes))
+
+    if params.search:
+        q = params.search.lower()
+        hosts = [h for h in hosts if q in (h.nodename or "").lower()]
+
+    if params.sort_by:
+        _sort_nodes(hosts, params.sort_by, params.sort_order)
+    else:
+        _sort_nodes(hosts, "utilization_percent", "desc")
+
+    total = len(hosts)
+    return NodeListResponse(
+        status="success" if total else "partial",
+        nodes=hosts[params.offset : params.offset + params.limit],
+        total=total,
+        warnings=[] if total else ["NO_DATA"],
     )
 
 

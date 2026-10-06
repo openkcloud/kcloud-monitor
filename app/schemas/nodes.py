@@ -29,6 +29,7 @@ class NodeSummaryItem(BaseModel):
     internal_ip: Optional[str] = Field(None, description="노드 내부 IP (mgmt만)")
     role: Optional[str] = Field(None, description="worker / control-plane (mgmt만)")
     cluster: str
+    vendor: Optional[str] = Field(None, description="가속기 벤더 (nvidia | furiosa | rebellions). 서비스 클러스터만")
     up: bool = Field(..., description="Ready 상태(mgmt) 또는 가속기 메트릭 보고 여부(서비스)")
     os: Optional[str] = Field(None, description="OS 이미지 (mgmt만)")
     kubelet_version: Optional[str] = Field(None, description="kubelet 버전 (mgmt만)")
