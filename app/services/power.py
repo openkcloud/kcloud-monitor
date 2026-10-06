@@ -440,8 +440,10 @@ def _card_host(metric: dict) -> str:
     )
 
 
-async def accelerator_utilization(by: Optional[str] = None, limit: Optional[int] = None) -> dict:
-    """가속기 사용률 — 전체 카드 평균(카드 1장 = 1표) + 벤더별 평균. by="node"면 호스트별 사용률 높은 순 목록도."""
+async def accelerator_utilization(
+    by: Optional[str] = None, limit: Optional[int] = None, sort_order: str = "desc"
+) -> dict:
+    """가속기 사용률 — 전체 카드 평균(카드 1장 = 1표) + 벤더별 평균. by="node"면 호스트별 목록도(sort_order 순, limit 전에 정렬)."""
     warnings: list[str] = []
     vendors: list[dict] = []
     all_values: list[float] = []
@@ -478,7 +480,7 @@ async def accelerator_utilization(by: Optional[str] = None, limit: Optional[int]
             {"host": host, "vendor": vendor, "card_count": len(v), "utilization_pct": sum(v) / len(v)}
             for (vendor, host), v in host_values.items()
         ]
-        hosts.sort(key=lambda h: h["utilization_pct"], reverse=True)
+        hosts.sort(key=lambda h: h["utilization_pct"], reverse=sort_order == "desc")
         data["hosts"] = hosts[:limit] if limit else hosts
     return {"status": _status_from_warnings(warnings), "data": data, "warnings": warnings}
 
