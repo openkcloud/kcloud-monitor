@@ -386,51 +386,6 @@ async def list_nodes(
     )
 
 
-@router.get("/monitoring/accelerators/hosts", summary="가속기 호스트 순위(횡단)", response_model=NodeListResponse)
-async def list_accelerator_hosts(
-    request: Request,
-    params: PaginationParams = Depends(),
-    cluster: Optional[str] = Query(None, description="이 클러스터의 호스트만. 미지정 시 전체 가속기 클러스터"),
-):
-    """모든 가속기 클러스터의 호스트를 한데 모아 사용률이나 전력으로 순위 매김
-
-    - 호스트 이름, 소속 클러스터, 벤더, 종류(physical | virtual)
-    - 가속기 카드 수, 전력(W), 가속기 사용률 평균(%)
-    - total : 전체 호스트 개수
-    - 기본 정렬은 사용률 높은 순. sort_by=power_watts, utilization_percent와 sort_order, limit 지정 가능
-    - 사용률은 벤더별 원본 지표라 정의가 다름. NVIDIA GPU_UTIL은 커널이 돌던 시간 비율이라 실제보다 높게 나오는 경향
-
-    /clusters/{cluster}/nodes 와 같은 항목을 쓰므로 상세 조회는 그 경로로 이어서 가능.
-    """
-    phys_nodes = await _phys_node_set()
-    clusters = await cluster_discovery.get_clusters()
-    if cluster and cluster not in clusters:
-        return NodeListResponse(status="partial", nodes=[], total=0, warnings=["UNKNOWN_CLUSTER"])
-
-    hosts: list[NodeSummaryItem] = []
-    for name, info in clusters.items():
-        if info.type == "management" or not info.vendor or (cluster and name != cluster):
-            continue
-        hosts += _host_items(info, name, await _service_cluster_hosts(info, phys_nodes))
-
-    if params.search:
-        q = params.search.lower()
-        hosts = [h for h in hosts if q in (h.nodename or "").lower()]
-
-    if params.sort_by:
-        _sort_nodes(hosts, params.sort_by, params.sort_order)
-    else:
-        _sort_nodes(hosts, "utilization_percent", "desc")
-
-    total = len(hosts)
-    return NodeListResponse(
-        status="success" if total else "partial",
-        nodes=hosts[params.offset : params.offset + params.limit],
-        total=total,
-        warnings=[] if total else ["NO_DATA"],
-    )
-
-
 @router.get("/clusters/{cluster}/nodes/{node}", summary="노드 상세", response_model=NodeDetailResponse)
 async def get_node(request: Request, cluster: str, node: str):
     """노드 한 대의 상세 조회
