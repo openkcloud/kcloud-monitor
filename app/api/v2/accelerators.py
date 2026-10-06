@@ -36,11 +36,30 @@ from app.schemas.accelerators import (
     TopologyLinkItem,
 )
 from app.services.cluster_discovery import cluster_discovery
+from app.services.power import KNOWN_TDP_WATTS
 from app.services.prometheus import prometheus_client
 
 router = APIRouter()
 
 MIB_TO_BYTES = 1024 * 1024
+
+# 전력 캡: 상한 대비 이 비율(%) 이상이면 캡에 걸린 것으로 본다. 실측 상한이 없으면 스펙 TDP로 대체.
+POWER_CAP_NEAR_PERCENT = 95.0
+
+# 쓰로틀링 간접 판정 초기값. 재현 시험(고정 최대 부하 + 냉각 제한)으로 맞춘다.
+# 쓰로틀링은 클럭만 낮추므로 사용률은 100%로 유지될 수 있다. 사용률 급락 대신 전력 하락을 본다.
+THROTTLE_UTIL_MIN = 90.0  # 2분 평균 사용률(%) 이상
+THROTTLE_POWER_DROP = 0.85  # 현재 전력 < 15분 최대 전력 × 이 값
+
+# DCGM 클럭 사유 비트 중 성능 제한에 해당하는 것만. GPU_IDLE(0x1)·앱 클럭 설정(0x2) 등은 제외.
+CLOCK_REASON_BITS = {
+    0x4: "sw_power_cap",
+    0x8: "hw_slowdown",
+    0x20: "sw_thermal",
+    0x40: "hw_thermal",
+    0x80: "hw_power_brake",
+}
+POWER_CAP_REASONS = {"sw_power_cap", "hw_power_brake"}
 
 VENDOR_CONFIG: dict[str, dict] = {
     "nvidia": {
@@ -59,6 +78,11 @@ VENDOR_CONFIG: dict[str, dict] = {
         "enc_util": 'DCGM_FI_DEV_ENC_UTIL{{cluster="{cluster}"{extra}}}',
         "pcie_replay": 'DCGM_FI_DEV_PCIE_REPLAY_COUNTER{{cluster="{cluster}"{extra}}}',
         "nvlink_bw": 'DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL{{cluster="{cluster}"{extra}}}',
+        # 둘 다 기본 counters.csv에 없어 추가 전까지는 비어 있다. 비면 스펙 TDP·간접 판정으로 대체.
+        "power_limit": 'DCGM_FI_DEV_POWER_MGMT_LIMIT{{cluster="{cluster}"{extra}}}',
+        # DCGM 3.3부터 CLOCK_THROTTLE_REASONS가 CLOCKS_EVENT_REASONS로 이름이 바뀌어 둘 다 잡는다.
+        "clock_reasons": '{{__name__=~"DCGM_FI_DEV_CLOCK(S_EVENT|_THROTTLE)_REASONS",cluster="{cluster}"{extra}}}',
+        "throttle_temp": 85,  # 초기값
         "extra_keys": [
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
         ],
@@ -76,6 +100,7 @@ VENDOR_CONFIG: dict[str, dict] = {
         "mem_used": 'kcloud_furiosa_memory_used_bytes{{cluster="{cluster}"{extra}}}',
         "mem_total": 'kcloud_furiosa_memory_total_bytes{{cluster="{cluster}"{extra}}}',
         "alive": 'kcloud_furiosa_device_alive{{cluster="{cluster}"{extra}}}',
+        "throttle_temp": 85,  # 초기값. RNGD 쓰로틀링 진입 온도 미공개
         "extra_keys": [],
     },
     "rebellions": {
@@ -88,6 +113,8 @@ VENDOR_CONFIG: dict[str, dict] = {
         "mem_used": 'RBLN_DEVICE_STATUS:DRAM_USED{{cluster="{cluster}"{extra}}}',
         "mem_total": 'RBLN_DEVICE_STATUS:DRAM_TOTAL{{cluster="{cluster}"{extra}}}',
         "health": 'RBLN_DEVICE_STATUS:HEALTH{{cluster="{cluster}"{extra}}}',
+        # 드라이버 쓰로틀링 진입 온도. 2025-09-30 릴리스부터 90°C(이전 75°C). ×1000 보정 후 °C 기준
+        "throttle_temp": 90,
         "extra_keys": [],
     },
 }
@@ -126,6 +153,49 @@ async def _range_metric(
     if query is None:
         return []
     return await prometheus_client.range_query(query, start, end, step)
+
+
+def _throttle_query(vendor: str, cluster: str) -> str:
+    """쓰로틀링 의심 카드만 남기는 쿼리. 사용률 유지 and 최근 고온 and 전력이 최근 최대보다 떨어짐.
+
+    값이 바뀌는 순간만 잡는 delta 대신 구간 집계를 써서 쓰로틀링이 이어지는 동안 계속 참이 된다.
+    """
+    util, temp, power = (_build_query(vendor, k, cluster) for k in ("util", "temp", "power"))
+    on = f'on({VENDOR_CONFIG[vendor]["id_label"]})'
+    return (
+        f"(avg_over_time(({util})[2m:15s]) >= {THROTTLE_UTIL_MIN})"
+        f" and {on} (max_over_time(({temp})[10m:15s]) >= {VENDOR_CONFIG[vendor]['throttle_temp']})"
+        f" and {on} (({power}) < {THROTTLE_POWER_DROP} * max_over_time(({power})[15m:15s]))"
+    )
+
+
+def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
+    """수집 중간값(_power_limit, _clock_reasons, _inferred)으로 전력 캡 상태와 쓰로틀링 여부를 채운다."""
+    raw_reasons = entry.pop("_clock_reasons", None)
+    reasons = (
+        None if raw_reasons is None
+        else [name for bit, name in CLOCK_REASON_BITS.items() if int(raw_reasons) & bit]
+    )
+
+    measured = entry.pop("_power_limit", None)
+    limit = measured or KNOWN_TDP_WATTS.get(vendor)
+    power = entry.get("power_watts")
+    percent = power / limit * 100 if power is not None and limit else None
+    entry["power_limit_watts"] = limit
+    entry["power_limit_source"] = ("measured" if measured else "spec_tdp") if limit else None
+    entry["power_limit_percent"] = percent
+    if reasons is not None:
+        entry["power_capped"] = bool(POWER_CAP_REASONS & set(reasons))
+    else:
+        entry["power_capped"] = percent >= POWER_CAP_NEAR_PERCENT if percent is not None else None
+
+    inferred = "_inferred" in entry
+    entry.pop("_inferred", None)
+    if reasons is not None:
+        entry["throttled"], entry["throttle_source"], entry["throttle_reasons"] = bool(reasons), "clock_reason", reasons
+    elif all(entry.get(k) is not None for k in ("utilization_percent", "temperature_celsius", "power_watts")):
+        # 원시값 3종이 모두 있어야 '아님'이라 말할 수 있다. 하나라도 비면 미판정(None).
+        entry["throttled"], entry["throttle_source"] = inferred, "inferred"
 
 
 def _match_node(metric: dict, node: Optional[str]) -> bool:
@@ -200,6 +270,13 @@ async def _collect_accelerators(
             health = entry.pop("_health", None)
             entry["healthy"] = (health == 0.0) if health is not None else None
 
+    if vendor == "nvidia":
+        merge(await _instant_metric(vendor, cluster, "power_limit"), "_power_limit")
+        merge(await _instant_metric(vendor, cluster, "clock_reasons"), "_clock_reasons")
+    merge(await prometheus_client.instant(_throttle_query(vendor, cluster)), "_inferred")
+    for entry in acc_map.values():
+        _apply_power_cap_and_throttle(entry, vendor)
+
     if not acc_map:
         warnings.append("NO_DATA")
 
@@ -221,6 +298,13 @@ def _to_item(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional
         memory_used_bytes=entry.get("memory_used_bytes"),
         memory_total_bytes=entry.get("memory_total_bytes"),
         healthy=entry.get("healthy"),
+        power_limit_watts=entry.get("power_limit_watts"),
+        power_limit_source=entry.get("power_limit_source"),
+        power_limit_percent=entry.get("power_limit_percent"),
+        power_capped=entry.get("power_capped"),
+        throttled=entry.get("throttled"),
+        throttle_source=entry.get("throttle_source"),
+        throttle_reasons=entry.get("throttle_reasons", []),
         labels=labels,
     )
 
@@ -284,6 +368,8 @@ async def list_accelerators(
     - 사용률(%), 온도(°C), 전력(W)
     - 사용 메모리, 총 메모리(bytes)
     - 정상 동작 여부
+    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
     - total, summary : 전체 개수와 집계 (평균 사용률·온도·전력, 전력 합계)
     """
     vendor = await _get_vendor(cluster)
@@ -352,6 +438,8 @@ async def get_accelerator(
     - 사용률(%), 온도(°C), 전력(W)
     - 사용 메모리, 총 메모리(bytes)
     - 정상 동작 여부
+    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -607,6 +695,8 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
     - 사용률(%), 온도(°C), 전력(W)
     - 사용 메모리, 총 메모리(bytes)
     - 정상 동작 여부
+    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
     - `_links.canonical` 에 노드까지 포함한 정식 경로 안내
 
     클러스터 전체를 훑어 ID가 일치하는 카드를 찾는 방식.

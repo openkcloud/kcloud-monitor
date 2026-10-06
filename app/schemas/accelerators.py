@@ -37,6 +37,28 @@ class AcceleratorItem(BaseModel):
         None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
     )
     healthy: Optional[bool] = None
+    power_limit_watts: Optional[float] = Field(
+        None, description="전력 상한 (와트 W). 카드에서 읽은 설정값, 없으면 제조사 스펙 TDP"
+    )
+    power_limit_source: Optional[str] = Field(
+        None, description="상한 출처. measured = 카드 설정값 / spec_tdp = 스펙 TDP로 대체"
+    )
+    power_limit_percent: Optional[float] = Field(None, description="상한 대비 현재 전력 (%)")
+    power_capped: Optional[bool] = Field(
+        None, description="전력 상한에 걸린 상태 여부. 클럭 사유가 없으면 상한 대비 95% 이상일 때 참"
+    )
+    throttled: Optional[bool] = Field(
+        None, description="쓰로틀링 여부. 판정에 필요한 값이 비면 null(미판정)"
+    )
+    throttle_source: Optional[str] = Field(
+        None,
+        description="판정 근거. clock_reason = GPU 클럭 제한 사유 직접 관측 / "
+        "inferred = 사용률 90% 이상 유지, 최근 10분 고온, 전력이 15분 최대의 85% 미만으로 간접 판정",
+    )
+    throttle_reasons: list[str] = Field(
+        default_factory=list,
+        description="클럭 제한 사유(clock_reason일 때만). sw_power_cap, hw_slowdown, sw_thermal, hw_thermal, hw_power_brake",
+    )
     labels: dict[str, str] = {}
 
 
