@@ -481,3 +481,55 @@ async def accelerator_utilization(by: Optional[str] = None, limit: Optional[int]
         hosts.sort(key=lambda h: h["utilization_pct"], reverse=True)
         data["hosts"] = hosts[:limit] if limit else hosts
     return {"status": _status_from_warnings(warnings), "data": data, "warnings": warnings}
+
+
+def _avg_series(per_ts: dict[float, list[float]]) -> list[tuple[str, str]]:
+    """{epoch: [값...]} → 시각순 (ISO 8601 UTC, 평균값) 목록."""
+    return [
+        (datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(), str(sum(v) / len(v)))
+        for ts, v in sorted(per_ts.items())
+    ]
+
+
+async def accelerator_utilization_timeseries(start: str, end: str, step: str, by: Optional[str] = None) -> dict:
+    """가속기 사용률 시계열 — accelerator_utilization()의 평균 산식을 시간축에 펼친 것.
+
+    카드별 시계열을 받아 시각마다 평균한다. "all"은 카드 1장 = 1표 평균(현재값 API의 avg_utilization_pct에 대응).
+    by="node"면 호스트별 시계열도 만든다.
+    """
+    warnings: list[str] = []
+    vendors = list(ACCEL_UTIL_QUERIES)
+    results = await asyncio.gather(
+        *(prometheus_client.range_query(ACCEL_UTIL_QUERIES[v], start, end, step) for v in vendors)
+    )
+
+    all_ts: dict[float, list[float]] = {}
+    host_ts: dict[tuple[str, str], dict[float, list[float]]] = {}
+    series: list[dict] = []
+    for vendor, cards in zip(vendors, results):
+        vendor_ts: dict[float, list[float]] = {}
+        for item in cards:
+            host = host_ts.setdefault((vendor, _card_host(item.get("metric", {}))), {})
+            for v in item.get("values", []):
+                try:
+                    ts = float(v[0])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                value = _parse_float(v[1])
+                if value is None:
+                    continue
+                for bucket in (vendor_ts, all_ts, host):
+                    bucket.setdefault(ts, []).append(value)
+        if not vendor_ts:
+            warnings.append(f"NO_DATA_{vendor.upper()}")
+        series.append({"vendor": vendor, "values": _avg_series(vendor_ts)})
+    series.insert(0, {"vendor": "all", "values": _avg_series(all_ts)})
+
+    hosts: list[dict] = []
+    if by == "node":
+        hosts = [
+            {"host": host, "vendor": vendor, "values": _avg_series(per_ts)}
+            for (vendor, host), per_ts in sorted(host_ts.items())
+            if per_ts
+        ]
+    return {"status": _status_from_warnings(warnings), "data": {"series": series, "hosts": hosts}, "warnings": warnings}
