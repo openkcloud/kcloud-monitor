@@ -14,6 +14,7 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 
 각 서비스 함수는 `{"status": str, "data": <dict|list>, "warnings": list[str]}` 형태로 반환한다.
 """
+import asyncio
 import math
 from datetime import datetime, timezone
 from typing import Optional
@@ -385,3 +386,46 @@ async def power_efficiency() -> dict:
     }
 
     return {"status": _status_from_warnings(warnings), "data": data, "warnings": warnings}
+
+
+async def power_efficiency_timeseries(start: str, end: str, step: str) -> dict:
+    """가속기 전력 효율 시계열 — 벤더별 (평균 사용률 ÷ 카드 1장 평균 전력)의 시간 변화.
+
+    power_efficiency()의 efficiency_pct_per_watt 산식을 range 쿼리로 시간축에 펼친 것.
+    "all" 시리즈는 값이 있는 벤더들의 효율 평균(현재값 API의 avg_efficiency_pct_per_watt에 대응).
+    """
+    warnings: list[str] = []
+    series: list[dict] = []
+    per_ts_all: dict[str, list[float]] = {}
+
+    vendors = list(ACCEL_POWER_QUERIES)
+    power_tasks = [
+        prometheus_client.range_query(f"avg({ACCEL_POWER_QUERIES[v]})", start, end, step) for v in vendors
+    ]
+    util_tasks = [
+        prometheus_client.range_query(f"avg({ACCEL_UTIL_QUERIES[v]})", start, end, step) for v in vendors
+    ]
+    results = await asyncio.gather(*power_tasks, *util_tasks)
+    power_results = results[: len(vendors)]
+    util_results = results[len(vendors):]
+
+    for vendor, p_res, u_res in zip(vendors, power_results, util_results):
+        power_by_ts = {ts: _parse_float(raw) for ts, raw in _range_values(p_res)}
+        util_by_ts = {ts: _parse_float(raw) for ts, raw in _range_values(u_res)}
+        values: list[tuple[str, str]] = []
+        for ts in sorted(power_by_ts.keys() & util_by_ts.keys()):
+            power = power_by_ts[ts]
+            util = util_by_ts[ts]
+            if power is None or util is None or power <= 0:
+                continue
+            eff = util / power
+            values.append((ts, str(eff)))
+            per_ts_all.setdefault(ts, []).append(eff)
+        if not values:
+            warnings.append(f"NO_DATA_{vendor.upper()}")
+        series.append({"vendor": vendor, "values": values})
+
+    all_values = [(ts, str(sum(v) / len(v))) for ts, v in sorted(per_ts_all.items())]
+    series.insert(0, {"vendor": "all", "values": all_values})
+
+    return {"status": _status_from_warnings(warnings), "data": series, "warnings": warnings}

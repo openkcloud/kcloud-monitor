@@ -255,3 +255,21 @@ class PowerEfficiencyResponse(BaseModel):
     data: PowerEfficiencyData
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
+
+
+class PowerEfficiencySeriesItem(BaseModel):
+    """전력 효율 시계열의 벤더별 시리즈."""
+
+    vendor: str = Field(..., description="가속기 벤더 (all | nvidia | furiosa | rebellions). all은 값이 있는 벤더들의 평균")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 전력 1W당 사용률 %/W) 쌍 목록. 시각은 ISO 8601 UTC 형식, 값은 문자열"
+    )
+
+
+class PowerEfficiencyTimeseriesResponse(BaseModel):
+    """GET /monitoring/power/efficiency/timeseries 응답."""
+
+    status: str
+    series: list[PowerEfficiencySeriesItem]
+    observed_at: str = Field(default_factory=_now)
+    warnings: list[str] = []
