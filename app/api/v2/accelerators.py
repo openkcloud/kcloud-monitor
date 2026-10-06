@@ -236,7 +236,8 @@ def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
 def _match_node(metric: dict, node: Optional[str]) -> bool:
     if node is None:
         return True
-    return metric.get("instance") == node or metric.get("hostname") == node
+    # 호스트 라벨이 벤더마다 다름: NVIDIA Hostname, 리벨리온 hostname, 퓨리오사 node
+    return node in (metric.get("instance"), metric.get("Hostname"), metric.get("hostname"), metric.get("node"))
 
 
 def _get_value(item: dict) -> Optional[float]:
