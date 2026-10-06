@@ -20,6 +20,7 @@ from app.schemas.monitoring import (
     AcceleratorEfficiency,
     AcceleratorUtilizationData,
     AcceleratorUtilizationResponse,
+    AcceleratorUtilizationTimeseriesResponse,
     ClusterCounts,
     MetricSample,
     MetricsQueryResponse,
@@ -39,12 +40,15 @@ from app.schemas.monitoring import (
     TemperatureSeriesItem,
     TemperatureTimeseriesResponse,
     HostUtilization,
+    HostUtilizationSeriesItem,
     TimeseriesResponse,
+    UtilizationSeriesItem,
     VendorUtilization,
 )
 from app.services.cluster_discovery import cluster_discovery
 from app.services.power import (
     accelerator_utilization,
+    accelerator_utilization_timeseries,
     power_breakdown,
     power_efficiency,
     power_efficiency_timeseries,
@@ -335,6 +339,35 @@ async def get_accelerator_utilization(
             vendors=[VendorUtilization(**v) for v in data.get("vendors", [])],
             hosts=[HostUtilization(**h) for h in data.get("hosts", [])],
         ),
+        warnings=r["warnings"],
+    )
+
+
+@router.get(
+    "/monitoring/accelerators/utilization/timeseries",
+    summary="가속기 사용률 시계열",
+    response_model=AcceleratorUtilizationTimeseriesResponse,
+)
+async def get_accelerator_utilization_timeseries(
+    request: Request,
+    by: Optional[str] = Query(None, pattern="^node$", description="node를 주면 호스트별 사용률 시계열(hosts)도 반환"),
+    params: TimeseriesParams = Depends(),
+):
+    """전체 가속기가 얼마나 일했는지의 시간별 변화 추이 조회
+
+    - series : 벤더별 (시각, 사용률 평균 %) 쌍 목록. 시각은 ISO 8601 UTC
+    - vendor=all : 벤더 구분 없이 카드 1장을 한 표로 평균. 가속기 사용률 조회의 avg_utilization_pct에 대응
+    - hosts : by=node일 때 호스트별 벤더와 (시각, 사용률 평균 %) 쌍 목록
+    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+
+    값은 각 step 시점의 순간값 평균. step 사이의 짧은 변화는 반영되지 않음.
+    """
+    now = datetime.now(timezone.utc)
+    r = await accelerator_utilization_timeseries(params.start_iso(now), params.end_iso(now), params.step, by=by)
+    return AcceleratorUtilizationTimeseriesResponse(
+        status=r["status"],
+        series=[UtilizationSeriesItem(**s) for s in r["data"]["series"]],
+        hosts=[HostUtilizationSeriesItem(**h) for h in r["data"]["hosts"]],
         warnings=r["warnings"],
     )
 

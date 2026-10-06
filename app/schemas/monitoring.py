@@ -315,3 +315,34 @@ class AcceleratorUtilizationResponse(BaseModel):
     data: AcceleratorUtilizationData
     observed_at: str = Field(default_factory=_now)
     warnings: list[str] = []
+
+
+class UtilizationSeriesItem(BaseModel):
+    """가속기 사용률 시계열의 벤더별 시리즈."""
+
+    vendor: str = Field(..., description="가속기 벤더 (all | nvidia | furiosa | rebellions). all은 벤더 구분 없이 카드 1장을 한 표로 평균")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 사용률 평균 %) 쌍 목록. 시각은 ISO 8601 UTC 형식, 값은 문자열"
+    )
+
+
+class HostUtilizationSeriesItem(BaseModel):
+    """가속기 사용률 시계열의 호스트별 시리즈."""
+
+    host: str = Field(..., description="카드가 꽂힌 호스트 이름")
+    vendor: str = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 이 호스트 카드들의 사용률 평균 %) 쌍 목록. 시각은 ISO 8601 UTC 형식, 값은 문자열"
+    )
+
+
+class AcceleratorUtilizationTimeseriesResponse(BaseModel):
+    """GET /monitoring/accelerators/utilization/timeseries 응답."""
+
+    status: str
+    series: list[UtilizationSeriesItem]
+    hosts: list[HostUtilizationSeriesItem] = Field(
+        default_factory=list, description="호스트별 사용률 시계열. by=node일 때만 채움"
+    )
+    observed_at: str = Field(default_factory=_now)
+    warnings: list[str] = []
