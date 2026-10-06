@@ -27,7 +27,7 @@ class LogEntry(BaseModel):
     message: str = Field(..., description="로그 원문")
     labels: dict[str, str] = Field(default_factory=dict, description="Loki 스트림 라벨")
     detected_fields: dict[str, Any] = Field(
-        default_factory=dict, description="자동 추출 구조화 필드 (XID, OOM 등)"
+        default_factory=dict, description="원문에서 자동 추출한 사고 정보. 없으면 빈 객체. GPU 고장: xid_code, gpu_pci_bdf, severity. 메모리 부족: error_type(OOM | CUDA OOM), pid, process(커널 OOM) 또는 requested_gb, allocated_gb(CUDA OOM), severity(critical | warning)"
     )
     trace_id: str = Field("", description="OTel trace ID (미계측 시 빈 문자열)")
     span_id: str = Field("", description="OTel span ID (미계측 시 빈 문자열)")
@@ -79,6 +79,7 @@ class AcceleratorLogResponse(BaseModel):
     observed_at: str = Field(default_factory=_now)
     cluster: str
     accelerator_id: str
+    node: Optional[str] = Field(None, description="카드가 꽂힌 노드 이름. 카드를 못 찾으면 null")
     data: list[LogEntry] = []
     pagination: LogPagination
     warnings: list[str] = []

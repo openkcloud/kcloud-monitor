@@ -18,6 +18,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app.api.v2.accelerators import _instant_metric
 from app.schemas.logs import (
     AcceleratorLogResponse,
     LabelListResponse,
@@ -30,6 +31,7 @@ from app.schemas.logs import (
     VolumeEntry,
     VolumeResponse,
 )
+from app.services.cluster_discovery import cluster_discovery
 from app.services.loki import loki_client
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,15 @@ _OOM_RE = re.compile(
     r"CUDA out of memory.*?allocate\s+(\d+\.?\d*)\s*GiB.*?(\d+\.?\d*)\s*GiB already allocated",
     re.I,
 )
+# 리눅스 커널 OOM killer. "Out of memory: Killed process 20481 (python3) ..." 또는
+# "Memory cgroup out of memory: Killed process ..." (컨테이너 메모리 한도 초과)
+_KERNEL_OOM_RE = re.compile(r"Killed process (\d+) \(([^)]+)\)")
+# 벤더별 드라이버 로그를 골라내는 LogQL 정규식 (대소문자 무시)
+_DRIVER_PATTERNS = {
+    "nvidia": "(?i)nvrm|nvidia",
+    "rebellions": "(?i)rbln|rebellions",
+    "furiosa": "(?i)furiosa|npu",
+}
 _CRITICAL_XID_CODES = frozenset(
     {13, 31, 43, 45, 48, 61, 62, 63, 64, 68, 69, 74, 79, 92, 94, 95, 119, 120}
 )
@@ -144,6 +155,13 @@ def _parse_detected_fields(line: str) -> dict[str, Any]:
         fields["error_type"] = "CUDA OOM"
         fields["requested_gb"] = float(m.group(1))
         fields["allocated_gb"] = float(m.group(2))
+        fields["severity"] = "warning"  # 프로그램이 예외를 받고 살아 있을 수 있음
+    m = _KERNEL_OOM_RE.search(line)
+    if m:
+        fields["error_type"] = "OOM"
+        fields["pid"] = int(m.group(1))
+        fields["process"] = m.group(2)
+        fields["severity"] = "critical"  # 커널이 프로세스를 강제 종료함
     return fields
 
 
@@ -624,26 +642,45 @@ async def accelerator_logs(
 ):
     """가속기 드라이버가 남긴 로그 조회
 
-    - 클러스터 이름, 가속기 ID
+    - 클러스터 이름, 가속기 ID, 카드가 꽂힌 노드 이름
     - 로그별 : 발생 시각, 로그 레벨, 원문 메시지, 라벨
     - 하드웨어 오류(XID), 메모리 오류(ECC), 발열로 인한 성능 제한 기록이 여기에 남음
 
-    가속기 VM에서 로그를 아직 걷어오지 않아 빈 목록 + NO_LOG_SOURCE 경고 반환.
+    카드 ID로 카드가 꽂힌 노드를 찾은 뒤, 그 노드의 로그(시스템 로그와 Pod 로그) 중
+    벤더 드라이버 관련 줄만 골라냄. 노드 단위로 거르므로 한 노드에 카드가 여러 장이면
+    다른 카드의 드라이버 로그도 함께 나옴.
     """
     _require_loki()
 
-    logql = _scoped("", gpu_uuid=accelerator_id, level=_level(log_level))
+    info = await cluster_discovery.get_cluster(cluster)
+    if info is None or info.vendor not in _DRIVER_PATTERNS:
+        raise HTTPException(status_code=404, detail=f"가속기가 없는 클러스터: {cluster}")
+    level = _level(log_level)
 
-    warnings: list[str] = []
+    # 카드 ID → 노드. 가속기 목록 API와 같은 메트릭(전력)과 호스트 라벨 순서를 씀
+    node = None
+    for item in await _instant_metric(info.vendor, cluster, "power", acc_id=accelerator_id):
+        m = item.get("metric", {})
+        node = m.get("Hostname") or m.get("hostname") or m.get("node") or m.get("instance")
+        if node:
+            break
+    if node is None:
+        return AcceleratorLogResponse(
+            status="partial", cluster=cluster, accelerator_id=accelerator_id,
+            pagination=LogPagination(total=0, limit=limit), warnings=["ACCELERATOR_NOT_FOUND"],
+        )
+
+    logql = _scoped(
+        f'{{}} |~ "{_DRIVER_PATTERNS[info.vendor]}"', cluster=cluster, node=node, level=level,
+    )
     entries, pagination = await _query_page(logql, start, end, limit, direction, cursor)
 
-    if not entries:
-        warnings.append("NO_LOG_SOURCE")
-
+    warnings = [] if entries else ["NO_LOG_SOURCE"]
     return AcceleratorLogResponse(
-        status="partial" if "NO_LOG_SOURCE" in warnings else "success",
+        status="partial" if warnings else "success",
         cluster=cluster,
         accelerator_id=accelerator_id,
+        node=node,
         data=entries,
         pagination=pagination,
         warnings=warnings,
