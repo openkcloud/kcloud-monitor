@@ -319,17 +319,18 @@ async def get_accelerator_utilization(
     request: Request,
     by: Optional[str] = Query(None, pattern="^node$", description="node를 주면 호스트별 사용률 목록(hosts)도 반환"),
     limit: Optional[int] = Query(None, ge=1, description="hosts 최대 개수. 미지정 시 전체"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="hosts 사용률 정렬 방향: desc(높은 순) | asc(낮은 순)"),
 ):
     """전체 가속기가 얼마나 일하고 있는지 조회
 
     - avg_utilization_pct : 전체 카드 사용률 평균(%). 벤더 구분 없이 카드 1장을 한 표로 평균
     - card_count : 값이 수집된 전체 카드 수
     - vendors : 벤더별 카드 수, 사용률 평균(%)
-    - hosts : by=node일 때 호스트별 벤더, 카드 수, 사용률 평균(%). 사용률 높은 순, limit 개수까지
+    - hosts : by=node일 때 호스트별 벤더, 카드 수, 사용률 평균(%). sort_order 순(기본 높은 순), limit 개수까지
 
     모든 값은 조회 시점의 최신 순간값(수집 주기 5초~1분)
     """
-    r = await accelerator_utilization(by=by, limit=limit)
+    r = await accelerator_utilization(by=by, limit=limit, sort_order=sort_order)
     data = r["data"]
     return AcceleratorUtilizationResponse(
         status=r["status"],
