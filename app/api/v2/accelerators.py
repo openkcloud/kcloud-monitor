@@ -84,6 +84,7 @@ VENDOR_CONFIG: dict[str, dict] = {
         # DCGM 3.3부터 CLOCK_THROTTLE_REASONS가 CLOCKS_EVENT_REASONS로 이름이 바뀌어 둘 다 잡는다.
         "clock_reasons": '{{__name__=~"DCGM_FI_DEV_CLOCK(S_EVENT|_THROTTLE)_REASONS",cluster="{cluster}"{extra}}}',
         # 기본 counters.csv에 없어 exporter 목록 파일에 추가해야 나온다. 값 0~15 (P0~P15)
+        "pstate": 'DCGM_FI_DEV_PSTATE{{cluster="{cluster}"{extra}}}',
         "throttle_temp": 85,  # 초기값
         "extra_keys": [
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
@@ -310,6 +311,11 @@ async def _collect_accelerators(
     if vendor == "nvidia":
         merge(await _instant_metric(vendor, cluster, "power_limit"), "_power_limit")
         merge(await _instant_metric(vendor, cluster, "clock_reasons"), "_clock_reasons")
+        merge(await _instant_metric(vendor, cluster, "pstate"), "_pstate")
+        for entry in acc_map.values():
+            pstate = entry.pop("_pstate", None)
+            # 32는 DCGM의 "알 수 없음" 값이라 0~15만 단계로 인정
+            entry["power_state"] = f"P{int(pstate)}" if pstate is not None and 0 <= pstate <= 15 else None
     merge(await prometheus_client.instant(_throttle_query(vendor, cluster)), "_inferred")
     for entry in acc_map.values():
         _apply_power_cap_and_throttle(entry, vendor)
@@ -342,6 +348,7 @@ def _to_item(acc_id: str, entry: dict, vendor: str, cluster: str, node: Optional
         throttled=entry.get("throttled"),
         throttle_source=entry.get("throttle_source"),
         throttle_reasons=entry.get("throttle_reasons", []),
+        power_state=entry.get("power_state"),
         labels=labels,
     )
 
@@ -542,6 +549,7 @@ async def get_accelerator_metrics(
         throttled=entry.get("throttled"),
         throttle_source=entry.get("throttle_source"),
         throttle_reasons=entry.get("throttle_reasons", []),
+        power_state=entry.get("power_state"),
         extra=extras,
     )
 
