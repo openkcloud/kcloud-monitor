@@ -62,15 +62,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/monitoring/overview", summary="전체 시스템 현황(KPI)", response_model=OverviewResponse)
+@router.get("/monitoring/overview", summary="전체 인프라 현황(KPI)", response_model=OverviewResponse)
 async def get_overview(request: Request):
-    """전체 인프라 현황을 한 화면에 담을 수 있는 요약값 조회
+    """전체 인프라 현황을 한 화면용 요약값으로 조회
 
-    - clusters : 전체 클러스터 수, 관리 클러스터 수, 서비스 클러스터 수
-    - nodes : 전체 노드 수, 물리 노드 수, 가상 노드 수, 정상 노드 수, 비정상 노드 수
-    - accelerator_count : 전체 가속기 카드 수
-    - healthy_count : 정상 동작 중인 가속기 카드 수
-    - avg_temperature : 클러스터별 평균 가속기 온도(°C)
+    - clusters : 전체, 관리, 서비스 클러스터 수
+    - nodes : 전체, 물리, 가상, 정상, 비정상 노드 수
+    - accelerator_count : 가속기 클러스터의 메트릭 수집 대상 수 (카드 수와 다를 수 있음)
+    - healthy_count : 그중 응답 중인(up) 수집 대상 수
+    - avg_temperature : 클러스터별(l40s | furiosa | rebellions) 평균 가속기 온도(°C), 미수집 시 null
+
+    리벨리온 온도는 1000배 보정값이며 REBELLIONS_SCALE_CORRECTED_X1000 경고 동반.
     """
     warnings: list[str] = []
 
@@ -198,13 +200,15 @@ async def get_overview(request: Request):
 
 @router.get("/monitoring/power/summary", summary="전력 요약", response_model=PowerSummaryResponse)
 async def get_power_summary(request: Request):
-    """인프라 전체가 쓰는 전력을 항목별로 나눈 합계 조회
+    """인프라 전체 전력을 측정 구분별로 나눈 합계 조회
 
     - server_total_watts : 서버 총 전력(W), IPMI 실측
     - cpu_total_watts : CPU 전력(W), Kepler 실측
     - accelerator_total_watts : 가속기 전력 합계(W)
-    - accelerator_by_vendor : 벤더별 가속기 전력 합계(W)
-    - other_watts : 나머지 전력(W), 서버 총 전력에서 CPU와 가속기를 뺀 값
+    - accelerator_by_vendor : 벤더별(nvidia | furiosa | rebellions) 가속기 전력 합계(W)
+    - other_watts : 서버 총 전력에서 CPU와 가속기를 뺀 나머지 전력(W)
+
+    미수집 항목은 null.
     """
     r = await power_summary()
     return PowerSummaryResponse(
@@ -214,17 +218,18 @@ async def get_power_summary(request: Request):
     )
 
 
-@router.get("/monitoring/power/breakdown", summary="전력 분해(다차원)", response_model=PowerBreakdownResponse)
+@router.get("/monitoring/power/breakdown", summary="기준별 전력 분포", response_model=PowerBreakdownResponse)
 async def get_power_breakdown(
     request: Request,
-    dimension: str = Query("vendor", description="쪼개는 기준: vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)"),
-    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="전력 정렬 방향: desc(큰 순) | asc(작은 순)"),
+    dimension: str = Query("vendor", description="나누는 기준 (vendor | cluster | node | accelerator). vendor: 벤더별, cluster: 클러스터별, node: 노드별, accelerator: 카드별"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="정렬 방향 (desc | asc). desc: 큰 값 먼저"),
 ):
-    """전력을 원하는 기준으로 쪼개서 어디서 얼마나 쓰는지 조회
+    """선택한 기준(벤더, 클러스터, 노드, 카드)별 전력 조회
 
-    - dimension : vendor(벤더별) | cluster(클러스터별) | node(노드별) | accelerator(카드별)
-    - sort_order : 전력 기준 desc(큰 순, 기본) | asc(작은 순). 전력 값이 없는 항목은 맨 뒤
-    - items : 기준값 이름, 전력(W), 측정 구분
+    - dimension : 적용된 기준(vendor | cluster | node | accelerator)
+    - items : 기준값 이름(key), 전력(W), 측정 구분(layer: server | cpu | accelerator)
+
+    전력 큰 순 정렬이 기본이며 sort_order=asc 로 작은 순. 전력 값이 없는 항목은 맨 뒤. node 기준은 노드마다 서버 전력(server)과 CPU 전력(cpu) 항목이 따로 나옴. 알 수 없는 기준이면 UNKNOWN_DIMENSION 경고와 빈 목록 반환.
     """
     r = await power_breakdown(dimension)
     sign = -1 if sort_order == "desc" else 1
@@ -237,14 +242,13 @@ async def get_power_breakdown(
     )
 
 
-@router.get("/monitoring/power/timeseries", summary="전력 시계열(횡단)", response_model=PowerTimeseriesResponse)
+@router.get("/monitoring/power/timeseries", summary="전체 전력 시계열", response_model=PowerTimeseriesResponse)
 async def get_power_timeseries(request: Request, params: TimeseriesParams = Depends()):
-    """인프라 전체 전력의 시간별 변화 추이 조회
+    """인프라 전체 전력의 측정 구분별 변화 추이 조회
 
-    - layers : 측정 구분(server | cpu | accelerator)별로 (시각, 전력값 W) 쌍 목록. 시각은 ISO 8601 UTC
-    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    - layers : 측정 구분(server | cpu | accelerator)별 (시각, 전력 W) 쌍 목록. 시각은 ISO 8601 UTC
 
-    구분별 값을 쌓아 올리는 누적 그래프에 그대로 쓸 수 있는 형태.
+    누적 그래프에 바로 쓰는 형태. 조회 기간과 간격은 period, start, end, step 으로 지정.
     """
     now = datetime.now(timezone.utc)
     start = params.start_iso(now)
@@ -259,15 +263,15 @@ async def get_power_timeseries(request: Request, params: TimeseriesParams = Depe
     )
 
 
-@router.get("/monitoring/power/efficiency", summary="전력 효율", response_model=PowerEfficiencyResponse)
+@router.get("/monitoring/power/efficiency", summary="가속기 전력 효율", response_model=PowerEfficiencyResponse)
 async def get_power_efficiency(request: Request):
-    """가속기가 전력을 얼마나 효율적으로 쓰는지 조회
+    """가속기의 전력 대비 사용률 효율 조회
 
     - pue_estimate : 서버 전체 전력 ÷ (CPU 전력 + 가속기 전력). 냉방 전력 미포함 근사치
-    - avg_efficiency_pct_per_watt : 벤더별 전력 1W당 사용률의 평균(%/W)
-    - accelerators : 벤더별 전력 합계(W), 사용률 평균(%), 규격 최대 전력(TDP 또는 최대 소비전력, W), 카드 1장 평균의 규격 대비 비중(%), 전력 1W당 사용률(%/W)
+    - avg_efficiency_pct_per_watt : 벤더별 1W당 사용률의 평균(%/W)
+    - accelerators : 벤더별 전력 합계(W), 평균 사용률(%), 규격 최대 전력(W), 카드 1장 평균의 규격 대비 비중(%), 1W당 사용률(%/W)
 
-    모든 값은 조회 시점의 최신 순간값(수집 주기 5초~1분)
+    모든 값은 조회 시점 최신값 (수집 주기 5초~1분).
     """
     r = await power_efficiency()
     data = r["data"]
@@ -284,18 +288,16 @@ async def get_power_efficiency(request: Request):
 
 @router.get(
     "/monitoring/power/efficiency/timeseries",
-    summary="전력 효율 시계열",
+    summary="가속기 전력 효율 시계열",
     response_model=PowerEfficiencyTimeseriesResponse,
 )
 async def get_power_efficiency_timeseries(request: Request, params: TimeseriesParams = Depends()):
-    """가속기 전력 효율의 시간별 변화 추이 조회
+    """가속기 전력 효율의 변화 추이 조회
 
-    - series : 벤더별 (시각, 전력 1W당 사용률 %/W) 쌍 목록. 시각은 ISO 8601 UTC
-    - vendor=all : 값이 있는 벤더들의 효율 평균. 전력 효율 조회의 avg_efficiency_pct_per_watt에 대응
-    - 산식 : 벤더 평균 사용률(%) ÷ 카드 1장 평균 전력(W). 전력 효율 조회와 동일
-    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    - series : 벤더별 (시각, 1W당 사용률 %/W) 쌍 목록. 시각은 ISO 8601 UTC
+    - vendor=all 항목 : 값이 있는 벤더들의 효율 평균
 
-    가속기가 쉬고 있으면(사용률 0) 효율도 0으로 나옴. 서버 전체 전력은 포함하지 않음.
+    산식은 벤더 평균 사용률(%) ÷ 카드 1장 평균 전력(W). 사용률 0이면 효율 0. 서버 전체 전력은 미포함. 조회 기간과 간격은 period, start, end, step 으로 지정.
     """
     now = datetime.now(timezone.utc)
     start = params.start_iso(now)
@@ -317,18 +319,18 @@ async def get_power_efficiency_timeseries(request: Request, params: TimeseriesPa
 )
 async def get_accelerator_utilization(
     request: Request,
-    by: Optional[str] = Query(None, pattern="^node$", description="node를 주면 호스트별 사용률 목록(hosts)도 반환"),
+    by: Optional[str] = Query(None, pattern="^node$", description="node 지정 시 호스트별 목록(hosts)도 반환"),
     limit: Optional[int] = Query(None, ge=1, description="hosts 최대 개수. 미지정 시 전체"),
-    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="hosts 사용률 정렬 방향: desc(높은 순) | asc(낮은 순)"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="hosts 정렬 방향 (desc | asc). desc: 사용률 높은 값 먼저"),
 ):
-    """전체 가속기가 얼마나 일하고 있는지 조회
+    """전체 가속기의 현재 사용률 조회
 
-    - avg_utilization_pct : 전체 카드 사용률 평균(%). 벤더 구분 없이 카드 1장을 한 표로 평균
-    - card_count : 값이 수집된 전체 카드 수
-    - vendors : 벤더별 카드 수, 사용률 평균(%)
-    - hosts : by=node일 때 호스트별 벤더, 카드 수, 사용률 평균(%). sort_order 순(기본 높은 순), limit 개수까지
+    - avg_utilization_pct : 전체 카드 사용률 평균(%). 벤더 구분 없이 카드 1장씩 같은 비중
+    - card_count : 값이 수집된 카드 수
+    - vendors : 벤더별 카드 수, 평균 사용률(%)
+    - hosts : 호스트별 벤더, 카드 수, 평균 사용률(%) (by=node 일 때만)
 
-    모든 값은 조회 시점의 최신 순간값(수집 주기 5초~1분)
+    hosts 는 sort_order(기본 desc) 순으로 limit 개까지. 모든 값은 조회 시점 최신값 (수집 주기 5초~1분).
     """
     r = await accelerator_utilization(by=by, limit=limit, sort_order=sort_order)
     data = r["data"]
@@ -351,17 +353,16 @@ async def get_accelerator_utilization(
 )
 async def get_accelerator_utilization_timeseries(
     request: Request,
-    by: Optional[str] = Query(None, pattern="^node$", description="node를 주면 호스트별 사용률 시계열(hosts)도 반환"),
+    by: Optional[str] = Query(None, pattern="^node$", description="node 지정 시 호스트별 시계열(hosts)도 반환"),
     params: TimeseriesParams = Depends(),
 ):
-    """전체 가속기가 얼마나 일했는지의 시간별 변화 추이 조회
+    """전체 가속기 사용률의 변화 추이 조회
 
-    - series : 벤더별 (시각, 사용률 평균 %) 쌍 목록. 시각은 ISO 8601 UTC
-    - vendor=all : 벤더 구분 없이 카드 1장을 한 표로 평균. 가속기 사용률 조회의 avg_utilization_pct에 대응
-    - hosts : by=node일 때 호스트별 벤더와 (시각, 사용률 평균 %) 쌍 목록
-    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    - series : 벤더별 (시각, 평균 사용률 %) 쌍 목록. 시각은 ISO 8601 UTC
+    - vendor=all 항목 : 벤더 구분 없이 카드 1장씩 같은 비중으로 계산한 평균
+    - hosts : 호스트별 벤더와 (시각, 평균 사용률 %) 쌍 목록 (by=node 일 때만)
 
-    값은 각 step 시점의 순간값 평균. step 사이의 짧은 변화는 반영되지 않음.
+    값은 각 step 시점의 순간값 평균이라 step 사이의 짧은 변화는 미반영. 조회 기간과 간격은 period, start, end, step 으로 지정.
     """
     now = datetime.now(timezone.utc)
     r = await accelerator_utilization_timeseries(params.start_iso(now), params.end_iso(now), params.step, by=by)
@@ -373,17 +374,17 @@ async def get_accelerator_utilization_timeseries(
     )
 
 
-@router.get("/monitoring/metrics/query", summary="메트릭 현재값 조회", response_model=MetricsQueryResponse)
+@router.get("/monitoring/metrics/query", summary="메트릭 현재값", response_model=MetricsQueryResponse)
 async def query_metrics(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 허용 목록에 있는 값만"),
 ):
-    """지정한 메트릭의 지금 값 조회
+    """허용된 메트릭 한 개의 현재 값 조회
 
     - metric : 조회한 메트릭 이름
-    - results : 메트릭 라벨과 (시각, 값) 쌍
+    - results : 시리즈별 메트릭 라벨(metric)과 현재값(value). value 는 (Unix 시각(초), 값 문자열)
 
-    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
+    metric 은 허용 목록에 있는 이름만 가능하며 없으면 400. 결과가 없으면 NO_DATA 경고 반환.
     """
     if metric is None:
         raise HTTPException(
@@ -436,25 +437,23 @@ def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -
     return f"{aggregation} by ({by}) ({aggregation}_over_time(({query})[{step}:]))"
 
 
-@router.get("/monitoring/metrics/timeseries", summary="메트릭 시계열(횡단)", response_model=TimeseriesResponse)
+@router.get("/monitoring/metrics/timeseries", summary="메트릭 시계열", response_model=TimeseriesResponse)
 async def get_metrics_timeseries(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 허용 목록에 있는 값만"),
     by: Optional[str] = Query(
         None,
         pattern="^(Hostname|hostname|cluster)$",
-        description="이 라벨 값이 같은 시리즈를 하나로 묶고, 각 step 구간을 aggregation 방식으로 요약. 히트맵처럼 호스트별 한 줄이 필요할 때 사용",
+        description="묶을 라벨 (Hostname | hostname | cluster). 지정 시 라벨 값이 같은 시리즈를 하나로 묶고 각 step 구간을 aggregation 방식으로 요약",
     ),
     params: TimeseriesParams = Depends(),
 ):
-    """지정한 메트릭의 시간별 변화 추이 조회
+    """허용된 메트릭 한 개의 변화 추이 조회
 
     - metric : 조회한 메트릭 이름
-    - series : 메트릭 라벨별 (시각, 값) 쌍 목록
-    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
-    - by 지정 시 해당 라벨 단위로 묶이고, 값은 step 구간의 평균(aggregation)이 됨. 미지정 시 시리즈별 step 시점의 순간값
+    - series : 메트릭 라벨(metric)별 (시각, 값) 쌍 목록(values). 시각은 ISO 8601 UTC
 
-    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
+    by 지정 시 그 라벨 단위로 묶고 aggregation 방식으로 요약, 미지정 시 시리즈별 순간값. metric 은 허용 목록에 있는 이름만 가능하며 없으면 400. 조회 기간과 간격은 period, start, end, step 으로 지정.
     """
     if metric is None:
         raise HTTPException(
@@ -507,14 +506,15 @@ async def get_metrics_timeseries(
 
 @router.get(
     "/monitoring/temperature/timeseries",
-    summary="온도 시계열(횡단)",
+    summary="가속기 온도 시계열",
     response_model=TemperatureTimeseriesResponse,
 )
 async def get_temperature_timeseries(request: Request, params: TimeseriesParams = Depends()):
-    """가속기와 서버 하드웨어 온도를 한데 모은 변화 추이 조회
+    """전체 가속기 온도의 변화 추이 조회
 
-    - series : 벤더, 클러스터, 라벨별 (시각, 온도값) 쌍 목록
-    - 가속기 온도, 노드 온도, 서버 하드웨어(IPMI) 온도를 함께 반환
+    - series : 장치별 벤더(nvidia | furiosa | rebellions), 클러스터, 메트릭 라벨, (시각, 온도 °C) 쌍 목록. 시각은 ISO 8601 UTC
+
+    리벨리온 온도는 1000배 보정값이며 REBELLIONS_SCALE_CORRECTED_X1000 경고 동반. 벤더별 미수집 시 NO_DATA_NVIDIA, NO_DATA_FURIOSA, NO_DATA_REBELLIONS 경고. 조회 기간과 간격은 period, start, end, step 으로 지정.
     """
     now = datetime.now(timezone.utc)
     start = params.start_iso(now)
@@ -600,26 +600,23 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
 
 @router.get(
     "/monitoring/throttling/timeseries",
-    summary="쓰로틀링 시계열(횡단)",
+    summary="가속기 쓰로틀링 시계열",
     response_model=ThrottlingTimeseriesResponse,
 )
 async def get_throttling_timeseries(
     request: Request,
-    cluster: Optional[str] = Query(None, description="이 클러스터의 카드만. 미지정 시 전체"),
-    node: Optional[str] = Query(None, description="이 노드의 카드만"),
-    acc_id: Optional[str] = Query(None, description="이 가속기 ID의 카드만"),
-    detail: bool = Query(False, description="true면 카드별 시계열(series)까지 반환. 기본은 summary만"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
+    node: Optional[str] = Query(None, description="노드 이름 필터. 미지정 시 전체"),
+    acc_id: Optional[str] = Query(None, description="가속기 ID 필터. 미지정 시 전체"),
+    detail: bool = Query(False, description="true 지정 시 카드별 시계열(series)도 반환. 기본은 summary 만"),
     params: TimeseriesParams = Depends(),
 ):
-    """가속기가 스스로 속도를 낮춘(쓰로틀링) 시점과 횟수를 기간으로 조회
+    """가속기가 스스로 속도를 낮춘(쓰로틀링) 시점과 횟수 조회
 
-    - 조건 없이 부르면 전체 카드, cluster, node, acc_id를 주면 그 대상만
-    - 기본 응답은 summary(합계)만. detail=true를 주면 카드별 series까지 반환
-    - series : 카드별 (시각, 1 또는 0) 목록과 그 카드의 쓰로틀링 시작 횟수, 쓰로틀링 시간(분)
-    - summary : 조회 대상 전체의 카드 수, 쓰로틀링이 난 카드 수, 시작 횟수 합계, 시간 합계(분), 판정 간격(초)
-    - 판정 기준 : 2분 평균 사용률 90% 이상, 최근 10분 최고 온도가 기준 이상, 전력이 15분 최대의 85% 미만
-    - 판정에 필요한 값이 빠진 시각은 0으로 채우지 않고 점을 비움
-    - 조회 기간과 판정 간격은 period, start, end, step 파라미터로 지정. step이 길면 짧은 쓰로틀링을 놓칠 수 있음
+    - summary : 대상 카드 수, 쓰로틀링 발생 카드 수, 시작 횟수 합계, 지속 시간 합계(분), 판정 간격(초)
+    - series : 카드별 벤더, 클러스터, 노드, 가속기 ID, (시각, 1 | 0) 목록, 시작 횟수, 지속 시간(분) (detail=true 일 때만)
+
+    판정 기준은 2분 평균 사용률 90% 이상, 최근 10분 최고 온도 기준 이상, 전력 15분 최대의 85% 미만. 값이 빠진 시각은 점 없음. step 이 길면 짧은 쓰로틀링 누락 가능. 대상이 없으면 summary 는 null 이고 UNKNOWN_CLUSTER 또는 NO_DATA 경고 반환.
     """
     now = datetime.now(timezone.utc)
     start, end, step = params.start_iso(now), params.end_iso(now), params.step
@@ -652,11 +649,13 @@ async def get_throttling_timeseries(
 
 @router.get("/monitoring/stream/power", summary="실시간 전력 스트림(SSE)")
 async def stream_power(request: Request):
-    """전력 요약값을 주기적으로 밀어주는 실시간 스트림
+    """전력 요약값을 주기적으로 보내는 SSE 스트림
 
-    - data 이벤트 : 전력 요약 조회와 같은 형태의 JSON
-    - 15초마다 heartbeat 이벤트 전송
-    - Last-Event-ID 헤더로 끊긴 지점부터 재개 가능
+    - power 이벤트 : status, warnings, observed_at, data(server_total_watts, cpu_total_watts, accelerator_total_watts, accelerator_by_vendor, other_watts, 단위 W)
+    - heartbeat 이벤트 : 15초마다 observed_at 전송
+    - error 이벤트 : 조회 실패 시 error="poll_failed", observed_at 전송 후 스트림 유지
+
+    15초 간격으로 전송. 각 이벤트에 연결 이후 1부터 증가하는 id 포함.
     """
     _now_iso = lambda: datetime.now(timezone.utc).isoformat()
     event_id = 0
@@ -695,13 +694,15 @@ async def stream_power(request: Request):
 @router.get("/monitoring/stream/metrics", summary="실시간 메트릭 스트림(SSE)")
 async def stream_metrics(
     request: Request,
-    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 허용 목록에 있는 값만"),
 ):
-    """지정한 메트릭 값을 주기적으로 밀어주는 실시간 스트림
+    """허용된 메트릭 값을 주기적으로 보내는 SSE 스트림
 
-    - data 이벤트 : 메트릭 현재값 조회와 같은 형태의 JSON
-    - 15초마다 heartbeat 이벤트 전송
-    - metric 파라미터는 미리 허용된 메트릭 이름만 받음
+    - metric 이벤트 : status, metric(메트릭 이름), observed_at, results(시리즈별 라벨 metric 과 value: Unix 시각(초), 값 문자열)
+    - heartbeat 이벤트 : 15초마다 observed_at 전송
+    - error 이벤트 : 조회 실패 시 error="poll_failed", observed_at 전송 후 스트림 유지
+
+    15초 간격으로 전송. metric 은 허용 목록에 있는 이름만 가능하며 없으면 400.
     """
     if metric is None or metric not in METRIC_ALLOWLIST:
         available = list(METRIC_ALLOWLIST.keys())

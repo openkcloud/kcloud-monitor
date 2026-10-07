@@ -116,12 +116,14 @@ def _project_item(project_id: str, name: str, project_vms: list[VMItem]) -> Proj
 @router.get("/openstack/hypervisors", summary="하이퍼바이저 목록",
             response_model=HypervisorListResponse)
 async def list_openstack_hypervisors(request: Request,params: WorkloadFilterParams = Depends()):
-    """VM을 올려 돌리는 물리 서버 목록 조회
-
+    """VM을 실행하는 물리 서버(하이퍼바이저) 목록 조회
+    
     - hostname : 물리 서버 호스트명
-    - state : 서버 연결 상태(up | down)
+    - state : 연결 상태(up | down)
     - status : 운영 상태(enabled | disabled)
-    - vm_count : 이 서버에 올라간 VM 개수
+    - vm_count : 배치된 VM 개수
+    
+    limit, offset, search 등 목록 파라미터는 적용되지 않음. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     if not openstack_client.nova_configured:
         return HypervisorListResponse(status="partial", data=[], warnings=["NOT_CONFIGURED"])
@@ -151,15 +153,17 @@ async def list_openstack_hypervisors(request: Request,params: WorkloadFilterPara
     return HypervisorListResponse(status="success" if items else "partial", data=items, warnings=warnings)
 
 
-@router.get("/openstack/hypervisors/{host}/vms", summary="하이퍼바이저별 VM 배치",
+@router.get("/openstack/hypervisors/{host}/vms", summary="하이퍼바이저별 VM 목록",
             response_model=VMListResponse)
 async def list_hypervisor_vms(request: Request,host: str):
-    """물리 서버 한 대에 올라간 VM 목록 조회
-
-    - VM ID, 이름, 상태(ACTIVE | SHUTOFF 등)
-    - flavor 이름, 소속 프로젝트
-    - 넘겨받은 가속기 종류와 개수
-    - summary : 이 서버에 올라간 VM 집계 (total, by_status, accelerator_vm_count, by_project)
+    """물리 서버 한 대에 배치된 VM 목록 조회
+    
+    - VM ID, 이름, 상태(예: ACTIVE, SHUTOFF, ERROR), 배치된 물리 서버 이름
+    - flavor 이름, vCPU 수, 메모리(MB), 소속 프로젝트 ID
+    - accelerator : 연결된 가속기 종류(alias)와 카드 수. 없으면 null
+    - summary : 이 서버의 VM 수(total), 상태별 개수(by_status), 가속기 VM 수(accelerator_vm_count), 프로젝트별 개수(by_project)
+    
+    배치된 VM이 없으면 NO_DATA 경고. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     vms, warnings = await _collect_vms()
     filtered = [v for v in vms if v.host == host]
@@ -173,13 +177,13 @@ async def list_hypervisor_vms(request: Request,host: str):
 @router.get("/openstack/vms", summary="VM 목록", response_model=VMListResponse)
 async def list_openstack_vms(request: Request,params: WorkloadFilterParams = Depends()):
     """전체 VM 목록 조회
-
-    - VM ID, 이름, 상태(ACTIVE | SHUTOFF 등)
-    - 이 VM이 올라간 물리 서버
-    - flavor 이름, 소속 프로젝트
-    - 넘겨받은 가속기 종류와 개수 (없으면 null)
-    - summary : 전체 VM 집계 (total, by_status, accelerator_vm_count, by_project). 검색·페이지와 무관한 전체 기준
-    - total 은 검색에 걸린 개수, summary.total 은 전체 개수
+    
+    - VM ID, 이름, 상태(예: ACTIVE, SHUTOFF, ERROR), 배치된 물리 서버 이름
+    - flavor 이름, vCPU 수, 메모리(MB), 소속 프로젝트 ID
+    - accelerator : 연결된 가속기 종류(alias)와 카드 수. 없으면 null
+    - summary : 전체 VM 수(total), 상태별 개수(by_status), 가속기 VM 수(accelerator_vm_count), 프로젝트별 개수(by_project). 검색과 페이지에 영향받지 않음
+    
+    search 는 VM 이름에 적용, limit, offset 으로 페이지 지정. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     vms, warnings = await _collect_vms()
     summary = _vm_summary(vms)
@@ -194,13 +198,12 @@ async def list_openstack_vms(request: Request,params: WorkloadFilterParams = Dep
 @router.get("/openstack/vms/{vm_id}", summary="VM 상세", response_model=VMDetailResponse)
 async def get_openstack_vm(request: Request,vm_id: str):
     """VM 한 대의 상세 조회
-
-    - VM ID, 이름, 상태(ACTIVE | SHUTOFF 등)
-    - 이 VM이 올라간 물리 서버
-    - flavor 이름, 소속 프로젝트
-    - 넘겨받은 가속기 종류와 개수
-
-    vm_id 자리에 VM ID 또는 VM 이름 둘 다 사용 가능.
+    
+    - VM ID, 이름, 상태(예: ACTIVE, SHUTOFF, ERROR), 배치된 물리 서버 이름
+    - flavor 이름, vCPU 수, 메모리(MB), 소속 프로젝트 ID
+    - accelerator : 연결된 가속기 종류(alias)와 카드 수. 없으면 null
+    
+    vm_id 자리에 VM ID 또는 VM 이름 사용 가능. 없는 VM은 data=null, NOT_FOUND 경고. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     vms, warnings = await _collect_vms()
     if warnings:
@@ -216,13 +219,14 @@ async def get_openstack_vm(request: Request,vm_id: str):
 @router.get("/openstack/projects", summary="프로젝트 목록",
             response_model=ProjectListResponse)
 async def list_openstack_projects(request: Request, params: WorkloadFilterParams = Depends()):
-    """자원을 나눠 쓰는 단위인 프로젝트 목록 조회
-
-    - project_id : 프로젝트 ID
-    - name : 프로젝트 이름
+    """OpenStack 프로젝트 목록 조회
+    
+    - project_id, name : 프로젝트 ID, 이름
     - vm_count : 소속 VM 개수
-    - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
-    - total_vcpus, total_ram_mb : 소속 VM의 flavor 기준 vCPU 합계와 메모리 합계(MB)
+    - accelerator_vm_count : 가속기가 연결된 VM 개수
+    - total_vcpus, total_ram_mb : 소속 VM flavor 기준 vCPU 합계, 메모리 합계(MB)
+    
+    search 는 프로젝트 이름에 적용. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     if not openstack_client.configured:
         return ProjectListResponse(status="partial", data=[], warnings=["NOT_CONFIGURED"])
@@ -253,13 +257,14 @@ async def list_openstack_projects(request: Request, params: WorkloadFilterParams
 @router.get("/openstack/projects/{project_id}", summary="프로젝트 상세",
             response_model=ProjectDetailResponse)
 async def get_openstack_project(request: Request, project_id: str):
-    """프로젝트 한 개의 상세 조회
-
-    - project_id : 프로젝트 ID
-    - name : 프로젝트 이름
+    """OpenStack 프로젝트 한 개의 상세 조회
+    
+    - project_id, name : 프로젝트 ID, 이름
     - vm_count : 소속 VM 개수
-    - accelerator_vm_count : 가속기를 넘겨받은 VM 개수
-    - total_vcpus, total_ram_mb : 소속 VM의 flavor 기준 vCPU 합계와 메모리 합계(MB)
+    - accelerator_vm_count : 가속기가 연결된 VM 개수
+    - total_vcpus, total_ram_mb : 소속 VM flavor 기준 vCPU 합계, 메모리 합계(MB)
+    
+    없는 프로젝트는 data=null, NOT_FOUND 경고. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     if not openstack_client.configured:
         return ProjectDetailResponse(status="partial", data=None, warnings=["NOT_CONFIGURED"])
@@ -283,15 +288,16 @@ async def get_openstack_project(request: Request, project_id: str):
 @router.get("/openstack/hypervisors/{host}", summary="하이퍼바이저 상세",
             response_model=HypervisorDetailResponse)
 async def get_openstack_hypervisor(request: Request,host: str):
-    """물리 서버 한 대의 상세 조회
-
-    - hostname, state, status : 호스트명, 연결 상태, 운영 상태
-    - vcpus, vcpus_used : 전체 vCPU 수와 배정된 vCPU 수
-    - memory_mb, memory_mb_used : 전체 메모리와 배정된 메모리(MB)
-    - local_gb, local_gb_used : 전체 로컬 디스크와 사용량(GB)
-    - running_vms : 실행 중인 VM 개수
-    - hypervisor_type, hypervisor_version, host_ip : 가상화 종류, 버전, 관리 IP
-    - vms : 이 서버에 올라간 VM 목록
+    """물리 서버(하이퍼바이저) 한 대의 상세 조회
+    
+    - hostname, state, status : 호스트명, 연결 상태(up | down), 운영 상태(enabled | disabled)
+    - vcpus, vcpus_used : 전체 vCPU 수, VM에 배정된 vCPU 수
+    - memory_mb, memory_mb_used : 전체 메모리, VM에 배정된 메모리(MB)
+    - local_gb, local_gb_used : 전체 로컬 디스크, 사용 중인 로컬 디스크(GB)
+    - running_vms, hypervisor_type, hypervisor_version, host_ip : 실행 중 VM 수, 가상화 종류, 버전 번호, 관리 IP
+    - vms : 배치된 VM의 ID, 이름, 상태, flavor, vCPU 수, 메모리(MB), 프로젝트 ID, 가속기
+    
+    없는 서버는 data=null, NOT_FOUND 경고. 접속 정보 미설정 시 NOT_CONFIGURED, OpenStack 호출 실패 시 UPSTREAM_ERROR 경고.
     """
     if not openstack_client.nova_configured:
         return HypervisorDetailResponse(status="partial", data=None, warnings=["NOT_CONFIGURED"])
@@ -344,15 +350,19 @@ async def _resolve_vm(vm_id: str) -> tuple[Optional[VMItem], list[str]]:
     return match, []
 
 
-@router.get("/openstack/vms/{vm_id}/metrics", summary="VM 메트릭",
+@router.get("/openstack/vms/{vm_id}/metrics", summary="VM 사용량 메트릭",
             response_model=VMMetricsResponse)
 async def get_openstack_vm_metrics(request: Request,vm_id: str):
-    """VM 한 대가 실제로 쓰고 있는 사용량 조회
-
-    - cpu : 사용 중 vCPU 코어 수, 누적 CPU 시간
-    - memory : 호스트가 실제로 내준 메모리, 게스트가 인식하는 메모리, 미사용 메모리(bytes)
-    - disk : 누적 읽기, 쓰기 바이트
-    - network : 누적 수신, 송신 바이트
+    """VM 한 대의 실제 자원 사용량 조회
+    
+    - vm_id, name, host : VM ID, 이름, 배치된 물리 서버
+    - state : 가상화 계층에서 본 VM 상태(예: running, paused, shutoff)
+    - cpu : 사용 중 vCPU 양(코어, 최근 5분 평균), 누적 CPU 시간(ns)
+    - memory : 실제 점유, 할당, 인식, 미사용, 즉시 사용 가능, 사용 중 메모리(bytes)
+    - disk : VM 시작 이후 누적 읽기량, 쓰기량(bytes)
+    - network : VM 시작 이후 누적 수신량, 송신량(bytes)
+    
+    vm_id 자리에 VM ID 또는 VM 이름 사용 가능. 가상화 계층 메트릭이 없으면 NO_DATA_LIBVIRT 경고, 없는 VM은 NOT_FOUND 경고.
     """
     match, warnings = await _resolve_vm(vm_id)
     if match is None:
@@ -365,17 +375,18 @@ async def get_openstack_vm_metrics(request: Request,vm_id: str):
     return VMMetricsResponse(status=r["status"], data=data, warnings=r["warnings"])
 
 
-@router.get("/openstack/vms/{vm_id}/power", summary="VM 전력 귀속",
+@router.get("/openstack/vms/{vm_id}/power", summary="VM 추정 전력",
             response_model=VMPowerResponse)
 async def get_openstack_vm_power(request: Request,vm_id: str):
-    """VM 한 대가 쓴 것으로 볼 수 있는 전력 조회
-
-    - attributed_watts : 이 VM에 배분된 전력(W)
-    - server_total_watts : 이 VM이 올라간 물리 서버의 총 전력(W)
-    - cpu_share_pct : 그 서버 안에서 이 VM이 차지한 CPU 비율(%)
-    - method : 배분 방식
-
-    VM 단위 전력계가 없으므로 서버 총 전력을 CPU 점유 비율로 나눈 추정치.
+    """VM 한 대에 배분된 추정 전력 조회
+    
+    - vm_id, name, host : VM ID, 이름, 배치된 물리 서버
+    - attributed_watts : 이 VM에 배분된 추정 전력(W)
+    - server_total_watts : 물리 서버 총 전력(W). 서버 전원 장치(IPMI) 측정값
+    - cpu_share_pct : 같은 서버의 VM 전체 CPU 사용량 중 이 VM의 비율(%)
+    - method : 배분 방식(cpu_proportional)
+    
+    서버 총 전력에 CPU 사용량 비율을 곱한 추정치라 POWER_ATTRIBUTION_CPU_PROPORTIONAL 경고가 항상 붙음. 서버 전력이 없으면 NO_DATA_SERVER_POWER, CPU 사용량이 없으면 NO_DATA_LIBVIRT, 같은 서버 VM 전체 CPU 사용량이 0이면 NODE_CPU_TOTAL_ZERO, 배치 서버를 모르면 NO_HOST 경고.
     """
     match, warnings = await _resolve_vm(vm_id)
     if match is None:
@@ -390,11 +401,12 @@ async def get_openstack_vm_power(request: Request,vm_id: str):
 
 # ── 미구현(libvirt hostdev 필요) — stub 유지 ─────────────────────────────
 
-@router.get("/openstack/vms/{vm_id}/gpu-passthrough", summary="VM GPU passthrough")
+@router.get("/openstack/vms/{vm_id}/gpu-passthrough", summary="VM GPU passthrough 확인")
 async def get_openstack_vm_gpu_passthrough(request: Request,vm_id: str):
     """VM 한 대가 물리 가속기를 직접 넘겨받았는지 조회
-
+    
     - 넘겨받은 가속기 장치의 PCI 주소와 종류
-    - 가상화 계층에서 확인한 장치 정보를 아직 걷어오지 않아 status="not_implemented" 반환
+    - api, path_template, description, data_sources : 요청 경로, 경로 형식, 기능 설명, 사용할 데이터 출처
+    - 데이터 미수집 상태로 status="not_implemented", data=null, NOT_IMPLEMENTED 경고 반환
     """
     return stub(request, "VM GPU passthrough 확인(libvirt hostdev)", sources=("libvirt(hostdev)",))

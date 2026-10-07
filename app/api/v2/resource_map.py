@@ -179,18 +179,15 @@ async def get_pod_trace(
     request: Request,
     pod: str,
     cluster: Optional[str] = Query(None, description="클러스터 이름. 같은 이름 Pod가 여러 클러스터에 있을 때 지정"),
-    namespace: Optional[str] = Query(None, description="네임스페이스. 같은 이름 Pod가 여러 네임스페이스에 있을 때 지정"),
+    namespace: Optional[str] = Query(None, description="Kubernetes 네임스페이스. 같은 이름 Pod가 여러 네임스페이스에 있을 때 지정"),
 ):
-    """Pod 하나가 올라가 있는 자원을 물리서버까지 순서대로 조회
+    """Pod 하나가 올라간 자원을 물리 서버까지 순서대로 조회
 
-    - pod : Pod 이름, uid, 상태(Running | Pending | Succeeded | Failed | Unknown)
-    - workload : 최상위 관리자(Deployment, StatefulSet, DaemonSet, CronJob 등)
-    - accelerator : Pod가 쓰는 가속기 카드 (NVIDIA만 확인 가능)
-    - k8s_node : 소속 클러스터, 노드 이름, system_uuid, 상태(Ready | NotReady)
-    - vm : OpenStack VM 이름, uuid, 상태, 프로젝트 ID (관리 클러스터 노드는 skipped)
-    - physical_server : 물리서버 이름 (서버 총전력은 노드 전력 API로 조회)
+    - pod, cluster, namespace : 요청한 Pod 이름, 확인된 클러스터, 네임스페이스
+    - path : 단계(pod | workload | accelerator | k8s_node | vm | physical_server)별 이름, ID, 상태, 프로젝트, 소속 클러스터
+    - path 단계별 status(ok | none | skipped | unavailable), 연결 근거(via), 상세 API 경로(href)
+    - candidates : 같은 이름 Pod가 여러 개일 때 후보별 클러스터, 네임스페이스, 다시 추적할 API 경로
 
-    단계마다 status(ok | none | skipped | unavailable), 연결에 쓴 메트릭(via), 상세 API 경로(href) 포함.
-    같은 이름 Pod가 여러 개면 status="ambiguous"와 후보 목록(candidates) 반환. Pod가 없으면 404, Prometheus 조회 실패 시 503 반환.
+    같은 이름 Pod가 여럿이면 status="ambiguous" 와 MULTIPLE_PODS_MATCHED 경고. 확인하지 못한 단계는 status="partial" 과 <단계>_NOT_AVAILABLE 경고. Pod가 없으면 404, Prometheus 조회 실패 시 503. accelerator 단계는 NVIDIA 카드만 확인 가능.
     """
     return await trace_pod(pod, cluster, namespace)

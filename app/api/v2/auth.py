@@ -6,7 +6,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth import Token, create_access_token, verify_credentials, verify_token
 from app.config import Settings
@@ -16,15 +16,19 @@ router = APIRouter()
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    """로그인 요청 본문."""
+
+    username: str = Field(..., description="계정명")
+    password: str = Field(..., description="비밀번호")
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str
-    expires_in: int
-    username: str
+    """로그인 응답."""
+
+    access_token: str = Field(..., description="JWT. 이후 요청의 Authorization: Bearer 헤더에 넣는 값")
+    token_type: str = Field(..., description="토큰 종류. 항상 bearer")
+    expires_in: int = Field(..., description="토큰 유효 시간(초)")
+    username: str = Field(..., description="발급 대상 계정명")
 
 
 @router.post("/auth/login", response_model=LoginResponse, summary="로그인(JWT 발급)")
@@ -32,9 +36,11 @@ async def login(login_data: LoginRequest, settings: Settings = Depends(get_setti
     """아이디와 비밀번호로 JWT 발급
 
     - access_token : 이후 요청의 Authorization: Bearer 헤더에 넣는 값
-    - token_type : 항상 "bearer"
+    - token_type : 토큰 종류. 항상 bearer
     - expires_in : 토큰 유효 시간(초)
     - username : 발급 대상 계정명
+
+    아이디나 비밀번호가 틀리면 401.
     """
     if (
         login_data.username != settings.API_AUTH_USERNAME
@@ -57,17 +63,18 @@ async def login(login_data: LoginRequest, settings: Settings = Depends(get_setti
     )
 
 
-@router.post("/auth/token", response_model=Token, summary="로그인(HTTP Basic 대체 경로)")
+@router.post("/auth/token", response_model=Token, summary="로그인(HTTP Basic)")
 async def login_basic(
     username: str = Depends(verify_credentials),
     settings: Settings = Depends(get_settings),
 ):
-    """HTTP Basic 인증으로 JWT 발급
+    """HTTP Basic 인증 헤더로 JWT 발급
 
     - access_token : 이후 요청의 Authorization: Bearer 헤더에 넣는 값
-    - token_type : 항상 "bearer"
+    - token_type : 토큰 종류. 항상 bearer
+    - expires_in : 토큰 유효 시간(초)
 
-    JSON 본문 대신 Basic 인증 헤더를 쓰는 클라이언트용 경로.
+    JSON 본문 대신 Basic 인증 헤더를 쓰는 클라이언트용. 인증 실패 시 401.
     """
     expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(data={"sub": username}, expires_delta=expires, settings=settings)
@@ -80,9 +87,10 @@ async def login_basic(
 
 @router.get("/auth/verify", summary="토큰 유효성 확인")
 async def verify_current_token(username: str = Depends(verify_token)):
-    """가지고 있는 토큰이 아직 쓸 수 있는지 확인
+    """요청에 담긴 토큰의 유효 여부 확인
 
-    - valid : 토큰 유효 여부
+    - valid : 토큰 유효 여부. 유효할 때만 200, 그 외 401
     - username : 토큰에 담긴 계정명
+    - message : 확인 결과 문구
     """
     return {"valid": True, "username": username, "message": "Token is valid"}
