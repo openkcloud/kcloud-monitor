@@ -278,23 +278,50 @@ async def _query_page(
 @router.get("/logs/search", summary="로그 검색(LogQL)", response_model=LogSearchResponse)
 async def log_search(
     request: Request,
-    query: str = Query(..., description="LogQL 쿼리"),
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    cursor: Optional[str] = Query(None, description="다음 페이지 커서. 직전 응답의 pagination.next_cursor 값"),
-    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    query: str = Query(..., description="LogQL 쿼리, 예 `{namespace=\"openstack\"} |= \"ERROR\"` (필수)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 100)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    cursor: Optional[str] = Query(None, description="다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `<나노초>:<건수>`"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름, 예 `mgmt` (기본 전체)"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
     """LogQL 쿼리로 로그 검색
 
-    - 로그별 : 발생 시각(ISO 8601, UTC), 레벨(error | warning | info | debug), 원문 메시지
-    - labels, detected_fields : 로그의 Loki 라벨, 원문에서 추출한 장애 정보(GPU 오류 코드, 메모리 부족)
-    - trace_id, span_id : 분산 추적 ID (없으면 빈 문자열)
-    - pagination : 이번 페이지 건수(total), 페이지 크기, 오프셋(항상 0), 다음 페이지 존재 여부, 다음 페이지 커서(next_cursor)
+    입력 예시
 
-    다음 페이지는 cursor 에 next_cursor 값을 넣어 요청. cluster 지정 시 결과가 없으면 CLUSTER_LABEL_NOT_FOUND 경고 반환.
+    * `GET /api/v2/logs/search?query={namespace="openstack"} |= "ERROR"`
+    * `GET /api/v2/logs/search?query={namespace="openstack"} |= "ERROR"&cluster=mgmt&log_level=error&limit=50`
+
+    입력 옵션
+
+    * `query`: LogQL 쿼리 (필수)
+    * `cluster`: 클러스터 이름, 예 `mgmt` (선택, 기본 전체)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `100`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `cursor`: 다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `"<나노초>:<건수>"` (선택)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `data`: 로그 목록, 항목마다 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `pagination`: `total`, `limit`, `offset`, `has_next`, `next_cursor`
+    * `direction` 순서로 정렬, `backward` 는 최신순
+    * 다음 페이지는 `cursor` 에 `next_cursor` 값을 넣어 요청
+
+    경고
+
+    * `CLUSTER_LABEL_NOT_FOUND`: `cluster` 를 지정했는데 결과가 없음
+
+    오류
+
+    * 400: LogQL 오류, 잘못된 `cursor`, `log_level`, 라벨 값
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
     warnings: list[str] = []
@@ -316,18 +343,41 @@ async def log_search(
 @router.get("/logs/stream", summary="실시간 로그 스트림(SSE)")
 async def log_stream(
     request: Request,
-    query: str = Query(..., description="LogQL 쿼리"),
-    limit: int = Query(50, ge=1, le=500, description="2초마다 확인할 때 한 번에 받을 최대 개수 (1~500)"),
-    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    query: str = Query(..., description="LogQL 쿼리, 예 `{namespace=\"openstack\"} |= \"ERROR\"` (필수)"),
+    limit: int = Query(50, ge=1, le=500, description="2초마다 확인할 때 한 번에 받을 개수 (1 ~ 500, 기본 50)"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름, 예 `mgmt` (기본 전체)"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
-    """새로 들어오는 로그를 실시간으로 보내는 SSE 스트림
+    """새로 들어오는 로그를 실시간으로 받는 SSE 스트림
 
-    - log 이벤트 : 로그 1건. 발생 시각, 레벨, 원문 메시지, labels, detected_fields, trace_id, span_id
-    - heartbeat 이벤트 : 약 15초마다 observed_at 전송
-    - error 이벤트 : 쿼리 오류나 Loki 장애 시 status_code, detail 전송 후 스트림 종료
+    입력 예시
 
-    2초 간격으로 새 로그 확인. 연결 시점 이후 로그만 전송.
+    * `GET /api/v2/logs/stream?query={namespace="openstack"} |= "ERROR"`
+    * `GET /api/v2/logs/stream?query={namespace="openstack"} |= "ERROR"&cluster=mgmt&log_level=error&limit=50`
+
+    입력 옵션
+
+    * `query`: LogQL 쿼리 (필수)
+    * `limit`: 2초마다 확인할 때 한 번에 받을 개수 `1` ~ `500` (기본 `50`)
+    * `cluster`: 클러스터 이름, 예 `mgmt` (선택, 기본 전체)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `event: log`: 로그 1건, `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `event: heartbeat`: 약 15초마다 `observed_at` 전송
+    * `event: error`: 쿼리 오류나 Loki 장애 시 `status_code`, `detail` 전송 후 스트림 종료
+
+    참고
+
+    * 2초 간격으로 새 로그 확인
+    * 연결한 시점 이후의 로그만 전송
+    * 스트림이 시작된 뒤의 오류는 HTTP 코드 대신 `error` 이벤트로 전달
+
+    오류
+
+    * 400: 잘못된 `log_level`, 라벨 값
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
     query = _scoped(query, cluster=cluster, level=_level(log_level))
@@ -370,21 +420,50 @@ async def log_stream(
 @router.get("/logs/export", summary="로그 내보내기(CSV/JSON)")
 async def log_export(
     request: Request,
-    query: str = Query(..., description="LogQL 쿼리"),
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(1000, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    export_format: str = Query("json", alias="format", pattern="^(json|csv)$", description="응답 형식 (json | csv)"),
-    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    query: str = Query(..., description="LogQL 쿼리, 예 `{namespace=\"openstack\"} |= \"ERROR\"` (필수)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(1000, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 1000)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    export_format: str = Query("json", alias="format", pattern="^(json|csv)$", description="내려받을 형식 (`json` | `csv`, 기본 `json`)"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름, 예 `mgmt` (기본 전체)"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
-    """검색한 로그를 CSV 또는 JSON 첨부 파일로 내보내기
+    """검색한 로그를 CSV 또는 JSON 첨부 파일로 내려받기
 
-    - format=csv : timestamp, log_level, message, labels 열을 가진 첨부 파일(logs_export.csv)
-    - format=json : 로그별 timestamp, log_level, message, labels, detected_fields, trace_id, span_id 배열을 담은 첨부 파일(logs_export.json)
+    입력 예시
 
-    status, observed_at 등 공통 응답 형식 없이 파일 본문만 반환.
+    * `GET /api/v2/logs/export?query={namespace="openstack"} |= "ERROR"`
+    * `GET /api/v2/logs/export?query={namespace="openstack"} |= "ERROR"&format=csv&cluster=mgmt&limit=500`
+
+    입력 옵션
+
+    * `query`: LogQL 쿼리 (필수)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `1000`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `format`: `json` | `csv` (기본 `json`)
+    * `cluster`: 클러스터 이름, 예 `mgmt` (선택, 기본 전체)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `format=csv`: `logs_export.csv` 첨부 파일, 열은 `timestamp`, `log_level`, `message`, `labels`
+    * `format=json`: `logs_export.json` 첨부 파일, 로그별 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id` 배열
+    * `direction` 순서로 정렬, `backward` 는 최신순
+
+    참고
+
+    * `status`, `observed_at` 같은 공통 응답 형식 없이 파일 본문만 반환
+    * 페이지 나눔 없이 `limit` 개수까지 한 번에 반환
+
+    오류
+
+    * 400: LogQL 오류, 잘못된 `log_level`, 라벨 값
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
 
@@ -422,14 +501,36 @@ async def log_export(
 @router.get("/logs/labels", summary="로그 라벨 이름 목록", response_model=LabelListResponse)
 async def get_labels(
     request: Request,
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 최근 6시간(Loki 기본값)"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 최근 6시간)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
 ):
     """로그에 붙은 라벨 이름 전체 조회
 
-    - data : 라벨 이름 목록 (예: namespace, job, pod)
+    입력 예시
 
-    검색 쿼리 작성 전 필터 가능한 라벨 확인 용도. Loki 조회 실패 시 LOKI_UNAVAILABLE 경고와 빈 목록 반환.
+    * `GET /api/v2/logs/labels`
+    * `GET /api/v2/logs/labels?start=2026-10-07T00:00:00Z&end=2026-10-07T06:00:00Z`
+
+    입력 옵션
+
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 최근 6시간)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+
+    응답
+
+    * `data`: 라벨 이름 목록, 예 `namespace`, `job`, `pod`
+
+    경고
+
+    * `LOKI_UNAVAILABLE`: Loki 조회 실패, `data` 가 빈 목록이고 `status` 는 `partial`
+
+    참고
+
+    * 검색 쿼리를 쓰기 전에 걸러낼 수 있는 라벨을 확인하는 용도
+
+    오류
+
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
     data = await loki_client.labels(start, end)
@@ -441,16 +542,35 @@ async def get_labels(
 @router.get("/logs/label-values", summary="로그 라벨 값 목록", response_model=LabelValuesResponse)
 async def get_label_values(
     request: Request,
-    label: str = Query(..., description="라벨 이름 (예: namespace, job)"),
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 최근 6시간(Loki 기본값)"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
+    label: str = Query(..., description="라벨 이름, 예 `namespace` (필수)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 최근 6시간)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
 ):
     """라벨 하나에 들어 있는 값 전체 조회
 
-    - label : 조회한 라벨 이름
-    - data : 그 라벨의 값 목록
+    입력 예시
 
-    Loki 조회 실패 시 LOKI_UNAVAILABLE 경고와 빈 목록 반환.
+    * `GET /api/v2/logs/label-values?label=namespace`
+    * `GET /api/v2/logs/label-values?label=namespace&start=2026-10-07T00:00:00Z&end=2026-10-07T06:00:00Z`
+
+    입력 옵션
+
+    * `label`: 라벨 이름, 예 `namespace` (필수)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 최근 6시간)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+
+    응답
+
+    * `label`: 조회한 라벨 이름
+    * `data`: 그 라벨의 값 목록
+
+    경고
+
+    * `LOKI_UNAVAILABLE`: Loki 조회 실패, `data` 가 빈 목록이고 `status` 는 `partial`
+
+    오류
+
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
     data = await loki_client.label_values(label, start, end)
@@ -462,16 +582,40 @@ async def get_label_values(
 @router.get("/logs/volume", summary="로그 볼륨 통계", response_model=VolumeResponse)
 async def get_volume(
     request: Request,
-    query: str = Query('{job=~".+"}', description='LogQL 스트림 셀렉터 (예: {namespace="default"})'),
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 최대 라벨 조합 수 (1~1000)"),
+    query: str = Query('{job=~".+"}', description="LogQL 스트림 셀렉터, 예 `{namespace=\"default\"}` (기본 `{job=~\".+\"}`)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 라벨 조합 개수 (1 ~ 1000, 기본 100)"),
 ):
     """라벨 조합별로 쌓인 로그 양 조회
 
-    - data : 라벨 조합(labels)과 로그 크기(volume, bytes 숫자 문자열) 목록
+    입력 예시
 
-    로그를 많이 내는 대상 확인 용도. Loki 조회 실패 시 LOKI_UNAVAILABLE 경고와 빈 목록 반환.
+    * `GET /api/v2/logs/volume`
+    * `GET /api/v2/logs/volume?query={namespace="openstack"}&limit=20`
+
+    입력 옵션
+
+    * `query`: LogQL 스트림 셀렉터, 예 `{namespace="default"}` (선택, 기본 `{job=~".+"}`)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 라벨 조합 개수 `1` ~ `1000` (기본 `100`)
+
+    응답
+
+    * `data`: 라벨 조합 목록, 항목마다 `labels`, `volume` (로그 크기, bytes 숫자 문자열)
+
+    경고
+
+    * `LOKI_UNAVAILABLE`: Loki 조회 실패, `data` 가 빈 목록이고 `status` 는 `partial`
+
+    참고
+
+    * 로그를 많이 내는 대상을 찾는 용도
+
+    오류
+
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
 
@@ -507,22 +651,49 @@ async def get_volume(
 async def cluster_log_search(
     request: Request,
     cluster: str,
-    query: Optional[str] = Query(None, description="추가로 걸러낼 LogQL 조건. 미지정 시 전체 조회"),
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    cursor: Optional[str] = Query(None, description="다음 페이지 커서. 직전 응답의 pagination.next_cursor 값"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    query: Optional[str] = Query(None, description="추가로 걸러낼 LogQL 조건 (기본 전체)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 100)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    cursor: Optional[str] = Query(None, description="다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `<나노초>:<건수>`"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
     """클러스터 한 개의 로그만 골라 검색
 
-    - 로그별 : 발생 시각(ISO 8601, UTC), 레벨(error | warning | info | debug), 원문 메시지
-    - labels, detected_fields : 로그의 Loki 라벨, 원문에서 추출한 장애 정보(GPU 오류 코드, 메모리 부족)
-    - trace_id, span_id : 분산 추적 ID (없으면 빈 문자열)
-    - pagination : 이번 페이지 건수(total), 페이지 크기, 오프셋(항상 0), 다음 페이지 존재 여부, 다음 페이지 커서(next_cursor)
+    입력 예시
 
-    로그의 cluster 라벨 기준 필터. 결과가 없으면 NO_CLUSTER_LOGS 경고 반환.
+    * `GET /api/v2/logs/clusters/mgmt/search`
+    * `GET /api/v2/logs/clusters/mgmt/search?query=|= "ERROR"&log_level=error&limit=50`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `query`: 추가로 걸러낼 LogQL 조건 (선택, 기본 전체)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `100`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `cursor`: 다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `"<나노초>:<건수>"` (선택)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `data`: 로그 목록, 항목마다 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `pagination`: `total`, `limit`, `offset`, `has_next`, `next_cursor`
+    * `direction` 순서로 정렬, `backward` 는 최신순
+    * 로그의 `cluster` 라벨 기준으로 필터
+
+    경고
+
+    * `NO_CLUSTER_LOGS`: 결과가 없음
+
+    오류
+
+    * 400: LogQL 오류, 잘못된 `cursor`, `log_level`, 라벨 값
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
     warnings: list[str] = []
@@ -550,22 +721,52 @@ async def node_logs(
     request: Request,
     cluster: str,
     node: str,
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    cursor: Optional[str] = Query(None, description="다음 페이지 커서. 직전 응답의 pagination.next_cursor 값"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 100)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    cursor: Optional[str] = Query(None, description="다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `<나노초>:<건수>`"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
     """노드 한 대의 운영체제 시스템 로그(journal) 조회
 
-    - cluster, node : 클러스터 이름, 노드 이름
-    - 로그별 : 발생 시각(ISO 8601, UTC), 레벨(error | warning | info | debug), 원문 메시지
-    - labels, detected_fields : 로그의 Loki 라벨, 원문에서 추출한 장애 정보(GPU 오류 코드, 메모리 부족)
-    - trace_id, span_id : 분산 추적 ID (없으면 빈 문자열)
-    - pagination : 이번 페이지 건수(total), 페이지 크기, 오프셋(항상 0), 다음 페이지 존재 여부, 다음 페이지 커서(next_cursor)
+    입력 예시
 
-    로그의 cluster, node 라벨 기준 필터. 결과가 없으면 NO_NODE_LOGS 경고 반환.
+    * `GET /api/v2/logs/clusters/mgmt/nodes/controller/logs`
+    * `GET /api/v2/logs/clusters/mgmt/nodes/controller/logs?log_level=error&limit=50`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `node`: 노드 이름, 예 `controller` (경로, 필수)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `100`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `cursor`: 다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `"<나노초>:<건수>"` (선택)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `cluster`, `node`: 클러스터 이름, 노드 이름
+    * `data`: 로그 목록, 항목마다 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `pagination`: `total`, `limit`, `offset`, `has_next`, `next_cursor`
+    * `direction` 순서로 정렬, `backward` 는 최신순
+
+    경고
+
+    * `NO_NODE_LOGS`: 결과가 없음
+
+    참고
+
+    * 로그의 `cluster`, `node` 라벨 기준으로 필터
+
+    오류
+
+    * 400: LogQL 오류, 잘못된 `cursor`, `log_level`, 라벨 값
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
 
@@ -599,23 +800,51 @@ async def pod_logs(
     cluster: str,
     namespace: str,
     pod: str,
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    cursor: Optional[str] = Query(None, description="다음 페이지 커서. 직전 응답의 pagination.next_cursor 값"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
-    container: Optional[str] = Query(None, description="컨테이너 이름 필터. 미지정 시 Pod 의 모든 컨테이너"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 100)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    cursor: Optional[str] = Query(None, description="다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `<나노초>:<건수>`"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
+    container: Optional[str] = Query(None, description="컨테이너 이름, 예 `nova-api` (기본 Pod 의 모든 컨테이너)"),
 ):
     """Pod 한 개의 컨테이너 로그 조회
 
-    - cluster, namespace, pod : 클러스터 이름, 네임스페이스, Pod 이름
-    - 로그별 : 발생 시각(ISO 8601, UTC), 레벨(error | warning | info | debug), 원문 메시지
-    - labels, detected_fields : 로그의 Loki 라벨, 원문에서 추출한 장애 정보(GPU 오류 코드, 메모리 부족)
-    - trace_id, span_id : 분산 추적 ID (없으면 빈 문자열)
-    - pagination : 이번 페이지 건수(total), 페이지 크기, 오프셋(항상 0), 다음 페이지 존재 여부, 다음 페이지 커서(next_cursor)
+    입력 예시
 
-    container 지정 시 그 컨테이너 로그만 반환.
+    * `GET /api/v2/logs/clusters/mgmt/pods/openstack/nova-api-0/logs`
+    * `GET /api/v2/logs/clusters/mgmt/pods/openstack/nova-api-0/logs?container=nova-api&log_level=error&limit=50`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `nova-api-0` (경로, 필수)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `100`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `cursor`: 다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `"<나노초>:<건수>"` (선택)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+    * `container`: 컨테이너 이름, 예 `nova-api` (선택, 기본 Pod 의 모든 컨테이너)
+
+    응답
+
+    * `cluster`, `namespace`, `pod`: 클러스터 이름, 네임스페이스, Pod 이름
+    * `data`: 로그 목록, 항목마다 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `pagination`: `total`, `limit`, `offset`, `has_next`, `next_cursor`
+    * `direction` 순서로 정렬, `backward` 는 최신순
+
+    참고
+
+    * `container` 를 지정하면 그 컨테이너 로그만 반환
+
+    오류
+
+    * 400: LogQL 오류, 잘못된 `cursor`, `log_level`, 라벨 값
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
 
@@ -646,23 +875,57 @@ async def accelerator_logs(
     request: Request,
     cluster: str,
     accelerator_id: str,
-    start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 1시간 전"),
-    end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
-    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 최대 개수 (1~5000)"),
-    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향 (backward | forward). backward: 최신 로그 먼저"),
-    cursor: Optional[str] = Query(None, description="다음 페이지 커서. 직전 응답의 pagination.next_cursor 값"),
-    log_level: Optional[str] = Query(None, description="로그 레벨 필터 (error | warning | info | debug)"),
+    start: Optional[str] = Query(None, description="시작 시각, ISO 8601 형식 (기본 1시간 전)"),
+    end: Optional[str] = Query(None, description="종료 시각, ISO 8601 형식 (기본 현재 시각)"),
+    limit: int = Query(100, ge=1, le=5000, description="한 번에 받을 개수 (1 ~ 5000, 기본 100)"),
+    direction: str = Query("backward", pattern="^(forward|backward)$", description="정렬 방향, `backward` 는 최신 로그부터 (기본 `backward`)"),
+    cursor: Optional[str] = Query(None, description="다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `<나노초>:<건수>`"),
+    log_level: Optional[str] = Query(None, description="로그 레벨 (`error` | `warning` | `info` | `debug`, 기본 전체)"),
 ):
     """가속기 드라이버가 남긴 로그 조회
 
-    - cluster, accelerator_id, node : 클러스터 이름, 가속기 ID, 카드가 장착된 노드 이름(못 찾으면 null)
-    - 로그별 : 발생 시각(ISO 8601, UTC), 레벨(error | warning | info | debug), 원문 메시지
-    - labels, detected_fields : 로그의 Loki 라벨, 원문에서 추출한 장애 정보(GPU 오류 코드, 메모리 부족)
-    - trace_id, span_id : 분산 추적 ID (없으면 빈 문자열)
-    - pagination : 이번 페이지 건수(total), 페이지 크기, 오프셋(항상 0), 다음 페이지 존재 여부, 다음 페이지 커서(next_cursor)
-    - 하드웨어 오류(XID), 메모리 오류(ECC), 발열 성능 제한 기록 포함
+    입력 예시
 
-    카드가 장착된 노드의 시스템 로그와 Pod 로그 중 벤더 드라이버 관련 줄만 추출. 같은 노드의 다른 카드 로그도 함께 포함. 카드를 못 찾으면 ACCELERATOR_NOT_FOUND, 로그가 없으면 NO_LOG_SOURCE 경고 반환. 가속기가 없는 클러스터는 404.
+    * `GET /api/v2/logs/clusters/furiosa/accelerators/npu0/logs`
+    * `GET /api/v2/logs/clusters/furiosa/accelerators/npu0/logs?log_level=error&limit=50`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `furiosa` (경로, 필수)
+    * `accelerator_id`: 가속기 ID, 예 `npu0` (경로, 필수)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 1시간 전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `limit`: 한 번에 받을 개수 `1` ~ `5000` (기본 `100`)
+    * `direction`: `backward` | `forward` (기본 `backward`)
+    * `cursor`: 다음 페이지 커서, 직전 응답의 `pagination.next_cursor` 값, 형식 `"<나노초>:<건수>"` (선택)
+    * `log_level`: `error` | `warning` | `info` | `debug` (선택, 기본 전체)
+
+    응답
+
+    * `cluster`, `accelerator_id`: 클러스터 이름, 가속기 ID
+    * `node`: 카드가 장착된 노드 이름 (못 찾으면 `null`)
+    * `data`: 로그 목록, 항목마다 `timestamp`, `log_level`, `message`, `labels`, `detected_fields`, `trace_id`, `span_id`
+    * `pagination`: `total`, `limit`, `offset`, `has_next`, `next_cursor`
+    * `direction` 순서로 정렬, `backward` 는 최신순
+
+    경고
+
+    * `ACCELERATOR_NOT_FOUND`: 가속기 ID 로 카드를 찾지 못함
+    * `NO_LOG_SOURCE`: 조건에 맞는 로그가 없음
+
+    참고
+
+    * 카드가 장착된 노드의 시스템 로그와 Pod 로그 중 벤더 드라이버 관련 줄만 추출
+    * 같은 노드의 다른 카드 로그도 함께 포함
+    * 하드웨어 오류(XID), 메모리 오류(ECC), 발열 성능 제한 기록 포함
+
+    오류
+
+    * 404: 가속기가 없는 클러스터
+    * 400: 잘못된 `cursor`, `log_level`
+    * 502: Loki 응답 오류
+    * 504: Loki 연결 실패
+    * 503: `LOKI_URL` 미설정
     """
     _require_loki()
 

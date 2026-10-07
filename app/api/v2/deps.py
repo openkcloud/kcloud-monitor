@@ -37,11 +37,11 @@ class PaginationParams:
 
     def __init__(
         self,
-        limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 최대 개수 (1~1000)"),
-        offset: int = Query(0, ge=0, description="건너뛸 개수. 페이지 이동용"),
-        sort_by: Optional[str] = Query(None, description="정렬 기준 필드 이름. 자원마다 지원 필드 다름"),
+        limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 개수 (1 ~ 1000, 기본 100)"),
+        offset: int = Query(0, ge=0, description="건너뛸 개수 (페이지 이동용, 기본 0)"),
+        sort_by: Optional[str] = Query(None, description="정렬 기준 필드 이름 (자원마다 지원하는 필드가 다름)"),
         sort_order: str = Query("asc", pattern="^(asc|desc)$", description="정렬 방향 (asc | desc)"),
-        search: Optional[str] = Query(None, description="이름 부분 일치 검색어 (대소문자 무시)"),
+        search: Optional[str] = Query(None, description="이름에 들어 있는 글자 (대소문자 무시)"),
     ):
         self.limit = limit
         self.offset = offset
@@ -55,16 +55,16 @@ class WorkloadFilterParams:
 
     def __init__(
         self,
-        limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 최대 개수 (1~1000)"),
-        offset: int = Query(0, ge=0, description="건너뛸 개수. 페이지 이동용"),
-        sort_by: Optional[str] = Query(None, description="정렬 기준 필드 이름. 자원마다 지원 필드 다름"),
+        limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 개수 (1 ~ 1000, 기본 100)"),
+        offset: int = Query(0, ge=0, description="건너뛸 개수 (페이지 이동용, 기본 0)"),
+        sort_by: Optional[str] = Query(None, description="정렬 기준 필드 이름 (자원마다 지원하는 필드가 다름)"),
         sort_order: str = Query("asc", pattern="^(asc|desc)$", description="정렬 방향 (asc | desc)"),
-        search: Optional[str] = Query(None, description="이름 부분 일치 검색어 (대소문자 무시)"),
+        search: Optional[str] = Query(None, description="이름에 들어 있는 글자 (대소문자 무시)"),
         project: Optional[str] = Query(None, description="OpenStack 프로젝트 이름 필터"),
         namespace: Optional[str] = Query(None, description="Kubernetes 네임스페이스 필터"),
         service_name: Optional[str] = Query(None, description="서비스(애플리케이션) 이름 부분 일치 필터"),
-        workload_type: Optional[str] = Query(None, description="워크로드 종류 필터 (예: ReplicaSet, StatefulSet, DaemonSet, Job). 대소문자 무시"),
-        status: Optional[str] = Query(None, description="상태 필터 (예: Running, Pending). 대소문자 무시"),
+        workload_type: Optional[str] = Query(None, description="워크로드 종류 필터 (예: StatefulSet, 대소문자 무시)"),
+        status: Optional[str] = Query(None, description="상태 필터 (예: Running, 대소문자 무시)"),
     ):
         self.limit = limit
         self.offset = offset
@@ -83,9 +83,9 @@ class TimeseriesParams:
 
     def __init__(
         self,
-        period: str = Query("1h", description="조회 기간 (예: 30m, 1h, 7d). start 미지정 시 적용, 최대 10일, 해석 불가 시 1h"),
-        start: Optional[str] = Query(None, description="시작 시각 (ISO 8601). 미지정 시 현재 시각에서 period 만큼 이전"),
-        end: Optional[str] = Query(None, description="종료 시각 (ISO 8601). 미지정 시 현재 시각"),
+        period: str = Query("1h", description="조회 기간 (예: 30m, 1h, 7d, 최대 10일, 기본 1h)"),
+        start: Optional[str] = Query(None, description="시작 시각 (ISO 8601, 없으면 지금부터 period 만큼 전)"),
+        end: Optional[str] = Query(None, description="종료 시각 (ISO 8601, 없으면 지금)"),
         step: str = Query("5m", description="데이터 점 간격 (예: 1m, 5m, 1h)"),
         aggregation: str = Query("avg", pattern="^(avg|min|max|sum)$", description="구간 집계 방식 (avg | min | max | sum)"),
     ):

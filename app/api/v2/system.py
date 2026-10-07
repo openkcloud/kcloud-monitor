@@ -16,11 +16,24 @@ router = APIRouter()
 async def get_health(request: Request):
     """API 서버와 데이터소스 연결 상태 확인
 
-    - status : 서버 상태(healthy | degraded). degraded: 서버는 동작, Prometheus 미도달
-    - backends.prometheus : Prometheus 연결 상태(connected | unreachable)
-    - observed_at : 확인 시각 (ISO 8601, UTC)
+    입력 예시
 
-    인증 없이 호출 가능.
+    * `GET /api/v2/system/health`
+
+    응답
+
+    * `status`: 서버 상태 `healthy` | `degraded`
+    * `backends.prometheus`: Prometheus 연결 상태 `connected` | `unreachable`
+    * `observed_at`: 확인 시각 (ISO 8601, UTC)
+
+    상태
+
+    * `healthy`: 서버와 Prometheus 모두 정상
+    * `degraded`: 서버는 동작 중이나 Prometheus에 연결되지 않음
+
+    참고
+
+    * 인증 없이 호출 가능
     """
     prometheus_ok = await prometheus_client.ping()
     return {
@@ -37,12 +50,21 @@ async def get_health(request: Request):
 async def get_version(request: Request):
     """배포된 서비스와 API 버전 조회
 
-    - service : 서비스 이름
-    - version : 서비스 버전
-    - api_version : API 버전
-    - status, observed_at : 처리 결과, 응답 생성 시각 (ISO 8601, UTC)
+    입력 예시
 
-    인증 없이 호출 가능.
+    * `GET /api/v2/system/version`
+
+    응답
+
+    * `status`: 처리 결과
+    * `service`: 서비스 이름
+    * `version`: 서비스 버전
+    * `api_version`: API 버전
+    * `observed_at`: 응답 생성 시각 (ISO 8601, UTC)
+
+    참고
+
+    * 인증 없이 호출 가능
     """
     return {
         "status": "success",
@@ -57,9 +79,17 @@ async def get_version(request: Request):
 async def get_self_metrics():
     """API 서버가 처리한 요청 수와 응답 지연 메트릭 조회
 
-    - Prometheus 텍스트 형식 응답 (JSON 아님)
-    - 경로별 요청 수, 상태 코드별 요청 수, 응답 지연 분포
+    입력 예시
 
-    인증 없이 호출 가능.
+    * `GET /api/v2/system/metrics`
+
+    응답
+
+    * Prometheus 텍스트 형식 (JSON 아님)
+    * 경로별 요청 수, 상태 코드별 요청 수, 응답 지연 분포
+
+    참고
+
+    * 인증 없이 호출 가능
     """
     return Response(content=get_metrics_text(), media_type=get_metrics_content_type())

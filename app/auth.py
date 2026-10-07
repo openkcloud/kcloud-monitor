@@ -94,7 +94,7 @@ def verify_token_or_api_key(
     x_api_key: Optional[str] = Header(
         None,
         alias="X-API-Key",
-        description="API 키 인증 값. Bearer 토큰 대신 사용 가능, 서버에 API_KEY 가 설정된 경우만 유효",
+        description="API 키 (Bearer 토큰 대신 사용, 서버에 API_KEY 가 설정된 경우만)",
     ),
     settings: Settings = Depends(get_settings),
 ) -> str:

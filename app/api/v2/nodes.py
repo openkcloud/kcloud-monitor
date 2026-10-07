@@ -266,14 +266,44 @@ async def list_nodes(
 ):
     """클러스터에 속한 노드 목록 조회
 
-    - 노드 이름, 소속 클러스터, 동작 여부(up), 종류(physical | virtual)
-    - 내부 IP, 역할(worker | control-plane), OS 이미지, kubelet 버전 (관리 클러스터만)
-    - 가속기 벤더, 가속기 카드 수, 가속기 평균 사용률(%) (가속기 클러스터만)
-    - 전력(W). 관리 클러스터는 서버 전원 장치(IPMI) 측정값, 가속기 클러스터는 가속기 전력 합계
-    - total : 필터 적용 후 전체 노드 수
-    - summary : 동작 중 노드 수, 전체 노드 수, 메모리 합계와 사용량(bytes), 메모리 사용률(%)
+    입력 예시
 
-    관리 클러스터는 Kubernetes 등록 노드, 가속기 클러스터는 가속기를 보고하는 호스트 기준. node_type, search(이름, IP 부분 일치)로 필터. sort_by=power_watts | utilization_percent 지원, 그 외는 이름순, 값 없는 노드는 맨 뒤.
+    * `GET /api/v2/clusters/mgmt/nodes`
+    * `GET /api/v2/clusters/l40s/nodes?node_type=physical&sort_by=power_watts&sort_order=desc&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt`, `l40s` (경로, 필수)
+    * `limit`: 한 번에 받을 최대 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `sort_by`: `power_watts` | `utilization_percent` (선택, 없으면 이름순)
+    * `sort_order`: `asc` | `desc` (기본 `asc`)
+    * `search`: 노드 이름 또는 내부 IP 부분 일치 검색어, 대소문자 무시 (선택)
+    * `node_type`: 노드 구분 필터 `physical` | `virtual` (선택)
+
+    응답
+
+    * 노드 이름, 소속 클러스터, 동작 여부(`up`), 종류(`physical` | `virtual`)
+    * 내부 IP, 역할(`worker` | `control-plane`), OS 이미지, kubelet 버전, 관리 클러스터만
+    * 가속기 벤더, 가속기 카드 수, 가속기 평균 사용률(%), 가속기 클러스터만
+    * 전력(W), 관리 클러스터는 서버 전원 장치(IPMI) 측정값, 가속기 클러스터는 가속기 전력 합계
+    * `total`: 필터 적용 후 전체 노드 수
+    * `summary`: 동작 중 노드 수, 전체 노드 수, 메모리 합계와 사용량(bytes), 메모리 사용률(%)
+    * `sort_by` 가 없거나 지원하지 않는 값이면 이름순으로 정렬, 값이 없는 노드는 맨 뒤
+
+    경고
+
+    * `NO_DATA`: 조건에 맞는 노드가 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 관리 클러스터는 Kubernetes 등록 노드 기준
+    * 가속기 클러스터는 가속기를 보고하는 호스트 기준
+    * `summary` 는 필터와 페이지와 무관하게 전체 노드 기준
     """
     info = await _require_cluster(cluster)
     phys_nodes = await _phys_node_set()
@@ -386,14 +416,32 @@ async def list_nodes(
 async def get_node(request: Request, cluster: str, node: str):
     """노드 한 대의 상세 조회
 
-    - instance, cluster, up : 노드 식별자, 소속 클러스터, 메트릭 보고 여부
-    - os : 커널 종류, 릴리스, 버전, 아키텍처, 호스트명
-    - boot_time : 마지막 부팅 시각 (ISO 8601, UTC)
-    - cpu_cores, memory_total_bytes : CPU 코어 수, 전체 메모리(bytes)
-    - node_type : 노드 종류(physical | virtual)
-    - ready, accelerator_count : Kubernetes Ready 상태(관리 클러스터만), 장착된 가속기 카드 수
+    입력 예시
 
-    노드 데이터가 없으면 data=null 과 NO_DATA 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `instance`, `cluster`, `up`: 노드 식별자, 소속 클러스터, 메트릭 보고 여부
+    * `os`: 커널 종류, 릴리스, 버전, 아키텍처, 호스트명
+    * `boot_time`: 마지막 부팅 시각, ISO 8601 UTC
+    * `cpu_cores`, `memory_total_bytes`: CPU 코어 수, 전체 메모리(bytes)
+    * `node_type`: 노드 종류 `physical` | `virtual`
+    * `ready`: Kubernetes Ready 상태, 관리 클러스터만
+    * `accelerator_count`: 장착된 가속기 카드 수
+
+    경고
+
+    * `NO_DATA`: 노드 데이터가 없음 (`data` 는 `null`)
+
+    오류
+
+    * 404: 없는 클러스터
     """
     await _require_cluster(cluster)
     raw_node = node
@@ -463,12 +511,33 @@ async def get_node(request: Request, cluster: str, node: str):
 async def get_node_metrics(request: Request, cluster: str, node: str):
     """노드 한 대의 주요 사용량 조회
 
-    - cpu_usage_percent : CPU 사용률(%)
-    - memory_usage_percent, memory_total_bytes, memory_used_bytes : 메모리 사용률(%), 전체와 사용 메모리(bytes)
-    - disk_usage_percent : 실디스크 사용률(%). 용량 가중 합계, tmpfs 같은 가상 파일시스템 제외
-    - network_receive_bytes_per_sec, network_transmit_bytes_per_sec : 수신, 송신 처리량(bytes/s)
+    입력 예시
 
-    CPU 와 네트워크 값은 최근 5분 평균.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/metrics`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `cpu_usage_percent`: CPU 사용률(%)
+    * `memory_usage_percent`, `memory_total_bytes`, `memory_used_bytes`: 메모리 사용률(%), 전체와 사용 메모리(bytes)
+    * `disk_usage_percent`: 실디스크 사용률(%), 용량 가중 합계이며 `tmpfs` 같은 가상 파일시스템 제외
+    * `network_receive_bytes_per_sec`, `network_transmit_bytes_per_sec`: 수신, 송신 처리량(bytes/s)
+
+    경고
+
+    * `NO_DATA`: 노드 값이 수집되지 않음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * CPU 와 네트워크 값은 최근 5분 평균
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
@@ -515,12 +584,33 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
 async def get_node_cpu(request: Request, cluster: str, node: str):
     """노드 한 대의 CPU 사용 상세 조회
 
-    - usage_percent : 전체 CPU 사용률(%)
-    - load1, load5, load15 : 1분, 5분, 15분 평균 부하
-    - per_core : 코어 번호별 사용률(%)
-    - per_mode : 처리 종류(예: user, system, iowait)별 CPU 시간 비율
+    입력 예시
 
-    사용률과 시간 비율은 최근 5분 평균.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/cpu`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `usage_percent`: 전체 CPU 사용률(%)
+    * `load1`, `load5`, `load15`: 1분, 5분, 15분 평균 부하
+    * `per_core`: 코어 번호별 사용률(%)
+    * `per_mode`: 처리 종류별 CPU 시간 비율, 예 `user`, `system`, `iowait`
+
+    경고
+
+    * `NO_DATA`: CPU 값이 수집되지 않음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 사용률과 시간 비율은 최근 5분 평균
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
@@ -564,10 +654,29 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
 async def get_node_memory(request: Request, cluster: str, node: str):
     """노드 한 대의 메모리 사용 상세 조회
 
-    - total_bytes, available_bytes, used_bytes : 전체, 가용, 사용 메모리(bytes)
-    - used_percent : 메모리 사용률(%)
-    - cached_bytes, buffers_bytes : 캐시, 버퍼 메모리(bytes)
-    - swap_total_bytes, swap_free_bytes, swap_used_bytes : 스왑 전체, 가용, 사용량(bytes)
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/memory`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `total_bytes`, `available_bytes`, `used_bytes`: 전체, 가용, 사용 메모리(bytes)
+    * `used_percent`: 메모리 사용률(%)
+    * `cached_bytes`, `buffers_bytes`: 캐시, 버퍼 메모리(bytes)
+    * `swap_total_bytes`, `swap_free_bytes`, `swap_used_bytes`: 스왑 전체, 가용, 사용량(bytes)
+
+    경고
+
+    * `NO_DATA`: 메모리 값이 수집되지 않음
+
+    오류
+
+    * 404: 없는 클러스터
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
@@ -610,10 +719,31 @@ async def get_node_memory(request: Request, cluster: str, node: str):
 async def get_node_storage(request: Request, cluster: str, node: str):
     """노드 한 대의 로컬 디스크 사용 상세 조회
 
-    - filesystems : 마운트 위치, 파일시스템 종류, 전체 용량과 남은 용량(bytes), 사용률(%)
-    - disks : 장치 이름, 읽기와 쓰기 처리량(bytes/s)
+    입력 예시
 
-    Ceph 분산 스토리지 용량은 포함하지 않음.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/storage`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `filesystems`: 마운트 위치, 파일시스템 종류, 전체 용량과 남은 용량(bytes), 사용률(%)
+    * `disks`: 장치 이름, 읽기와 쓰기 처리량(bytes/s)
+
+    경고
+
+    * `NO_DATA`: 디스크 값이 수집되지 않음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * Ceph 분산 스토리지 용량은 포함하지 않음
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
@@ -670,9 +800,30 @@ async def get_node_storage(request: Request, cluster: str, node: str):
 async def get_node_network(request: Request, cluster: str, node: str):
     """노드 한 대의 네트워크 사용 상세 조회
 
-    - interfaces : 장치 이름, 수신과 송신 처리량(bytes/s), 수신과 송신 에러율(회/s)
+    입력 예시
 
-    모든 값은 최근 5분 평균.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/network`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `interfaces`: 장치 이름, 수신과 송신 처리량(bytes/s), 수신과 송신 에러율(회/s)
+
+    경고
+
+    * `NO_DATA`: 네트워크 값이 수집되지 않음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 모든 값은 최근 5분 평균
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
@@ -723,10 +874,34 @@ async def get_node_network(request: Request, cluster: str, node: str):
 async def get_node_power(request: Request, cluster: str, node: str):
     """노드 한 대의 현재 서버 총전력 조회
 
-    - watts : 서버 총전력(W)
-    - source : 산출 경로(ipmi-dcmi | ipmi-psu-input). ipmi-dcmi: BMC 의 DCMI 측정값, ipmi-psu-input: 전원 장치 입력 전력 합
+    입력 예시
 
-    BMC 가 측정한 벽면 전력으로 CPU, 메모리, 가속기, 팬, 디스크, 전원 장치 손실 포함. BMC 없는 가상 노드는 data=null 과 NO_POWER_DATA 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `watts`: 서버 총전력(W)
+    * `source`: 산출 경로 `ipmi-dcmi` | `ipmi-psu-input`
+    * `ipmi-dcmi`: BMC 의 DCMI 측정값
+    * `ipmi-psu-input`: 전원 장치 입력 전력 합
+
+    경고
+
+    * `NO_POWER_DATA`: 전력 값이 없음, BMC 없는 가상 노드 등 (`data` 는 `null`)
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * BMC 가 측정한 벽면 전력
+    * CPU, 메모리, 가속기, 팬, 디스크, 전원 장치 손실 포함
     """
     await _require_cluster(cluster)
     results, source = await _ipmi_node_power_instant(node)
@@ -748,10 +923,36 @@ async def get_node_power_timeseries(
 ):
     """노드 한 대의 서버 총전력 변화 추이 조회
 
-    - series : 측정 시각(timestamp, ISO 8601 UTC)과 서버 총전력(watts, W) 목록
-    - source : 산출 경로(ipmi-dcmi | ipmi-psu-input)
+    입력 예시
 
-    IPMI 기준 벽면 전력. 조회 기간과 간격은 period, start, end, step 으로 지정, 기간 미지정 시 최근 1시간. 데이터가 없으면 NO_POWER_DATA 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power/timeseries`
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power/timeseries?period=6h&step=1m`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
+    * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
+    * `end`: 종료 시각, ISO 8601 (선택, 기본 현재)
+    * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+
+    응답
+
+    * `series`: 측정 시각(`timestamp`, ISO 8601 UTC)과 서버 총전력(`watts`, W) 목록
+    * `source`: 산출 경로 `ipmi-dcmi` | `ipmi-psu-input`
+
+    경고
+
+    * `NO_POWER_DATA`: 해당 기간에 전력 값이 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * IPMI 기준 벽면 전력
     """
     await _require_cluster(cluster)
     now = datetime.now(timezone.utc)
@@ -787,9 +988,30 @@ async def get_node_power_timeseries(
 async def get_hardware_sensors(request: Request, cluster: str, node: str):
     """서버 본체 하드웨어 센서 값 전체 조회
 
-    - sensors : 센서 이름, 값, 단위 (온도, 팬 회전수, 전압, 전력 센서 포함)
+    입력 예시
 
-    판독 불가 센서는 제외. IPMI 센서 미수집 노드는 빈 목록과 IPMI_NOT_AVAILABLE 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/sensors`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `sensors`: 센서 이름, 값, 단위, 온도와 팬 회전수와 전압과 전력 센서 포함
+
+    경고
+
+    * `IPMI_NOT_AVAILABLE`: IPMI 센서를 수집하지 않는 노드 (`sensors` 는 빈 목록)
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 판독 불가 센서는 제외
     """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(f'{{__name__=~"ipmi_.*",node="{_esc(node)}"}}')
@@ -821,9 +1043,31 @@ async def get_hardware_sensors(request: Request, cluster: str, node: str):
 async def get_hardware_power(request: Request, cluster: str, node: str):
     """서버 한 대가 전원에서 끌어가는 전체 전력 조회
 
-    - watts : 서버 총전력(W)
+    입력 예시
 
-    BMC 의 DCMI 측정값으로 CPU, 가속기, 팬, 메모리 포함. IPMI 센서 미수집 노드는 watts=null 과 IPMI_NOT_AVAILABLE 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `watts`: 서버 총전력(W)
+
+    경고
+
+    * `IPMI_NOT_AVAILABLE`: IPMI 센서를 수집하지 않는 노드 (`watts` 는 `null`)
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * BMC 의 DCMI 측정값
+    * CPU, 가속기, 팬, 메모리 포함
     """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(
@@ -844,9 +1088,26 @@ async def get_hardware_power(request: Request, cluster: str, node: str):
 async def get_hardware_temperature(request: Request, cluster: str, node: str):
     """서버 본체 온도 센서 값 조회
 
-    - sensors : 센서 이름, 온도(°C) (CPU 흡기, 배기, 메인보드 등 위치별)
+    입력 예시
 
-    IPMI 센서 미수집 노드는 빈 목록과 IPMI_NOT_AVAILABLE 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/temperature`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `sensors`: 센서 이름, 온도(°C), CPU 흡기, 배기, 메인보드 등 위치별
+
+    경고
+
+    * `IPMI_NOT_AVAILABLE`: IPMI 센서를 수집하지 않는 노드 (`sensors` 는 빈 목록)
+
+    오류
+
+    * 404: 없는 클러스터
     """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(f'ipmi_temperature_celsius{{node="{_esc(node)}"}}')

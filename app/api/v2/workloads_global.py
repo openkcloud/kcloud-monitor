@@ -91,18 +91,42 @@ async def _resolve_clusters(cluster_filter: Optional[str]) -> list[str]:
 async def list_pods_global(
     request: Request,
     params: WorkloadFilterParams = Depends(),
-    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름 필터 (예: mgmt, 없으면 전체)"),
 ):
-    """모든 클러스터의 Pod를 한 목록으로 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 노드 이름
-    - 상태(Running | Pending | Succeeded | Failed | Unknown), Pod IP, 노드 IP, 생성 시각
-    - 상위 리소스 종류(예: ReplicaSet, StatefulSet, DaemonSet, Job)와 이름, 서비스 이름
-    - 컨테이너 개수, 재시작 횟수
-    - CPU 사용량(코어), 메모리 사용량(bytes)
-    - total : 필터 적용 후 전체 Pod 개수
-    
-    cluster, namespace, status, workload_type, service_name 으로 필터. 없는 클러스터 이름이면 전체 클러스터 기준. search 는 Pod 이름과 네임스페이스에 적용. 정렬(sort_by)은 클러스터 안에서만 적용. Pod가 하나도 없으면 NO_DATA 경고.
+    """모든 클러스터의 Pod 를 한 목록으로 조회
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods`
+    * `GET /api/v2/workloads/pods?cluster=mgmt&namespace=openstack&status=Running&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (선택, 없거나 없는 이름이면 전체 클러스터)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `sort_by`: 정렬 기준이 될 응답 항목 이름, 예 `pod` (선택, 클러스터 안에서만 적용)
+    * `sort_order`: `asc` | `desc` (기본 `asc`)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (선택)
+    * `status`: Pod 상태, 예 `Running` (선택, 대소문자 무시)
+    * `workload_type`: 상위 리소스 종류, 예 `StatefulSet` (선택, 대소문자 무시)
+    * `service_name`: 서비스 이름 일부, 예 `neutron` (선택)
+    * `search`: Pod 이름 또는 네임스페이스에 들어 있는 글자 (선택, 대소문자 무시)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`: CPU 사용량 (코어, 최근 5분 평균)
+    * `memory_usage_bytes`: 메모리 사용량 (bytes)
+    * `total`: 필터를 적용한 뒤 전체 Pod 개수
+
+    경고
+
+    * `NO_DATA`: Pod 가 하나도 없음
     """
     names = await _resolve_clusters(cluster)
     inner = _all_params(params)
@@ -125,13 +149,21 @@ async def list_pods_global(
 @router.get("/workloads/pods/summary", summary="전체 클러스터 Pod 집계", response_model=PodSummaryResponse)
 async def get_pods_summary_global(request: Request):
     """모든 클러스터의 Pod 상태별 개수 합계 조회
-    
-    - total_count : 전체 Pod 개수
-    - running_count, pending_count : Running, Pending 상태 개수
-    - succeeded_count, failed_count, unknown_count : 정상 완료, 실패, 상태 불명 개수
-    - namespace_distribution : 네임스페이스별 Pod 개수
-    
-    Pod가 하나도 없으면 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods/summary`
+
+    응답
+
+    * `total_count`: 전체 Pod 개수
+    * `running_count`, `pending_count`: `Running`, `Pending` 상태 개수
+    * `succeeded_count`, `failed_count`, `unknown_count`: 정상 완료, 실패, 상태 불명 개수
+    * `namespace_distribution`: 네임스페이스별 Pod 개수
+
+    경고
+
+    * `NO_DATA`: Pod 가 하나도 없음
     """
     names = await _resolve_clusters(None)
     results = await asyncio.gather(*(fetch_pods_summary(n) for n in names))
@@ -159,14 +191,32 @@ async def get_pods_summary_global(request: Request):
 @router.get("/workloads/pods/{cluster}/{namespace}/{pod}", summary="Pod 상세(클러스터 지정)")
 async def get_pod_global(request: Request, cluster: str, namespace: str, pod: str):
     """클러스터 이름을 경로에 넣어 Pod 한 개의 상세 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 고유 ID(uid), 노드 이름
-    - 상태(Running | Pending | Succeeded | Failed | Unknown), Pod IP, 노드 IP, 생성 시각
-    - 상위 리소스 종류와 이름, 서비스 이름, 컨테이너 개수, 재시작 횟수
-    - CPU 사용량, 요청량, 상한값(코어), 메모리 사용량, 요청량, 상한값(bytes)
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터를 포함한 정식 경로
-    
-    Pod가 없으면 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods/mgmt/openstack/neutron-server-0`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 고유 ID `uid`, 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터를 포함한 정식 경로
+
+    경고
+
+    * `NO_DATA`: Pod 가 없음 (`data` 는 `null`)
     """
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
@@ -181,12 +231,31 @@ async def get_pod_power_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
     """클러스터 이름을 경로에 넣어 Pod 한 개의 추정 전력 조회
-    
-    - watts : Pod 추정 전력(W). 최근 5분 평균
-    - source : 산출 근거 (kepler)
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터를 포함한 정식 경로
-    
-    Kepler 가 컨테이너별로 추정한 전력의 합. 전력값이 없으면 data=null, NO_POWER_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods/mgmt/openstack/neutron-server-0/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * `watts`: Pod 추정 전력 (W, 최근 5분 평균)
+    * `source`: 산출 근거 (`kepler`)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터를 포함한 정식 경로
+
+    경고
+
+    * `NO_POWER_DATA`: 전력값이 없음 (`data` 는 `null`)
+
+    참고
+
+    * Kepler 가 컨테이너별로 추정한 전력의 합
     """
     data, warnings = await fetch_pod_power(cluster, namespace, pod)
     status = "success" if data else "partial"
@@ -202,14 +271,31 @@ async def list_pod_containers_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
     """클러스터 이름을 경로에 넣어 Pod 한 개 안의 컨테이너 목록 조회
-    
-    - 컨테이너 이름, 컨테이너 ID, 이미지, 상태(running | waiting | terminated), 재시작 횟수
-    - 네임스페이스, Pod 이름, 소속 클러스터
-    - CPU 사용량, 요청량, 상한값(코어), 메모리 사용량, 요청량, 상한값(bytes)
-    - total : 컨테이너 개수
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터를 포함한 정식 경로
-    
-    Pod 정보가 없으면 빈 목록, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods/mgmt/openstack/neutron-server-0/containers`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 컨테이너 이름(`container`), 컨테이너 ID(`container_id`), 이미지(`image`)
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`)
+    * 상태 `status` (`running` | `waiting` | `terminated`), 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+    * `total`: 컨테이너 개수
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터를 포함한 정식 경로
+
+    경고
+
+    * `NO_DATA`: Pod 정보가 없음 (빈 목록)
     """
     containers, warnings = await fetch_pod_containers(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
@@ -230,11 +316,30 @@ async def get_pod_accelerators_global(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
     """클러스터 이름을 경로에 넣어 Pod 한 개에 배정된 가속기 조회
-    
-    - 가속기 ID, 벤더, 모델명
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터를 포함한 정식 경로
-    
-    NVIDIA 클러스터만 값 있음. 그 외 클러스터이거나 배정된 카드가 없으면 빈 목록, POD_ACCELERATOR_DATA_NOT_AVAILABLE 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/pods/furiosa/kube-system/neutron-server-0/accelerators`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 가속기 ID(`acc_id`), 벤더(`vendor`), 모델명(`model_name`)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터를 포함한 정식 경로
+
+    경고
+
+    * `POD_ACCELERATOR_DATA_NOT_AVAILABLE`: 배정된 가속기가 없거나 조회를 지원하지 않는 클러스터 (빈 목록)
+
+    참고
+
+    * NVIDIA 클러스터만 값이 나옴
     """
     items, warnings = await fetch_pod_accelerators(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
@@ -275,17 +380,44 @@ def _build_service_item(key: tuple[str, str, str], pods: list) -> ServiceItem:
 async def list_services_global(
     request: Request,
     params: WorkloadFilterParams = Depends(),
-    cluster: Optional[str] = Query(None, description="클러스터 이름 필터. 미지정 시 전체"),
+    cluster: Optional[str] = Query(None, description="클러스터 이름 필터 (예: mgmt, 없으면 전체)"),
 ):
     """모든 클러스터의 서비스를 한 목록으로 조회
-    
-    - 서비스 이름, 네임스페이스, 소속 클러스터
-    - pod_count, running_pod_count : 소속 Pod 개수, Running 상태 개수
-    - cpu_usage, memory_usage_bytes : 소속 Pod CPU 사용량 합계(코어), 메모리 사용량 합계(bytes)
-    - total : 서비스 이름 검색 적용 후 서비스 개수
-    - summary : 전체 서비스 수(total_services), 클러스터별 서비스 수(cluster_distribution). 페이지와 서비스 이름 검색 적용 전 기준
-    
-    같은 클러스터, 네임스페이스, 서비스 이름의 Pod를 하나로 묶음. 서비스 이름을 추정할 수 없는 Pod는 Pod 이름을 서비스 이름으로 사용. cluster, namespace, status, workload_type, service_name 은 묶기 전 Pod에 적용. search 는 Pod 이름 또는 네임스페이스와 서비스 이름에 모두 적용. 서비스가 없으면 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/services`
+    * `GET /api/v2/workloads/services?cluster=mgmt&namespace=openstack&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (선택, 없거나 없는 이름이면 전체 클러스터)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (선택)
+    * `status`: Pod 상태, 예 `Running` (선택, 대소문자 무시)
+    * `workload_type`: 상위 리소스 종류, 예 `StatefulSet` (선택, 대소문자 무시)
+    * `service_name`: 서비스 이름 일부, 예 `neutron` (선택)
+    * `search`: 서비스 이름에 들어 있는 글자 (선택, 대소문자 무시)
+
+    응답
+
+    * 서비스 이름(`service_name`), 네임스페이스(`namespace`), 소속 클러스터(`cluster`)
+    * `pod_count`, `running_pod_count`: 소속 Pod 개수, `Running` 상태 개수
+    * `cpu_usage`: 소속 Pod CPU 사용량 합계 (코어)
+    * `memory_usage_bytes`: 소속 Pod 메모리 사용량 합계 (bytes)
+    * `total`: 서비스 이름 검색을 적용한 뒤 서비스 개수
+    * `summary`: 전체 서비스 수 `total_services`, 클러스터별 서비스 수 `cluster_distribution` (페이지와 검색 적용 전 기준)
+
+    경고
+
+    * `NO_DATA`: 서비스가 없음
+
+    참고
+
+    * 클러스터, 네임스페이스, 서비스 이름이 같은 Pod 를 하나로 묶음
+    * 서비스 이름을 알 수 없는 Pod 는 Pod 이름을 서비스 이름으로 사용
+    * `namespace`, `status`, `workload_type`, `service_name` 은 묶기 전 Pod 에 적용
     """
     names = await _resolve_clusters(cluster)
     inner = _all_params(params)
@@ -324,14 +456,34 @@ async def get_service_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
     """서비스 한 개의 자원 사용 상세 조회
-    
-    - 서비스 이름, 네임스페이스, 소속 클러스터
-    - pod_count, running_pod_count : 소속 Pod 개수, Running 상태 개수
-    - cpu_usage, memory_usage_bytes : 소속 Pod CPU 사용량 합계(코어), 메모리 사용량 합계(bytes)
-    - cpu_requests, memory_requests_bytes : 값 미제공 시 null
-    - _links.self: 이번 요청 경로, _links.canonical: 이 서비스의 Pod를 거르는 클러스터 Pod 목록 경로
-    
-    서비스 이름이 부분 일치하는 Pod를 소속 Pod로 판단. 소속 Pod가 없으면 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/services/mgmt/openstack/neutron-server`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `service_name`: 서비스 이름, 예 `neutron-server` (경로, 필수)
+
+    응답
+
+    * 서비스 이름(`service_name`), 네임스페이스(`namespace`), 소속 클러스터(`cluster`)
+    * `pod_count`, `running_pod_count`: 소속 Pod 개수, `Running` 상태 개수
+    * `cpu_usage`: 소속 Pod CPU 사용량 합계 (코어)
+    * `memory_usage_bytes`: 소속 Pod 메모리 사용량 합계 (bytes)
+    * `cpu_requests`, `memory_requests_bytes`: 이 경로에서는 값이 없음 (`null`)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 이 서비스의 Pod 만 거르는 클러스터 Pod 목록 경로
+
+    경고
+
+    * `NO_DATA`: 소속 Pod 가 없음 (`data` 는 `null`)
+
+    참고
+
+    * 서비스 이름이 일부라도 맞는 Pod 를 소속 Pod 로 판단
     """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, _, _ = await fetch_pods(cluster, inner)
@@ -364,14 +516,37 @@ async def list_service_pods_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
     """서비스 한 개에 속한 Pod 목록 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 노드 이름, 상태(Running | Pending | Succeeded | Failed | Unknown)
-    - Pod IP, 노드 IP, 생성 시각, 상위 리소스 종류(예: ReplicaSet, StatefulSet, DaemonSet, Job)와 이름, 서비스 이름
-    - 컨테이너 개수, 재시작 횟수, CPU 사용량(코어), 메모리 사용량(bytes)
-    - total : 이 서비스의 Pod 개수
-    - _links.self: 이번 요청 경로, _links.canonical: 이 서비스의 Pod를 거르는 클러스터 Pod 목록 경로
-    
-    서비스 이름이 부분 일치하는 Pod를 소속 Pod로 판단. Pod 정보 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/services/mgmt/openstack/neutron-server/pods`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `service_name`: 서비스 이름, 예 `neutron-server` (경로, 필수)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`: CPU 사용량 (코어, 최근 5분 평균)
+    * `memory_usage_bytes`: 메모리 사용량 (bytes)
+    * `total`: 이 서비스의 Pod 개수
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 이 서비스의 Pod 만 거르는 클러스터 Pod 목록 경로
+
+    경고
+
+    * `NO_DATA`: Pod 정보가 수집되지 않음
+
+    참고
+
+    * 서비스 이름이 일부라도 맞는 Pod 를 소속 Pod 로 판단
     """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, total, warnings = await fetch_pods(cluster, inner)
@@ -391,12 +566,31 @@ async def get_service_power_global(
     request: Request, cluster: str, namespace: str, service_name: str,
 ):
     """서비스 한 개의 추정 전력 합계 조회
-    
-    - watts : 소속 Pod 추정 전력 합계(W)
-    - source : 산출 근거 (kepler)
-    - _links.self: 이번 요청 경로, _links.canonical: 이 서비스의 Pod를 거르는 클러스터 Pod 목록 경로
-    
-    Kepler 가 컨테이너별로 추정한 전력을 소속 Pod 전체에 대해 더한 값. 어느 Pod도 전력값이 없으면 data=null, NO_POWER_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/workloads/services/mgmt/openstack/neutron-server/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `service_name`: 서비스 이름, 예 `neutron-server` (경로, 필수)
+
+    응답
+
+    * `watts`: 소속 Pod 추정 전력 합계 (W)
+    * `source`: 산출 근거 (`kepler`)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 이 서비스의 Pod 만 거르는 클러스터 Pod 목록 경로
+
+    경고
+
+    * `NO_POWER_DATA`: 어느 Pod 도 전력값이 없음 (`data` 는 `null`)
+
+    참고
+
+    * Kepler 가 컨테이너별로 추정한 전력을 소속 Pod 전체에 대해 더한 값
     """
     inner = _all_params(namespace=namespace, service_name=service_name)
     pods, _, _ = await fetch_pods(cluster, inner)

@@ -207,22 +207,44 @@ def _aggregate_metrics(
 async def list_clusters(
     request: Request,
     cluster_type: Optional[str] = Query(
-        None, alias="type", description="클러스터 구분 필터 (management | service)"
+        None, alias="type", description="클러스터 구분 (management | service)"
     ),
     project: Optional[str] = Query(
-        None, description="OpenStack 프로젝트 이름 필터. 그 프로젝트에 속한 클러스터만 반환"
+        None, description="OpenStack 프로젝트 이름 (그 프로젝트의 클러스터만)"
     ),
-    limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 최대 개수 (1~1000)"),
-    offset: int = Query(0, ge=0, description="건너뛸 개수. 페이지 이동용"),
+    limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 개수 (1 ~ 1000, 기본 100)"),
+    offset: int = Query(0, ge=0, description="건너뛸 개수 (기본 0)"),
 ):
     """운영 중인 클러스터 전체 목록 조회
 
-    - 이름, 타입(management | service), 상태(healthy | warning | critical)
-    - 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록, OpenStack 연동 여부
-    - 노드 수, 가속기 수, 가속기 전력 합계(W). 관리 클러스터의 가속기 수와 전력은 하위 서비스 클러스터 합계
-    - pagination : 필터 적용 후 전체 개수, 페이지 크기, 건너뛴 개수, 다음 페이지 존재 여부
+    입력 예시
 
-    type, project 로 필터, limit, offset 으로 페이지 지정. 관리 클러스터 먼저, 그다음 이름순. 해당하지 않는 항목은 키 자체가 빠짐.
+    * `GET /api/v2/clusters`
+    * `GET /api/v2/clusters?type=service&limit=20&offset=0`
+
+    입력 옵션
+
+    * `type`: 클러스터 구분 `management` | `service` (선택)
+    * `project`: OpenStack 프로젝트 이름 (선택, 그 프로젝트의 클러스터만)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수 (기본 `0`)
+
+    응답
+
+    * 이름, 구분(`management` | `service`), 상태(`healthy` | `warning` | `critical`)
+    * 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록, OpenStack 연동 여부
+    * 노드 수, 가속기 수, 가속기 전력 합계(W)
+    * `pagination`: 필터 적용 후 전체 개수, 페이지 크기, 건너뛴 개수, 다음 페이지 존재 여부
+    * 관리 클러스터 먼저, 그다음 이름순으로 정렬
+
+    경고
+
+    * `NO_DATA`: 조건에 맞는 클러스터 없음
+
+    참고
+
+    * 관리 클러스터의 가속기 수와 전력은 하위 서비스 클러스터 합계
+    * 해당하지 않는 항목은 키 자체가 빠짐
     """
     warnings: list[str] = []
     clusters = await cluster_discovery.get_clusters()
@@ -281,13 +303,34 @@ async def list_clusters(
 async def get_cluster(request: Request, cluster: str):
     """클러스터 한 개의 상세 조회
 
-    - 이름, 타입(management | service), 설명, 상태(healthy | warning | critical)
-    - 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록, OpenStack 연동 여부
-    - 노드 수, 가속기 수, 가속기 전력 합계(W)
-    - 실행 형태(kubernetes | vm), 가속기 벤더, 가속기 종류(GPU | NPU)
-    - 노드 이름 목록, 평균 가속기 사용률(%), 평균 가속기 온도(°C)
+    입력 예시
 
-    해당하지 않는 항목은 키 자체가 빠짐. 온도 메트릭이 없는 클러스터는 TEMPERATURE_UNAVAILABLE 경고.
+    * `GET /api/v2/clusters/l40s`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s`, `mgmt` (경로, 필수)
+
+    응답
+
+    * 이름, 구분(`management` | `service`), 설명, 상태(`healthy` | `warning` | `critical`)
+    * 부모 관리 클러스터, 소속 OpenStack 프로젝트, 하위 서비스 클러스터 목록, OpenStack 연동 여부
+    * 노드 수, 가속기 수, 가속기 전력 합계(W)
+    * 실행 형태(`kubernetes` | `vm`), 가속기 벤더, 가속기 종류(`GPU` | `NPU`)
+    * 노드 이름 목록, 평균 가속기 사용률(%), 평균 가속기 온도(°C)
+
+    경고
+
+    * `TEMPERATURE_UNAVAILABLE`: 온도 메트릭이 없는 클러스터
+    * `NO_DATA`: 노드와 가속기 값이 모두 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 해당하지 않는 항목은 키 자체가 빠짐
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -392,14 +435,36 @@ async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources
 async def get_cluster_resource(request: Request, cluster: str):
     """클러스터 자원을 종류별로 합산한 현황 조회
 
-    - resources.nodes : 전체, Ready, NotReady 노드 수
-    - resources.cpu : 전체 코어 수, 사용 코어 수, 사용률(%)
-    - resources.memory : 전체, 사용 메모리(GB), 사용률(%)
-    - resources.accelerators : 카드 수, 평균 사용률(%), 전력 합계(W). 가속기가 없으면 null
-    - resources.storage : 전체, 사용 용량(TB), 사용률(%). 미수집 시 null
-    - power : 서버 총전력(W, IPMI 기준), breakdown(cpu_watts, gpu_watts, other_watts, 단위 W)
+    입력 예시
 
-    값이 없는 항목도 키는 유지하고 null 반환. 가속기 클러스터는 가속기를 보고하는 호스트 수를 노드 수로 사용. 관리 클러스터의 가속기 값은 하위 서비스 클러스터 합계.
+    * `GET /api/v2/clusters/mgmt/resource`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s`, `mgmt` (경로, 필수)
+
+    응답
+
+    * `resources.nodes`: 전체, `Ready`, `NotReady` 노드 수
+    * `resources.cpu`: 전체 코어 수, 사용 코어 수, 사용률(%)
+    * `resources.memory`: 전체, 사용 메모리(GB), 사용률(%)
+    * `resources.accelerators`: 카드 수, 평균 사용률(%), 전력 합계(W), 가속기가 없으면 `null`
+    * `resources.storage`: 전체, 사용 용량(TB), 사용률(%), 미수집 시 `null`
+    * `power`: 서버 총전력(W, IPMI 기준), `breakdown`(`cpu_watts`, `gpu_watts`, `other_watts`, 단위 W)
+
+    경고
+
+    * `NO_DATA`: 노드, 가속기, 메모리 값이 모두 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 값이 없는 항목도 키는 유지하고 `null` 반환
+    * 가속기 클러스터는 가속기를 보고하는 호스트 수를 노드 수로 사용
+    * 관리 클러스터의 가속기 값은 하위 서비스 클러스터 합계
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -532,11 +597,33 @@ async def _collect_topo(info: ClusterInfo, node_map: dict[str, dict[str, dict]])
 async def get_cluster_topology(request: Request, cluster: str):
     """클러스터의 호스트와 호스트별 장착 가속기 구성 조회
 
-    - cluster : 클러스터 이름
-    - nodes : 호스트 이름, 종류(physical | virtual), CPU 코어 수(물리 노드만)
-    - nodes[].accelerators : 가속기 ID, 모델명, 사용률(%), 전력(W)
+    입력 예시
 
-    가속기를 보고하는 호스트 기준, 이름순. 관리 클러스터는 하위 서비스 클러스터의 가속기까지 호스트별로 합쳐 반환. 값이 없는 항목은 키 자체가 빠짐.
+    * `GET /api/v2/clusters/furiosa/topology`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `furiosa`, `mgmt` (경로, 필수)
+
+    응답
+
+    * `cluster`: 클러스터 이름
+    * `nodes`: 호스트 이름, 종류(`physical` | `virtual`), CPU 코어 수(물리 노드만)
+    * `nodes[].accelerators`: 가속기 ID, 모델명, 사용률(%), 전력(W)
+    * 가속기를 보고하는 호스트 기준, 이름순으로 정렬
+
+    경고
+
+    * `NO_DATA`: 호스트 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 관리 클러스터는 하위 서비스 클러스터의 가속기까지 호스트별로 합쳐 반환
+    * 값이 없는 항목은 키 자체가 빠짐
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
@@ -586,12 +673,32 @@ async def get_cluster_topology(request: Request, cluster: str):
 async def get_cluster_power(request: Request, cluster: str):
     """클러스터 전체 가속기의 전력 합계 조회
 
-    - cluster : 클러스터 이름
-    - total_power_watts : 가속기 전력 합계(W)
-    - accelerator_count : 전력을 보고한 카드 수
-    - cards : 카드별 ID, 장착 호스트 이름, 전력(W)
+    입력 예시
 
-    관리 클러스터는 하위 서비스 클러스터의 카드까지 합산.
+    * `GET /api/v2/clusters/rebellions/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `rebellions`, `mgmt` (경로, 필수)
+
+    응답
+
+    * `cluster`: 클러스터 이름
+    * `total_power_watts`: 가속기 전력 합계(W)
+    * `accelerator_count`: 전력을 보고한 카드 수
+    * `cards`: 카드별 ID, 장착 호스트 이름, 전력(W)
+
+    경고
+
+    * `NO_DATA`: 전력 값 없음
+
+    오류
+
+    * 404: 없는 클러스터
+
+    참고
+
+    * 관리 클러스터는 하위 서비스 클러스터의 카드까지 합산
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
