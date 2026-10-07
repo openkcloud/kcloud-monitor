@@ -107,12 +107,22 @@ def _timing(row: dict, for_min: int) -> dict:
 
 @router.get("/metrics", summary="알람 지표 목록", response_model=ListResponse)
 async def list_metrics():
-    """알람 정책에 고를 수 있는 지표 전체 조회
+    """알람 정책에 쓸 수 있는 지표 목록 조회
 
-    - 지표별 : 키, 종류(resource | log), 표시 이름, 단위
-    - total : 지표 개수
+    입력 예시
 
-    화면의 메트릭 드롭다운을 채우는 용도. 저장소(DB) 없이도 동작.
+    * `GET /api/v2/alerts/metrics`
+
+    응답
+
+    * 지표별 `key`, 종류(`resource` | `log`), 이름, 단위
+    * `total`: 지표 개수
+
+    사용법
+
+    * 정책 생성 시 `metric` 에 `key` 를 그대로 넣음
+    * `resource`: 가속기 값 (온도, 사용률 등)
+    * `log`: 정해진 시간 동안 특정 로그가 나온 건수
     """
     data = [MetricItem(key=k, kind="resource", label=v[0], unit=v[1]) for k, v in RESOURCE_METRICS.items()]
     data += [MetricItem(key=k, kind="log", label=v[0], unit="건") for k, v in LOG_METRICS.items()]
@@ -123,13 +133,19 @@ async def list_metrics():
 
 @router.get("/policies", summary="알람 정책 목록", response_model=ListResponse)
 async def list_policies():
-    """저장된 알람 정책 전체 조회
+    """알람 정책 전체 조회
 
-    - 정책별 : ID, 이름, 설명, 종류(resource | log), 지표(metric)
-    - 비교 연산자(>= | > | <= | < | == | !=), 임계값, 로그 집계 창(분), 지속 시간(분)
-    - 심각도(info | warning | critical), 대상(cluster, node, acc_id), 알림 채널 ID 목록, 활성 여부
-    - 생성 시각, 수정 시각 (ISO 8601, UTC)
-    - total : 정책 개수
+    입력 예시
+
+    * `GET /api/v2/alerts/policies`
+
+    응답
+
+    * 정책별 ID, 이름, 종류(`resource` | `log`), 지표
+    * 조건(연산자, 임계값), 지속 시간(분)
+    * 심각도, 감시 대상, 채널 ID 목록, 사용 여부
+    * `total`: 정책 개수
+    * 정책 ID 순으로 정렬
     """
     _require_store()
     rows = await store.list_policies()
@@ -138,18 +154,32 @@ async def list_policies():
 
 @router.post("/policies", summary="알람 정책 생성", response_model=ItemResponse, status_code=201)
 async def create_policy(body: PolicyCreate):
-    """알람 정책 1건 생성 후 저장된 정책 반환
+    """알람 정책 생성
 
-    - data : ID, 이름, 설명, 종류(resource | log), 지표, 비교 연산자, 임계값
-    - data : 로그 집계 창(분), 지속 시간(분), 심각도(info | warning | critical), 대상, 채널 ID 목록, 활성 여부, 생성 시각, 수정 시각
+    입력 예시
 
-    입력은 화면 형식. metric 은 GET /alerts/metrics 목록의 지표 키, duration 은 "5m" 처럼 숫자+m, selector 는 "cluster=l40s,node=x" 형식의 대상 필터, severity 는 대소문자 무시, channels 는 채널 종류(email | slack | webhook) 목록으로 해당 종류의 등록 채널 전체에 발송. 종류(resource | log)는 지표에서 자동 결정되고, log 지표의 threshold 는 window_min 동안의 건수.
+    * `{"name": "L40S 온도", "metric": "temperature_celsius", "op": ">=", "threshold": 80, "duration": "5m", "selector": "cluster=l40s", "severity": "warning", "channels": ["email"]}`
 
-    422 거절 사유
-    - 목록에 없는 지표
-    - duration 형식 오류 (숫자+m, 0m 이상 1440m 이하)
-    - 대상 필터 키 오류 (resource 는 cluster, node, acc_id / log 는 cluster 만)
-    - 등록된 채널이 없는 채널 종류
+    입력 옵션
+
+    * `name`: 정책 이름 (필수)
+    * `metric`: 지표 키, `GET /alerts/metrics` 의 `key` 중 하나 (필수)
+    * `op`: `>=` | `>` | `<=` | `<` | `==` | `!=` (기본 `>=`)
+    * `threshold`: 임계값 숫자 (필수)
+    * `duration`: 이 시간 동안 계속되면 발생, `5m` 처럼 숫자 + `m` (기본 `0m`, 즉시)
+    * `window_min`: `log` 지표만, 건수를 세는 기간(분) (기본 `5`)
+    * `selector`: 감시 대상, `cluster=l40s,node=innogrid-l40s` (기본 전체)
+    * `severity`: `info` | `warning` | `critical` (기본 `warning`)
+    * `channels`: `email` | `slack` | `webhook` 중 여러 개 (기본 없음)
+
+    응답
+
+    * 저장된 정책 (ID, 종류, 지표, 조건, 지속 시간, 심각도, 대상, 채널 ID 목록)
+
+    오류
+
+    * 422: 목록에 없는 지표, `duration` 형식 오류, 쓸 수 없는 대상 키, 등록되지 않은 채널 종류
+    * `log` 지표의 `selector` 는 `cluster` 만 가능
     """
     _require_store()
     row = await store.create_policy(await _to_row(body.model_dump()))
@@ -158,12 +188,21 @@ async def create_policy(body: PolicyCreate):
 
 @router.get("/policies/{policy_id}", summary="알람 정책 상세", response_model=ItemResponse)
 async def get_policy(policy_id: str):
-    """정책 ID로 알람 정책 1건 조회
+    """알람 정책 1건 조회
 
-    - data : ID, 이름, 설명, 종류(resource | log), 지표, 비교 연산자, 임계값
-    - data : 로그 집계 창(분), 지속 시간(분), 심각도(info | warning | critical), 대상, 채널 ID 목록, 활성 여부, 생성 시각, 수정 시각
+    입력 예시
 
-    없는 정책은 404 POLICY_NOT_FOUND.
+    * `GET /api/v2/alerts/policies/res-003`
+
+    응답
+
+    * ID, 이름, 종류(`resource` | `log`), 지표
+    * 조건(연산자, 임계값), 지속 시간(분)
+    * 심각도, 감시 대상, 채널 ID 목록, 사용 여부, 생성·수정 시각
+
+    오류
+
+    * 404: 없는 정책
     """
     _require_store()
     row = await store.get_policy(policy_id)
@@ -174,12 +213,26 @@ async def get_policy(policy_id: str):
 
 @router.patch("/policies/{policy_id}", summary="알람 정책 수정", response_model=ItemResponse)
 async def patch_policy(policy_id: str, body: PolicyPatch):
-    """알람 정책의 일부 항목 수정 후 수정된 정책 반환
+    """알람 정책 수정
 
-    - data : ID, 이름, 설명, 종류(resource | log), 지표, 비교 연산자, 임계값
-    - data : 로그 집계 창(분), 지속 시간(분), 심각도(info | warning | critical), 대상, 채널 ID 목록, 활성 여부, 생성 시각, 수정 시각
+    입력 예시
 
-    요청 본문에 보낸 항목만 변경. 입력 형식은 정책 생성과 같음 (metric 지표 키, duration "5m", selector 대상 필터, channels 채널 종류). 종류(resource | log)가 다른 지표로 바꾸면 422, 거절 사유는 정책 생성과 같음. 없는 정책은 404 POLICY_NOT_FOUND.
+    * `PATCH /api/v2/alerts/policies/res-003`
+    * `{"threshold": 85, "duration": "10m"}`
+
+    입력 옵션
+
+    * 정책 생성과 같은 항목 중 바꿀 것만 보냄
+    * `enabled`: `false` 면 정책 끄기
+
+    응답
+
+    * 수정된 정책
+
+    오류
+
+    * 422: 종류(`resource` | `log`)가 다른 지표로 변경
+    * 404: 없는 정책
     """
     _require_store()
     cur = await store.get_policy(policy_id)
@@ -200,12 +253,21 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
 
 @router.delete("/policies/{policy_id}", summary="알람 정책 삭제", status_code=204)
 async def delete_policy(policy_id: str):
-    """알람 정책 1건과 그 정책의 활성 알람 삭제
+    """알람 정책 삭제
 
-    - 성공 시 본문 없이 204 반환
-    - 알람 이력(events)은 삭제하지 않음
+    입력 예시
 
-    없는 정책은 404 POLICY_NOT_FOUND.
+    * `DELETE /api/v2/alerts/policies/pol-1a2b3c`
+
+    응답
+
+    * 성공 시 본문 없이 204
+
+    참고
+
+    * 이 정책으로 걸린 알람도 함께 삭제
+    * 알람 이력은 남음
+    * 404: 없는 정책
     """
     _require_store()
     if not await store.delete_policy(policy_id):
@@ -214,12 +276,21 @@ async def delete_policy(policy_id: str):
 
 @router.post("/policies/{policy_id}/preview", summary="알람 정책 미리 평가", response_model=ListResponse)
 async def preview_policy(policy_id: str):
-    """저장된 정책을 현재 값으로 평가한 결과 조회 (알림 발송, 이력 기록 없음)
+    """알람 정책을 지금 값으로 미리 평가
 
-    - 대상별 : 대상(cluster, node, acc_id), 현재 값(value), 조건 충족 여부(cond)
-    - total : 평가된 대상 개수
+    입력 예시
 
-    임계값을 정할 때 지금 어느 가속기가 걸리는지 확인하는 용도. 일부 값을 못 읽으면 status="partial" 과 원인 경고 반환. 없는 정책은 404 POLICY_NOT_FOUND.
+    * `POST /api/v2/alerts/policies/res-003/preview`
+
+    응답
+
+    * 대상별 현재 값, 조건 충족 여부(`cond`)
+    * `total`: 평가한 대상 개수
+
+    참고
+
+    * 알림 발송, 이력 기록 없음
+    * 임계값을 정할 때 지금 어느 가속기가 걸리는지 확인하는 용도
     """
     _require_store()
     policy = await store.get_policy(policy_id)
@@ -234,10 +305,18 @@ async def preview_policy(policy_id: str):
 
 @router.get("/channels", summary="알림 채널 목록", response_model=ListResponse)
 async def list_channels():
-    """저장된 알림 채널 전체 조회
+    """알림 채널 전체 조회
 
-    - 채널별 : ID, 이름, 종류(webhook | email), 설정(config), 해제 알림 발송 여부, 활성 여부, 생성 시각
-    - total : 채널 개수
+    입력 예시
+
+    * `GET /api/v2/alerts/channels`
+
+    응답
+
+    * 채널별 ID, 이름, 종류(`email` | `webhook`), 설정(`config`)
+    * 해제 알림 여부, 사용 여부, 생성 시각
+    * `total`: 채널 개수
+    * 만든 순서대로 정렬
     """
     _require_store()
     rows = await store.list_channels()
@@ -246,11 +325,32 @@ async def list_channels():
 
 @router.post("/channels", summary="알림 채널 생성", response_model=ItemResponse, status_code=201)
 async def create_channel(body: ChannelCreate):
-    """알림 채널 1건 생성 후 저장된 채널 반환
+    """알림 채널 생성
 
-    - data : ID, 이름, 종류(webhook | email), 설정(config), 해제 알림 발송 여부, 활성 여부, 생성 시각
+    입력 예시
 
-    webhook 은 config.url, email 은 config.to 수신자 목록이 필수이며 없으면 422. webhook 의 config.format 은 generic | slack, email 은 서버 메일(SMTP) 설정 필요.
+    * 메일: `{"name": "운영팀 메일", "type": "email", "config": {"to": ["ops@innogrid.com"]}}`
+    * Slack: `{"name": "개발 Slack", "type": "webhook", "config": {"url": "https://hooks.slack.com/services/...", "format": "slack"}}`
+
+    입력 옵션
+
+    * `name`: 채널 이름 (필수)
+    * `type`: `email` | `webhook` (필수)
+    * `config.to`: 메일 수신 주소 목록 (`email` 필수)
+    * `config.url`: 알림을 받을 주소 (`webhook` 필수)
+    * `config.format`: `generic` | `slack` (기본 `generic`)
+    * `config.headers`: 함께 보낼 HTTP 헤더 (선택)
+    * `notify_resolved`: 해제 알림도 보낼지 (기본 `true`)
+    * `enabled`: 채널 사용 여부 (기본 `true`)
+
+    응답
+
+    * 저장된 채널 (ID, 이름, 종류, 설정, 해제 알림 여부, 사용 여부)
+
+    참고
+
+    * 422: 필수 설정 누락
+    * 메일 발송은 서버에 메일 서버(SMTP) 설정 필요
     """
     _require_store()
     c = body.model_dump()
@@ -263,11 +363,26 @@ async def create_channel(body: ChannelCreate):
 
 @router.patch("/channels/{channel_id}", summary="알림 채널 수정", response_model=ItemResponse)
 async def patch_channel(channel_id: str, body: ChannelPatch):
-    """알림 채널의 일부 항목 수정 후 수정된 채널 반환
+    """알림 채널 수정
 
-    - data : ID, 이름, 종류(webhook | email), 설정(config), 해제 알림 발송 여부, 활성 여부, 생성 시각
+    입력 예시
 
-    이름, 설정, 해제 알림 발송 여부, 활성 여부만 변경 가능. 없는 채널은 404 CHANNEL_NOT_FOUND.
+    * `PATCH /api/v2/alerts/channels/ch-1a2b3c`
+    * `{"enabled": false}`
+
+    입력 옵션
+
+    * `name`, `config`, `notify_resolved`, `enabled` 중 바꿀 것만 보냄
+    * `config` 는 보낸 값으로 통째로 교체
+    * `type` 은 변경 불가
+
+    응답
+
+    * 수정된 채널
+
+    오류
+
+    * 404: 없는 채널
     """
     _require_store()
     row = await store.update_channel(channel_id, body.model_dump(exclude_unset=True))
@@ -278,11 +393,19 @@ async def patch_channel(channel_id: str, body: ChannelPatch):
 
 @router.delete("/channels/{channel_id}", summary="알림 채널 삭제", status_code=204)
 async def delete_channel(channel_id: str):
-    """알림 채널 1건 삭제
+    """알림 채널 삭제
 
-    - 성공 시 본문 없이 204 반환
+    입력 예시
 
-    없는 채널은 404 CHANNEL_NOT_FOUND.
+    * `DELETE /api/v2/alerts/channels/ch-1a2b3c`
+
+    응답
+
+    * 성공 시 본문 없이 204
+
+    오류
+
+    * 404: 없는 채널
     """
     _require_store()
     if not await store.delete_channel(channel_id):
@@ -291,12 +414,20 @@ async def delete_channel(channel_id: str):
 
 @router.post("/channels/{channel_id}/test", summary="알림 채널 시험 발송", response_model=ItemResponse)
 async def test_channel(channel_id: str):
-    """채널 설정 확인용 시험 메시지 1건 발송
+    """알림 채널로 시험 메시지 발송
 
-    - data.sent : 발송 성공 여부 (성공 시 true)
-    - data.channel_id : 시험 발송한 채널 ID
+    입력 예시
 
-    발송 실패 시 502 CHANNEL_SEND_FAILED, 없는 채널은 404 CHANNEL_NOT_FOUND.
+    * `POST /api/v2/alerts/channels/ch-1a2b3c/test`
+
+    응답
+
+    * 발송 성공 여부(`sent`), 채널 ID
+
+    참고
+
+    * 정책에 연결하기 전 설정 확인용
+    * 502: 발송 실패, 실패 이유 함께 반환
     """
     _require_store()
     ch = await store.get_channel(channel_id)
@@ -317,17 +448,33 @@ async def test_channel(channel_id: str):
 @router.get("/active", summary="활성 알람 목록", response_model=ListResponse)
 async def list_active(
     state: Optional[str] = Query(None, pattern="^(pending|firing|resolved)$",
-                                 description="알람 상태 필터 (pending | firing | resolved). 미지정 시 pending, firing"),
+                                 description="알람 상태 (pending | firing | resolved), 미지정 시 pending + firing"),
 ):
-    """현재 조건에 걸려 있는 알람 목록 조회
+    """지금 걸려 있는 알람 목록 조회
 
-    - 알람별 : 알람 식별값(fingerprint), 정책 ID, 상태(pending | firing | resolved), 심각도(info | warning | critical)
-    - 대상, 마지막 평가 값, 메시지
-    - 조건 시작 시각, 발생 시각, 해제 시각, 마지막 알림 시각, 사용자 확인 시각 (ISO 8601, UTC)
-    - 지속 시간(초), 지속 시간 기준(초)
-    - total : 알람 개수
+    입력 예시
 
-    state 미지정 시 pending 과 firing 만 반환. 조건 시작 시각 최신순.
+    * `GET /api/v2/alerts/active`
+    * `GET /api/v2/alerts/active?state=firing`
+
+    입력 옵션
+
+    * `state`: `pending` | `firing` | `resolved` (기본 `pending` + `firing`)
+
+    응답
+
+    * 알람별 식별값(`fingerprint`), 정책 ID, 상태, 심각도
+    * 대상, 현재 값, 메시지
+    * 지속된 시간(`duration_seconds`), 정책 기준 시간(`for_seconds`)
+    * 시작, 발생, 해제, 마지막 알림, 확인 시각
+    * `total`: 알람 개수
+    * 조건이 시작된 시각 최신순으로 정렬
+
+    상태
+
+    * `pending`: 기준 시간을 채우는 중
+    * `firing`: 발생
+    * `resolved`: 해제
     """
     _require_store()
     rows = await store.list_active(state)
@@ -338,14 +485,21 @@ async def list_active(
 
 @router.post("/active/{fingerprint}/ack", summary="활성 알람 확인 처리", response_model=ItemResponse)
 async def ack_alert(fingerprint: str):
-    """알람 1건을 사용자가 확인한 상태로 표시 후 해당 알람 반환
+    """알람 확인 처리
 
-    - data : 알람 식별값(fingerprint), 정책 ID, 상태(pending | firing | resolved), 심각도(info | warning | critical)
-    - data : 대상, 마지막 평가 값, 메시지
-    - data : 조건 시작 시각, 발생 시각, 해제 시각, 마지막 알림 시각, 사용자 확인 시각
-    - data : 지속 시간(초), 지속 시간 기준(초)
+    입력 예시
 
-    확인한 알람은 해제될 때까지 재알림 없음. 없는 알람은 404 ALERT_NOT_FOUND.
+    * `POST /api/v2/alerts/active/{fingerprint}/ack`
+    * `fingerprint` 는 활성 알람 목록의 값을 그대로 사용
+
+    응답
+
+    * 확인 처리된 알람
+
+    참고
+
+    * 해제될 때까지 재알림 중지
+    * 404: 없는 알람
     """
     _require_store()
     row = await store.ack(fingerprint)
@@ -357,18 +511,35 @@ async def ack_alert(fingerprint: str):
 
 @router.get("/events", summary="알람 이력", response_model=ListResponse)
 async def list_events(
-    policy_id: Optional[str] = Query(None, description="알람 정책 ID 필터"),
-    since: Optional[datetime] = Query(None, description="이 시각 이후 이력만 (ISO 8601)"),
-    limit: int = Query(100, ge=1, le=1000, description="한 번에 받을 최대 개수 (1~1000)"),
+    policy_id: Optional[str] = Query(None, description="특정 정책만 조회할 때 정책 ID"),
+    since: Optional[datetime] = Query(None, description="이 시각 이후 이력만 (ISO 8601, 예: 2026-10-07T00:00:00Z)"),
+    limit: int = Query(100, ge=1, le=1000, description="최대 개수 (1 ~ 1000, 기본 100)"),
 ):
-    """알람 발생, 해제, 알림 발송 기록 조회
+    """알람 이력 조회
 
-    - 이벤트별 : 이벤트 ID, 기록 시각, 정책 ID, 알람 식별값(fingerprint)
-    - 종류(fire | resolve | notified | notify_failed), 심각도(info | warning | critical)
-    - 대상, 값, 메시지
-    - total : 반환한 이벤트 개수
+    입력 예시
 
-    기록 시각 최신순. policy_id, since 로 필터, limit 으로 최대 개수 지정 (기본 100, 최대 1000).
+    * `GET /api/v2/alerts/events?limit=50`
+    * `GET /api/v2/alerts/events?policy_id=res-003&since=2026-10-07T00:00:00Z`
+
+    입력 옵션
+
+    * `policy_id`: 특정 정책만 (선택)
+    * `since`: 이 시각 이후만, ISO 8601 (선택)
+    * `limit`: 최대 개수 `1` ~ `1000` (기본 `100`)
+
+    응답
+
+    * 이력별 시각, 정책 ID, 종류, 심각도, 대상, 값, 메시지
+    * `total`: 이력 개수
+    * 기록 시각 최신순으로 정렬
+
+    종류
+
+    * `fire`: 발생
+    * `resolve`: 해제
+    * `notified`: 재알림
+    * `notify_failed`: 발송 실패 (메시지에 이유)
     """
     _require_store()
     rows = await store.list_events(policy_id, since, limit)
