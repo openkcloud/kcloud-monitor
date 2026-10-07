@@ -414,14 +414,37 @@ async def list_accelerators(
 ) -> AcceleratorListResponse:
     """노드 한 대에 장착된 가속기(GPU/NPU) 목록 조회
 
-    - 가속기 ID, 벤더, 클러스터, 노드, 모델명, 원본 메트릭 라벨(labels)
-    - 사용률(%), 온도(°C), 전력(W), 사용 메모리와 총 메모리(bytes), 정상 동작 여부
-    - 전력 상한(W)과 출처(measured | spec_tdp), 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부, 판정 근거(clock_reason | inferred), 클럭 제한 사유 목록(throttle_reasons)
-    - total : 노드의 전체 카드 수
-    - summary : 카드 수, 벤더, 평균 사용률(%), 평균 온도(°C), 평균 전력(W), 전력 합계(W)
+    입력 예시
 
-    limit, offset 으로 페이지 지정. total 과 summary 는 페이지와 무관한 전체 카드 기준.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators`
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators?limit=10&offset=0`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `limit`: 한 번에 받을 최대 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+
+    응답
+
+    * 가속기별 ID, 벤더, 클러스터, 노드, 모델명, 원본 메트릭 라벨(`labels`)
+    * 사용률(%), 온도(°C), 전력(W), 사용 메모리와 총 메모리(bytes), 정상 동작 여부
+    * 전력 상한(W)과 출처(`measured` | `spec_tdp`), 상한 대비 전력(%), 상한 도달 여부
+    * 성능 단계(`P0` ~ `P15`), NVIDIA 만
+    * 쓰로틀링 여부, 판정 근거(`clock_reason` | `inferred`), 클럭 제한 사유 목록(`throttle_reasons`)
+    * `total`: 노드의 전체 카드 수
+    * `summary`: 카드 수, 벤더, 평균 사용률(%), 평균 온도(°C), 평균 전력(W), 전력 합계(W)
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `NO_DATA_UTILIZATION` | `NO_DATA_TEMPERATURE` | `NO_DATA_POWER`: 해당 값이 수집되지 않음
+    * `NO_DATA`: 가속기를 하나도 찾지 못함
+
+    참고
+
+    * `total` 과 `summary` 는 페이지와 무관하게 전체 카드 기준
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -453,10 +476,28 @@ async def get_accelerators_topology(
 ) -> AcceleratorTopologyResponse:
     """가속기끼리 직접 연결된 통신 링크(NVLink) 조회
 
-    - vendor : 가속기 벤더
-    - links : 링크별 대역폭 값(value)과 출발 카드, 도착 카드를 담은 원본 메트릭 라벨(metric_labels)
+    입력 예시
 
-    NPU 클러스터는 links 빈 목록과 TOPOLOGY_NOT_AVAILABLE 경고 반환.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/topology`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+
+    응답
+
+    * `vendor`: 가속기 벤더
+    * `links`: 링크별 대역폭 값(`value`)과 출발 카드, 도착 카드를 담은 원본 메트릭 라벨(`metric_labels`)
+
+    경고
+
+    * `TOPOLOGY_NOT_AVAILABLE`: NPU 클러스터라 링크 정보 없음 (`links` 는 빈 목록)
+    * `NO_DATA`: NVLink 값이 수집되지 않음
+
+    참고
+
+    * NVIDIA 클러스터만 값이 채워짐
     """
     vendor = await _get_vendor(cluster)
     if vendor != "nvidia":
@@ -486,12 +527,31 @@ async def get_accelerator(
 ) -> AcceleratorDetailResponse:
     """가속기 ID로 카드 한 장의 고정 정보 조회
 
-    - 가속기 ID, 벤더, 클러스터, 노드, 모델명
-    - 총 메모리(bytes)
-    - 전력 상한(W)과 출처(measured | spec_tdp)
-    - 원본 메트릭 라벨(labels)
+    입력 예시
 
-    사용률, 온도, 전력 같은 실시간 값은 포함하지 않음. 카드가 없으면 data=null 과 ACCELERATOR_NOT_FOUND 경고.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+
+    응답
+
+    * 가속기 ID, 벤더, 클러스터, 노드, 모델명
+    * 총 메모리(bytes)
+    * 전력 상한(W)과 출처(`measured` | `spec_tdp`)
+    * 원본 메트릭 라벨(`labels`)
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터 (`data` 는 `null`)
+    * `ACCELERATOR_NOT_FOUND`: 해당 카드 없음 (`data` 는 `null`)
+
+    참고
+
+    * 사용률, 온도, 전력 같은 실시간 값은 포함하지 않음
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -514,13 +574,34 @@ async def get_accelerator_metrics(
 ) -> AcceleratorMetricsResponse:
     """가속기 한 장의 현재 사용 상태 조회
 
-    - acc_id, vendor : 가속기 ID, 벤더
-    - 사용률(%), 사용 메모리와 총 메모리(bytes), 전력(W), 온도(°C), 정상 동작 여부
-    - 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부, 판정 근거(clock_reason | inferred), 클럭 제한 사유 목록
-    - extra : 벤더별 부가 메트릭. 코어 클럭과 메모리 클럭(MHz), 메모리 복사, 인코더, 디코더 사용률(%), PCIe 재전송 누적 횟수
+    입력 예시
 
-    extra 는 해당 메트릭을 제공하는 벤더만 채워지고 그 외는 빈 객체.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/metrics`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+
+    응답
+
+    * `acc_id`, `vendor`: 가속기 ID, 벤더
+    * 사용률(%), 사용 메모리와 총 메모리(bytes), 전력(W), 온도(°C), 정상 동작 여부
+    * 상한 대비 전력(%), 상한 도달 여부
+    * 성능 단계(`P0` ~ `P15`), NVIDIA 만
+    * 쓰로틀링 여부, 판정 근거(`clock_reason` | `inferred`), 클럭 제한 사유 목록
+    * `extra`: 벤더별 부가 메트릭, 코어 클럭과 메모리 클럭(MHz), 메모리 복사 사용률, 인코더 사용률, 디코더 사용률(%), PCIe 재전송 누적 횟수
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `ACCELERATOR_NOT_FOUND`: 해당 카드 없음
+    * `NO_DATA_UTILIZATION` | `NO_DATA_TEMPERATURE` | `NO_DATA_POWER`: 해당 값이 수집되지 않음
+
+    참고
+
+    * `extra` 는 해당 메트릭을 제공하는 벤더만 채워지고 나머지는 빈 객체
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -562,8 +643,26 @@ async def get_accelerator_power(
 ) -> AcceleratorPowerResponse:
     """가속기 한 장의 현재 전력 조회
 
-    - acc_id : 가속기 ID
-    - power_watts : 벤더 exporter 가 보고한 전력 실측값(W)
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+
+    응답
+
+    * `acc_id`: 가속기 ID
+    * `power_watts`: 벤더 exporter 가 보고한 전력 실측값(W)
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `ACCELERATOR_NOT_FOUND`: 해당 카드 없음
+    * `NO_DATA`: 전력 값이 수집되지 않음
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -589,10 +688,30 @@ async def get_accelerator_power_timeseries(
 ) -> AcceleratorPowerTimeseriesResponse:
     """가속기 한 장의 전력 변화 추이 조회
 
-    - acc_id : 가속기 ID
-    - series : 원본 메트릭 라벨(metric_labels)과 (시각, 전력 W) 쌍 목록(values)
+    입력 예시
 
-    조회 기간과 간격은 period, start, end, step 으로 지정. 기간 미지정 시 최근 1시간.
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power/timeseries`
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power/timeseries?period=6h&step=1m`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
+    * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
+    * `end`: 종료 시각, ISO 8601 (선택, 기본 현재)
+    * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+
+    응답
+
+    * `acc_id`: 가속기 ID
+    * `series`: 원본 메트릭 라벨(`metric_labels`)과 (시각, 전력 W) 쌍 목록(`values`)
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `NO_DATA`: 해당 기간에 값이 없음
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -633,8 +752,26 @@ async def get_accelerator_temperature(
 ) -> AcceleratorTemperatureResponse:
     """가속기 한 장의 현재 온도 조회
 
-    - acc_id : 가속기 ID
-    - temperature_celsius : 온도(°C)
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/temperature`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+
+    응답
+
+    * `acc_id`: 가속기 ID
+    * `temperature_celsius`: 온도(°C)
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `ACCELERATOR_NOT_FOUND`: 해당 카드 없음
+    * `NO_DATA`: 온도 값이 수집되지 않음
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -667,8 +804,26 @@ async def list_partitions(
 ) -> PartitionListResponse:
     """가속기 한 장을 나눈 파티션 목록 조회
 
-    - 파티션 ID, 프로파일, 사용률(%)
-    - 파티션 데이터 미수집 상태로 status="partial", data 빈 목록, PARTITION_DATA_NOT_AVAILABLE 경고 반환
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `limit`: 한 번에 받을 최대 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+
+    응답
+
+    * 파티션별 ID, 프로파일, 사용률(%)
+    * 현재는 항상 빈 목록
+
+    경고
+
+    * `PARTITION_DATA_NOT_AVAILABLE`: 파티션 데이터를 수집하지 않음 (`status` 는 `partial`)
     """
     return PartitionListResponse(status="partial", data=[], warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
@@ -682,8 +837,25 @@ async def get_partition(
 ) -> PartitionDetailResponse:
     """파티션 ID로 파티션 한 개의 상세 조회
 
-    - 파티션 ID, 프로파일, 사용률(%)
-    - 파티션 데이터 미수집 상태로 status="partial", data=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `partition_id`: 파티션 ID (경로, 필수)
+
+    응답
+
+    * 파티션 ID, 프로파일, 사용률(%)
+    * 현재는 항상 `data` 가 `null`
+
+    경고
+
+    * `PARTITION_DATA_NOT_AVAILABLE`: 파티션 데이터를 수집하지 않음 (`status` 는 `partial`)
     """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
@@ -697,9 +869,26 @@ async def get_partition_power(
 ) -> PartitionPowerResponse:
     """파티션 한 개에 배분되는 전력 조회
 
-    - acc_id, partition_id : 가속기 ID, 파티션 ID
-    - power_watts : 카드 전력을 파티션 점유 비율로 나눈 추정 전력(W)
-    - 파티션 데이터 미수집 상태로 status="partial", power_watts=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `partition_id`: 파티션 ID (경로, 필수)
+
+    응답
+
+    * `acc_id`, `partition_id`: 가속기 ID, 파티션 ID
+    * `power_watts`: 카드 전력을 파티션 점유 비율로 나눈 추정 전력(W)
+    * 현재는 항상 `power_watts` 가 `null`
+
+    경고
+
+    * `PARTITION_DATA_NOT_AVAILABLE`: 파티션 데이터를 수집하지 않음 (`status` 는 `partial`)
     """
     return PartitionPowerResponse(
         status="partial",
@@ -724,9 +913,30 @@ async def get_partition_power_timeseries(
 ) -> PartitionPowerTimeseriesResponse:
     """파티션 한 개의 전력 변화 추이 조회
 
-    - acc_id, partition_id : 가속기 ID, 파티션 ID
-    - series : 원본 메트릭 라벨과 (시각, 전력 W) 쌍 목록
-    - 파티션 데이터 미수집 상태로 status="partial", series 빈 목록, PARTITION_DATA_NOT_AVAILABLE 경고 반환
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1/power/timeseries`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `partition_id`: 파티션 ID (경로, 필수)
+    * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
+    * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
+    * `end`: 종료 시각, ISO 8601 (선택, 기본 현재)
+    * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+
+    응답
+
+    * `acc_id`, `partition_id`: 가속기 ID, 파티션 ID
+    * `series`: 원본 메트릭 라벨과 (시각, 전력 W) 쌍 목록
+    * 현재는 항상 빈 목록
+
+    경고
+
+    * `PARTITION_DATA_NOT_AVAILABLE`: 파티션 데이터를 수집하지 않음 (`status` 는 `partial`)
     """
     return PartitionPowerTimeseriesResponse(
         status="partial",
@@ -754,12 +964,30 @@ def _accelerator_links(cluster: str, acc_id: str, node: Optional[str]) -> dict:
 async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
     """노드 이름 없이 가속기 ID만으로 카드 한 장의 고정 정보 조회
 
-    - 가속기 ID, 벤더, 클러스터, 노드, 모델명
-    - 총 메모리(bytes), 전력 상한(W)과 출처(measured | spec_tdp), 원본 메트릭 라벨
-    - _links.self : 이번 요청 경로
-    - _links.canonical : 클러스터와 노드를 포함한 정식 경로 (카드를 찾은 경우만)
+    입력 예시
 
-    클러스터 전체에서 ID가 일치하는 카드를 찾는 방식. 없으면 ACCELERATOR_NOT_FOUND, 모르는 클러스터면 UNKNOWN_CLUSTER 경고.
+    * `GET /api/v2/clusters/l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+
+    응답
+
+    * 가속기 ID, 벤더, 클러스터, 노드, 모델명
+    * 총 메모리(bytes), 전력 상한(W)과 출처(`measured` | `spec_tdp`), 원본 메트릭 라벨
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터와 노드를 포함한 정식 경로, 카드를 찾은 경우만
+
+    경고
+
+    * `UNKNOWN_CLUSTER`: 등록되지 않은 클러스터
+    * `ACCELERATOR_NOT_FOUND`: 해당 카드 없음
+
+    참고
+
+    * 클러스터 전체에서 ID가 일치하는 카드를 찾음
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -787,7 +1015,23 @@ async def get_partition_alias(
 ) -> PartitionDetailResponse:
     """노드 이름 없이 파티션 ID만으로 파티션 한 개의 상세 조회
 
-    - 파티션 ID, 프로파일, 사용률(%)
-    - 파티션 데이터 미수집 상태로 status="partial", data=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
+    입력 예시
+
+    * `GET /api/v2/clusters/l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `partition_id`: 파티션 ID (경로, 필수)
+
+    응답
+
+    * 파티션 ID, 프로파일, 사용률(%)
+    * 현재는 항상 `data` 가 `null`
+
+    경고
+
+    * `PARTITION_DATA_NOT_AVAILABLE`: 파티션 데이터를 수집하지 않음 (`status` 는 `partial`)
     """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])

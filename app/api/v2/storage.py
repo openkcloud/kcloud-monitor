@@ -151,13 +151,21 @@ async def _pool_items(snap: ceph.CephSnapshot) -> list[CephPoolItem]:
 @router.get("/storage/ceph/summary", summary="Ceph 요약", response_model=CephSummaryResponse)
 async def get_ceph_summary():
     """Ceph 스토리지 전체 상태 요약 조회
-    
-    - health : 전체 상태(HEALTH_OK | HEALTH_WARN | HEALTH_ERR)
-    - osd_total, osd_up, osd_in : OSD 전체, 동작 중, 데이터 배치 대상 개수
-    - total_bytes, used_bytes, usage_percent : 전체와 사용 용량(bytes), 사용률(%)
-    - pool_count : 풀 개수
-    
-    메트릭 미수집 시 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/summary`
+
+    응답
+
+    * `health`: 전체 상태 (`HEALTH_OK` | `HEALTH_WARN` | `HEALTH_ERR`)
+    * `osd_total`, `osd_up`, `osd_in`: OSD 전체, 동작 중, 데이터 배치 대상 개수
+    * `total_bytes`, `used_bytes`, `usage_percent`: 전체 용량, 사용 용량 (bytes), 사용률 (%)
+    * `pool_count`: 풀 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -187,11 +195,19 @@ async def get_ceph_summary():
 @router.get("/storage/ceph/health", summary="Ceph 상태 점검 상세", response_model=CephHealthResponse)
 async def get_ceph_health():
     """Ceph 상태의 원인 점검 항목 조회
-    
-    - health : 전체 상태(HEALTH_OK | HEALTH_WARN | HEALTH_ERR)
-    - checks : 경고나 오류를 낸 점검 항목 코드와 심각도
-    
-    메트릭 미수집 시 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/health`
+
+    응답
+
+    * `health`: 전체 상태 (`HEALTH_OK` | `HEALTH_WARN` | `HEALTH_ERR`)
+    * `checks`: 경고나 오류를 낸 점검 항목, 항목마다 `code`, `severity`
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -213,13 +229,25 @@ async def get_ceph_health():
 
 @router.get("/storage/ceph/capacity", summary="Ceph 용량", response_model=CephCapacityResponse)
 async def get_ceph_capacity():
-    """Ceph 스토리지 용량 조회 (복제본 포함 실제 디스크 소모 기준)
-    
-    - total_bytes, used_bytes, available_bytes : 전체, 사용, 남은 용량(bytes)
-    - usage_percent : 사용률(%)
-    - by_device_class : 디스크 종류(ssd | hdd | nvme)별 전체와 사용 용량(bytes), 사용률(%), OSD 개수
-    
-    메트릭 미수집 시 data=null, NO_DATA 경고.
+    """Ceph 스토리지 용량 조회
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/capacity`
+
+    응답
+
+    * `total_bytes`, `used_bytes`, `available_bytes`: 전체, 사용, 남은 용량 (bytes)
+    * `usage_percent`: 사용률 (%)
+    * `by_device_class`: 디스크 종류(`ssd` | `hdd` | `nvme`)별 전체와 사용 용량 (bytes), 사용률 (%), OSD 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
+
+    참고
+
+    * 복제본을 포함한 실제 디스크 소모 기준
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -264,11 +292,28 @@ async def get_ceph_capacity():
             response_model=CephCapacityTimeseriesResponse)
 async def get_ceph_capacity_timeseries(params: TimeseriesParams = Depends()):
     """Ceph 사용 용량과 사용률의 변화 추이 조회
-    
-    - series : 시리즈 이름(used_bytes | usage_percent)과 (시각, 값) 쌍 목록
-    - 시각은 ISO 8601 UTC, 값은 숫자 문자열. used_bytes 시리즈 단위 bytes, usage_percent 시리즈 단위 %
-    
-    조회 기간과 간격은 period, start, end, step 으로 지정. 메트릭 미수집 시 빈 목록, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/capacity/timeseries`
+    * `GET /api/v2/storage/ceph/capacity/timeseries?period=7d&step=1h`
+
+    입력 옵션
+
+    * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`)
+    * `start`: 시작 시각, ISO 8601 형식 (선택, 기본 현재 시각에서 `period` 만큼 이전)
+    * `end`: 종료 시각, ISO 8601 형식 (선택, 기본 현재 시각)
+    * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+
+    응답
+
+    * `series`: 시리즈 목록, 항목마다 `name` (`used_bytes` | `usage_percent`)과 (시각, 값) 쌍 목록
+    * 시각은 ISO 8601 UTC, 값은 숫자 문자열
+    * `used_bytes` 는 bytes 단위, `usage_percent` 는 % 단위
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `series` 는 빈 목록
     """
     now = datetime.now(timezone.utc)
     points = await ceph.capacity_range(params.start_iso(now), params.end_iso(now), params.step)
@@ -296,14 +341,35 @@ async def get_ceph_capacity_timeseries(params: TimeseriesParams = Depends()):
 @router.get("/storage/ceph/osds", summary="OSD 목록", response_model=CephOSDListResponse)
 async def list_ceph_osds(params: PaginationParams = Depends()):
     """Ceph 디스크 단위(OSD) 목록 조회
-    
-    - OSD 이름, 동작 여부(up), 데이터 배치 대상 여부(in_cluster)
-    - 노드 이름, 디스크 종류(ssd | hdd | nvme), 장치 이름
-    - 전체와 사용 용량(bytes), 사용률(%), 쓰기 반영 지연(ms), 쓰기 확정 지연(ms)
-    - total : 검색 적용 후 OSD 개수
-    - summary : 전체, up, in, down, out 개수. 검색과 페이지에 영향받지 않음
-    
-    search 는 OSD 이름과 노드 이름에 적용, sort_by 는 응답 항목의 필드 이름. 메트릭 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/osds`
+    * `GET /api/v2/storage/ceph/osds?search=compute1&sort_by=usage_percent&sort_order=desc`
+
+    입력 옵션
+
+    * `search`: OSD 이름이나 노드 이름에 들어 있는 글자 (선택, 대소문자 무시)
+    * `sort_by`: 정렬 기준, 응답 항목의 필드 이름, 예 `usage_percent` (선택)
+    * `sort_order`: `asc` | `desc` (기본 `asc`)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수 (기본 `0`)
+
+    응답
+
+    * 항목마다 `osd_id`, 동작 여부(`up`), 데이터 배치 대상 여부(`in_cluster`)
+    * 노드 이름(`hostname`), 디스크 종류(`ssd` | `hdd` | `nvme`), 장치 이름
+    * 전체 용량, 사용 용량 (bytes), 사용률 (%), 쓰기 반영 지연 (ms), 쓰기 확정 지연 (ms)
+    * `total`: 검색을 적용한 뒤의 OSD 개수
+    * `summary`: 전체, `up`, `in_cluster`, `down`, `out` 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음
+
+    참고
+
+    * `summary` 는 `search`, `limit`, `offset` 에 영향받지 않음
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -320,12 +386,28 @@ async def list_ceph_osds(params: PaginationParams = Depends()):
             response_model=CephOSDDetailResponse)
 async def get_ceph_osd(osd_id: str):
     """OSD 한 개의 상세 조회
-    
-    - OSD 이름, 동작 여부(up), 데이터 배치 대상 여부(in_cluster)
-    - 노드 이름, 디스크 종류(ssd | hdd | nvme), 장치 이름
-    - 전체와 사용 용량(bytes), 사용률(%), 쓰기 반영 지연(ms), 쓰기 확정 지연(ms)
-    
-    osd_id 는 7 과 osd.7 모두 허용. 없는 OSD는 404, 메트릭 미수집 시 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/osds/osd.7`
+
+    입력 옵션
+
+    * `osd_id`: OSD 이름, 예 `osd.7` 또는 `7` (경로, 필수)
+
+    응답
+
+    * `osd_id`, 동작 여부(`up`), 데이터 배치 대상 여부(`in_cluster`)
+    * 노드 이름(`hostname`), 디스크 종류(`ssd` | `hdd` | `nvme`), 장치 이름
+    * 전체 용량, 사용 용량 (bytes), 사용률 (%), 쓰기 반영 지연 (ms), 쓰기 확정 지연 (ms)
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
+
+    오류
+
+    * 404: 없는 OSD
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -341,13 +423,30 @@ async def get_ceph_osd(osd_id: str):
 @router.get("/storage/ceph/pools", summary="풀 목록", response_model=CephPoolListResponse)
 async def list_ceph_pools(params: PaginationParams = Depends()):
     """Ceph 저장 공간 묶음(풀) 목록 조회
-    
-    - 풀 이름, 풀 번호
-    - 저장된 논리 데이터량(bytes), 추가로 쓸 수 있는 용량(bytes), 오브젝트 개수
-    - 초당 읽기 횟수(회/s), 초당 쓰기 횟수(회/s)
-    - total : 검색 적용 후 풀 개수
-    
-    search 는 풀 이름과 풀 번호에 적용, sort_by 는 응답 항목의 필드 이름. 메트릭 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/pools`
+    * `GET /api/v2/storage/ceph/pools?search=volumes&sort_by=stored_bytes&sort_order=desc`
+
+    입력 옵션
+
+    * `search`: 풀 이름이나 풀 번호에 들어 있는 글자 (선택, 대소문자 무시)
+    * `sort_by`: 정렬 기준, 응답 항목의 필드 이름, 예 `stored_bytes` (선택)
+    * `sort_order`: `asc` | `desc` (기본 `asc`)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수 (기본 `0`)
+
+    응답
+
+    * 항목마다 풀 이름(`name`), 풀 번호(`pool_id`)
+    * 저장된 논리 데이터량 (bytes), 추가로 쓸 수 있는 용량 (bytes), 오브젝트 개수
+    * 초당 읽기 횟수 (회/s), 초당 쓰기 횟수 (회/s)
+    * `total`: 검색을 적용한 뒤의 풀 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -361,13 +460,30 @@ async def list_ceph_pools(params: PaginationParams = Depends()):
             response_model=CephPoolDetailResponse)
 async def get_ceph_pool(pool: str):
     """Ceph 풀 한 개의 상세 조회
-    
-    - 풀 이름, 풀 번호
-    - 저장된 논리 데이터량(bytes), 추가로 쓸 수 있는 용량(bytes), 오브젝트 개수
-    - 초당 읽기 횟수(회/s), 초당 쓰기 횟수(회/s)
-    - 데이터 보호 방식(replicated | erasure), 복제본 개수
-    
-    pool 은 풀 이름과 풀 번호 모두 허용. 없는 풀은 404, 메트릭 미수집 시 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/pools/volumes`
+
+    입력 옵션
+
+    * `pool`: 풀 이름 또는 풀 번호, 예 `volumes` 또는 `3` (경로, 필수)
+
+    응답
+
+    * 풀 이름(`name`), 풀 번호(`pool_id`)
+    * 저장된 논리 데이터량 (bytes), 추가로 쓸 수 있는 용량 (bytes), 오브젝트 개수
+    * 초당 읽기 횟수 (회/s), 초당 쓰기 횟수 (회/s)
+    * `replication_type`: 데이터 보호 방식 (`replicated` | `erasure`)
+    * `replication_size`: 복제본 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
+
+    오류
+
+    * 404: 없는 풀
     """
     snap = await ceph.snapshot()
     if snap.empty:
@@ -393,13 +509,21 @@ async def get_ceph_pool(pool: str):
 @router.get("/storage/ceph/pgs", summary="PG 상태 요약", response_model=CephPGResponse)
 async def get_ceph_pgs():
     """Ceph 데이터 배치 단위(Placement Group) 상태 집계 조회
-    
-    - total : 전체 PG 개수
-    - active : 읽기와 쓰기 가능 개수
-    - clean : 복제본까지 맞춰진 개수
-    - degraded : 복제본 부족 개수
-    
-    메트릭 미수집 시 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/storage/ceph/pgs`
+
+    응답
+
+    * `total`: 전체 PG 개수
+    * `active`: 읽기와 쓰기가 가능한 개수
+    * `clean`: 복제본까지 맞춰진 개수
+    * `degraded`: 복제본이 부족한 개수
+
+    경고
+
+    * `NO_DATA`: Ceph 메트릭이 수집되지 않음, `data` 는 `null`
     """
     snap = await ceph.snapshot()
     if snap.empty:

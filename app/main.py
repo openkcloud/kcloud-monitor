@@ -230,11 +230,17 @@ app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTE
 
 @app.get("/")
 def read_root():
-    """API 진입점. 주요 경로 안내
+    """API 진입점과 주요 경로 안내
 
-    - service, version : 서비스 이름과 버전
-    - docs : Swagger 문서 경로
-    - endpoints : 도메인별 대표 경로와 한 줄 설명
+    입력 예시
+
+    * `GET /`
+
+    응답
+
+    * `service`, `version`: 서비스 이름과 버전
+    * `docs`: Swagger 문서 경로
+    * `endpoints`: 도메인별 대표 경로와 한 줄 설명
     """
     return {
         "service": "KCloud Monitor API",

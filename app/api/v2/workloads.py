@@ -712,15 +712,39 @@ async def list_pods(
     request: Request, cluster: str, params: WorkloadFilterParams = Depends(),
 ):
     """클러스터의 Pod 목록 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 노드 이름
-    - 상태(Running | Pending | Succeeded | Failed | Unknown), Pod IP, 노드 IP, 생성 시각
-    - 상위 리소스 종류(예: ReplicaSet, StatefulSet, DaemonSet, Job)와 이름, 서비스 이름
-    - 컨테이너 개수, 재시작 횟수
-    - CPU 사용량(코어), 메모리 사용량(bytes)
-    - total : 필터 적용 후 전체 Pod 개수
-    
-    namespace, status, workload_type, service_name 으로 필터. search 는 Pod 이름과 네임스페이스에 적용, sort_by 는 응답 항목의 필드 이름. Pod 정보 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods`
+    * `GET /api/v2/clusters/mgmt/workloads/pods?namespace=openstack&status=Running&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `sort_by`: 정렬 기준이 될 응답 항목 이름, 예 `pod` (선택)
+    * `sort_order`: `asc` | `desc` (기본 `asc`)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (선택)
+    * `status`: Pod 상태, 예 `Running` (선택, 대소문자 무시)
+    * `workload_type`: 상위 리소스 종류, 예 `StatefulSet` (선택, 대소문자 무시)
+    * `service_name`: 서비스 이름 일부, 예 `neutron` (선택)
+    * `search`: Pod 이름 또는 네임스페이스에 들어 있는 글자 (선택, 대소문자 무시)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`: CPU 사용량 (코어, 최근 5분 평균)
+    * `memory_usage_bytes`: 메모리 사용량 (bytes)
+    * `total`: 필터를 적용한 뒤 전체 Pod 개수
+
+    경고
+
+    * `NO_DATA`: Pod 정보가 수집되지 않음
     """
     pods, total, warnings = await fetch_pods(cluster, params)
     status = "success" if not warnings else "partial"
@@ -734,13 +758,25 @@ async def list_pods(
 )
 async def get_pods_summary(request: Request, cluster: str):
     """클러스터의 Pod 상태별 개수 조회
-    
-    - total_count : 전체 Pod 개수
-    - running_count, pending_count : Running, Pending 상태 개수
-    - succeeded_count, failed_count, unknown_count : 정상 완료, 실패, 상태 불명 개수
-    - namespace_distribution : 네임스페이스별 Pod 개수
-    
-    Pod 정보 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods/summary`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+
+    응답
+
+    * `total_count`: 전체 Pod 개수
+    * `running_count`, `pending_count`: `Running`, `Pending` 상태 개수
+    * `succeeded_count`, `failed_count`, `unknown_count`: 정상 완료, 실패, 상태 불명 개수
+    * `namespace_distribution`: 네임스페이스별 Pod 개수
+
+    경고
+
+    * `NO_DATA`: Pod 정보가 수집되지 않음
     """
     data, warnings = await fetch_pods_summary(cluster)
     status = "success" if not warnings else "partial"
@@ -754,14 +790,30 @@ async def get_pods_summary(request: Request, cluster: str):
 )
 async def get_pod(request: Request, cluster: str, namespace: str, pod: str):
     """Pod 한 개의 상세 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 고유 ID(uid), 노드 이름
-    - 상태(Running | Pending | Succeeded | Failed | Unknown), Pod IP, 노드 IP, 생성 시각
-    - 상위 리소스 종류와 이름, 서비스 이름, 컨테이너 개수, 재시작 횟수
-    - CPU 사용량, 요청량, 상한값(코어)
-    - 메모리 사용량, 요청량, 상한값(bytes)
-    
-    Pod가 없으면 data=null, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods/openstack/neutron-server-0`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 고유 ID `uid`, 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+
+    경고
+
+    * `NO_DATA`: Pod 가 없음 (`data` 는 `null`)
     """
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
@@ -775,11 +827,29 @@ async def get_pod(request: Request, cluster: str, namespace: str, pod: str):
 )
 async def get_pod_power(request: Request, cluster: str, namespace: str, pod: str):
     """Pod 한 개의 추정 전력 조회
-    
-    - watts : Pod 추정 전력(W). 최근 5분 평균
-    - source : 산출 근거 (kepler)
-    
-    Kepler 가 컨테이너별로 추정한 전력의 합. 전력값이 없으면 data=null, NO_POWER_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods/openstack/neutron-server-0/power`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * `watts`: Pod 추정 전력 (W, 최근 5분 평균)
+    * `source`: 산출 근거 (`kepler`)
+
+    경고
+
+    * `NO_POWER_DATA`: 전력값이 없음 (`data` 는 `null`)
+
+    참고
+
+    * Kepler 가 컨테이너별로 추정한 전력의 합
     """
     data, warnings = await fetch_pod_power(cluster, namespace, pod)
     status = "success" if data else "partial"
@@ -795,14 +865,29 @@ async def list_pod_containers(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
     """Pod 한 개 안의 컨테이너 목록 조회
-    
-    - 컨테이너 이름, 컨테이너 ID, 이미지, 상태(running | waiting | terminated), 재시작 횟수
-    - 네임스페이스, Pod 이름, 소속 클러스터
-    - CPU 사용량, 요청량, 상한값(코어)
-    - 메모리 사용량, 요청량, 상한값(bytes)
-    - total : 컨테이너 개수
-    
-    Pod 정보가 없으면 빈 목록, NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods/openstack/neutron-server-0/containers`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 컨테이너 이름(`container`), 컨테이너 ID(`container_id`), 이미지(`image`)
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`)
+    * 상태 `status` (`running` | `waiting` | `terminated`), 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+    * `total`: 컨테이너 개수
+
+    경고
+
+    * `NO_DATA`: Pod 정보가 없음 (빈 목록)
     """
     containers, warnings = await fetch_pod_containers(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
@@ -820,11 +905,26 @@ async def get_container_metrics(
     request: Request, cluster: str, namespace: str, pod: str, container_name: str,
 ):
     """컨테이너 한 개의 현재 자원 사용량 조회
-    
-    - cpu_usage : CPU 사용량(코어). 최근 5분 평균
-    - memory_usage_bytes : 메모리 사용량(bytes). 실사용(working set) 기준
-    
-    두 값 모두 없으면 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/pods/openstack/neutron-server-0/containers/neutron-server/metrics`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+    * `container_name`: 컨테이너 이름, 예 `neutron-server` (경로, 필수)
+
+    응답
+
+    * `cpu_usage`: CPU 사용량 (코어, 최근 5분 평균)
+    * `memory_usage_bytes`: 메모리 사용량 (bytes, 실사용 기준)
+
+    경고
+
+    * `NO_DATA`: 두 값 모두 없음
     """
     data, warnings = await fetch_container_metrics(cluster, namespace, pod, container_name)
     status = "success" if not warnings else "partial"
@@ -840,10 +940,28 @@ async def get_pod_accelerators(
     request: Request, cluster: str, namespace: str, pod: str,
 ):
     """Pod 한 개에 배정된 가속기 조회
-    
-    - 가속기 ID, 벤더, 모델명
-    
-    NVIDIA 클러스터만 값 있음. 그 외 클러스터이거나 배정된 카드가 없으면 빈 목록, POD_ACCELERATOR_DATA_NOT_AVAILABLE 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/furiosa/workloads/pods/kube-system/neutron-server-0/accelerators`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 가속기 ID(`acc_id`), 벤더(`vendor`), 모델명(`model_name`)
+
+    경고
+
+    * `POD_ACCELERATOR_DATA_NOT_AVAILABLE`: 배정된 가속기가 없거나 조회를 지원하지 않는 클러스터 (빈 목록)
+
+    참고
+
+    * NVIDIA 클러스터만 값이 나옴
     """
     items, warnings = await fetch_pod_accelerators(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
@@ -863,15 +981,34 @@ async def get_pod_accelerators(
 async def list_containers(
     request: Request, cluster: str, params: WorkloadFilterParams = Depends(),
 ):
-    """클러스터 전체 Pod의 컨테이너 목록 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 컨테이너 이름, 컨테이너 ID, 이미지
-    - 상태(실행 중이면 running, 그 외 null), 재시작 횟수
-    - CPU 사용량(코어), 메모리 사용량(bytes)
-    - cpu_requests, cpu_limits, memory_requests_bytes, memory_limits_bytes : 값 미제공 시 null
-    - total : 필터 적용 후 전체 컨테이너 개수
-    
-    namespace 로 필터. search 는 컨테이너 이름과 Pod 이름에 적용. 컨테이너 정보 미수집 시 NO_DATA 경고.
+    """클러스터 전체 Pod 의 컨테이너 목록 조회
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/containers`
+    * `GET /api/v2/clusters/mgmt/workloads/containers?namespace=openstack&search=neutron&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (선택)
+    * `search`: 컨테이너 이름 또는 Pod 이름에 들어 있는 글자 (선택, 대소문자 무시)
+
+    응답
+
+    * 컨테이너 이름(`container`), 컨테이너 ID(`container_id`), 이미지(`image`)
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`)
+    * 상태 `status` (실행 중이면 `running`, 그 외 `null`), 재시작 횟수 `restart_count`
+    * `cpu_usage`: CPU 사용량 (코어)
+    * `memory_usage_bytes`: 메모리 사용량 (bytes)
+    * `cpu_requests`, `cpu_limits`, `memory_requests_bytes`, `memory_limits_bytes`: 이 목록에서는 값이 없음 (`null`)
+    * `total`: 필터를 적용한 뒤 전체 컨테이너 개수
+
+    경고
+
+    * `NO_DATA`: 컨테이너 정보가 수집되지 않음
     """
     containers, total, warnings = await fetch_cluster_containers(cluster, params)
     status = "success" if not warnings else "partial"
@@ -886,14 +1023,28 @@ async def list_containers(
     response_model=ContainerDetailResponse,
 )
 async def get_container(request: Request, cluster: str, container_id: str):
-    """컨테이너 ID로 컨테이너 한 개의 상세 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 컨테이너 이름, 컨테이너 ID, 이미지
-    - 상태(running | waiting | terminated), 재시작 횟수
-    - CPU 사용량, 요청량, 상한값(코어)
-    - 메모리 사용량, 요청량, 상한값(bytes)
-    
-    container_id 는 앞부분만 넣어도 되고 런타임 접두어(containerd://) 없이도 조회 가능. 없는 컨테이너는 data=null, NO_DATA 경고.
+    """컨테이너 ID 로 컨테이너 한 개의 상세 조회
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/workloads/containers/3f2a9c1d`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `container_id`: 컨테이너 ID, 앞부분만 넣어도 되고 `containerd://` 같은 접두어는 빼도 됨 (경로, 필수)
+
+    응답
+
+    * 컨테이너 이름(`container`), 컨테이너 ID(`container_id`), 이미지(`image`)
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`)
+    * 상태 `status` (`running` | `waiting` | `terminated`), 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+
+    경고
+
+    * `NO_DATA`: 없는 컨테이너 (`data` 는 `null`)
     """
     data, warnings = await fetch_container_by_id(cluster, container_id)
     status = "success" if data else "partial"
@@ -914,12 +1065,30 @@ async def list_namespaces(
     request: Request, cluster: str, params: WorkloadFilterParams = Depends(),
 ):
     """클러스터의 네임스페이스 목록 조회
-    
-    - 네임스페이스 이름, 소속 클러스터
-    - Pod 개수, 생성 시각
-    - total : 필터 적용 후 전체 네임스페이스 개수
-    
-    이름순 정렬. search 는 네임스페이스 이름에 적용. 미수집 시 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/namespaces`
+    * `GET /api/v2/clusters/mgmt/namespaces?search=kube&limit=20`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `limit`: 한 번에 받을 개수 `1` ~ `1000` (기본 `100`)
+    * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
+    * `search`: 네임스페이스 이름에 들어 있는 글자 (선택, 대소문자 무시)
+
+    응답
+
+    * 네임스페이스 이름(`namespace`), 소속 클러스터(`cluster`)
+    * `pod_count`: Pod 개수
+    * `created_at`: 생성 시각
+    * `total`: 검색을 적용한 뒤 전체 네임스페이스 개수
+    * 이름순으로 정렬
+
+    경고
+
+    * `NO_DATA`: 네임스페이스 정보가 수집되지 않음
     """
     items, total, warnings = await fetch_namespaces(cluster, params)
     status = "success" if not warnings else "partial"
@@ -935,13 +1104,26 @@ async def list_namespaces(
 )
 async def get_namespace(request: Request, cluster: str, namespace: str):
     """네임스페이스 한 개의 자원 사용 상세 조회
-    
-    - 네임스페이스 이름, 소속 클러스터
-    - pod_count, container_count : Pod 개수, 컨테이너 개수
-    - cpu_usage, cpu_requests : CPU 사용량 합계, 요청량 합계(코어)
-    - memory_usage_bytes, memory_requests_bytes : 메모리 사용량 합계, 요청량 합계(bytes)
-    
-    Pod가 없으면 NO_DATA 경고.
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/namespaces/openstack`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+
+    응답
+
+    * 네임스페이스 이름(`namespace`), 소속 클러스터(`cluster`)
+    * `pod_count`, `container_count`: Pod 개수, 컨테이너 개수
+    * `cpu_usage`, `cpu_requests`: CPU 사용량 합계, 요청량 합계 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`: 메모리 사용량 합계, 요청량 합계 (bytes)
+
+    경고
+
+    * `NO_DATA`: 네임스페이스에 Pod 가 없음
     """
     data, warnings = await fetch_namespace_summary(cluster, namespace)
     status = "success" if not warnings else "partial"
@@ -958,15 +1140,33 @@ async def get_namespace(request: Request, cluster: str, namespace: str):
     summary="Pod 상세(짧은 경로)",
 )
 async def get_pod_alias(request: Request, cluster: str, namespace: str, pod: str):
-    """workloads 를 뺀 짧은 경로로 Pod 한 개의 상세 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 고유 ID(uid), 노드 이름
-    - 상태(Running | Pending | Succeeded | Failed | Unknown), Pod IP, 노드 IP, 생성 시각
-    - 상위 리소스 종류와 이름, 서비스 이름, 컨테이너 개수, 재시작 횟수
-    - CPU 사용량, 요청량, 상한값(코어), 메모리 사용량, 요청량, 상한값(bytes)
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터와 workloads 를 포함한 정식 경로
-    
-    Pod가 없으면 data=null, NO_DATA 경고.
+    """`workloads` 를 뺀 짧은 경로로 Pod 한 개의 상세 조회
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/pods/openstack/neutron-server-0`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `namespace`: 네임스페이스 이름, 예 `openstack` (경로, 필수)
+    * `pod`: Pod 이름, 예 `neutron-server-0` (경로, 필수)
+
+    응답
+
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`), 고유 ID `uid`, 노드 이름(`node`)
+    * 상태 `phase` (`Running` | `Pending` | `Succeeded` | `Failed` | `Unknown`)
+    * `pod_ip`, `host_ip`, 생성 시각 `created_at`
+    * 상위 리소스 종류와 이름 (`workload_type`, `workload_name`), 서비스 이름 `service_name`
+    * 컨테이너 개수 `container_count`, 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터와 `workloads` 를 포함한 정식 경로
+
+    경고
+
+    * `NO_DATA`: Pod 가 없음 (`data` 는 `null`)
     """
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
@@ -985,14 +1185,30 @@ async def get_pod_alias(request: Request, cluster: str, namespace: str, pod: str
     summary="컨테이너 상세(짧은 경로)",
 )
 async def get_container_alias(request: Request, cluster: str, container_id: str):
-    """workloads 를 뺀 짧은 경로로 컨테이너 한 개의 상세 조회
-    
-    - 네임스페이스, Pod 이름, 소속 클러스터, 컨테이너 이름, 컨테이너 ID, 이미지
-    - 상태(running | waiting | terminated), 재시작 횟수
-    - CPU 사용량, 요청량, 상한값(코어), 메모리 사용량, 요청량, 상한값(bytes)
-    - _links.self: 이번 요청 경로, _links.canonical: 클러스터와 workloads 를 포함한 정식 경로
-    
-    없는 컨테이너는 data=null, NO_DATA 경고.
+    """`workloads` 를 뺀 짧은 경로로 컨테이너 한 개의 상세 조회
+
+    입력 예시
+
+    * `GET /api/v2/clusters/mgmt/containers/3f2a9c1d`
+
+    입력 옵션
+
+    * `cluster`: 클러스터 이름, 예 `mgmt` (경로, 필수)
+    * `container_id`: 컨테이너 ID, 앞부분만 넣어도 되고 `containerd://` 같은 접두어는 빼도 됨 (경로, 필수)
+
+    응답
+
+    * 컨테이너 이름(`container`), 컨테이너 ID(`container_id`), 이미지(`image`)
+    * 네임스페이스(`namespace`), Pod 이름(`pod`), 소속 클러스터(`cluster`)
+    * 상태 `status` (`running` | `waiting` | `terminated`), 재시작 횟수 `restart_count`
+    * `cpu_usage`, `cpu_requests`, `cpu_limits`: CPU 사용량, 요청량, 상한값 (코어)
+    * `memory_usage_bytes`, `memory_requests_bytes`, `memory_limits_bytes`: 메모리 사용량, 요청량, 상한값 (bytes)
+    * `_links.self`: 이번 요청 경로
+    * `_links.canonical`: 클러스터와 `workloads` 를 포함한 정식 경로
+
+    경고
+
+    * `NO_DATA`: 없는 컨테이너 (`data` 는 `null`)
     """
     data, warnings = await fetch_container_by_id(cluster, container_id)
     status = "success" if data else "partial"
