@@ -69,6 +69,19 @@ class LokiClient:
             logger.warning("Loki query_range request error: %s — query=%r", exc, query)
             raise HTTPException(status_code=504, detail=f"Loki 연결 실패: {type(exc).__name__}")
 
+    async def query_instant(self, query: str) -> Optional[list[dict]]:
+        """현재 시각 기준 집계 쿼리 결과(vector). 알람 평가용이라 실패 시 예외 대신 None."""
+        if not self.configured:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(f"{self.base_url}/loki/api/v1/query", params={"query": query})
+                r.raise_for_status()
+                return r.json().get("data", {}).get("result", [])
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            logger.warning("Loki query error: %s — query=%r", exc, query)
+            return None
+
     async def labels(
         self, start: Optional[str] = None, end: Optional[str] = None,
     ) -> Optional[list[str]]:
