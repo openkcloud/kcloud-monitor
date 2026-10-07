@@ -35,8 +35,16 @@ class Settings(BaseSettings):
     LOKI_URL: Optional[str] = Field(None, description="Loki HTTP API URL")
     TEMPO_URL: Optional[str] = Field(None, description="Tempo HTTP API URL")
     DATABASE_URL: Optional[str] = Field(
-        None, description="PostgreSQL — resource-map 원장"
+        None, description="PostgreSQL — 알람 저장소(정책/채널/활성 알람/이력), resource-map 원장(예정)"
     )
+    # ── 알람 ──────────────────────────────────────────────────────────────
+    ALERT_EVAL_INTERVAL_SEC: int = Field(30, ge=5, description="알람 정책 평가 주기(초)")
+    ALERT_REPEAT_INTERVAL_MIN: int = Field(240, ge=1, description="firing 유지 중 재알림 간격(분)")
+    SMTP_HOST: Optional[str] = Field(None, description="알람 메일 SMTP 호스트")
+    SMTP_PORT: int = Field(587, description="SMTP 포트")
+    SMTP_USER: Optional[str] = Field(None, description="SMTP 계정")
+    SMTP_PASSWORD: Optional[str] = Field(None, description="SMTP 비밀번호")
+    SMTP_FROM: Optional[str] = Field(None, description="알람 메일 발신 주소")
     REDIS_URL: Optional[str] = Field(
         None, description="Redis — 캐시 + Streams 이벤트 버스 (예: redis://host:6379/0)"
     )

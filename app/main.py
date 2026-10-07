@@ -1,4 +1,5 @@
 """KCloud Monitor API v2"""
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v2 import (
     accelerators,
+    alerts,
     auth,
     clusters,
     export,
@@ -26,6 +28,7 @@ from app.auth import verify_token_or_api_key
 from app.config import settings
 from app.logging_config import configure_logging
 
+from app.services import alerts as alert_service
 from app.middleware import MetricsMiddleware, RateLimitMiddleware, RequestIDMiddleware
 
 APP_VERSION = "0.2.0"
@@ -36,7 +39,19 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.LOG_LEVEL)
     print("KCloud Monitor API v2 - Starting up")
     print(f"Version: {APP_VERSION} | Docs: /docs | Metrics: /api/v2/system/metrics")
+    loop_task = None
+    if settings.DATABASE_URL:
+        try:
+            await alert_service.store.connect()
+            loop_task = asyncio.create_task(alert_service.run_loop())
+        except Exception as exc:  # DB 가 아직 안 떠도 조회 API 는 살아야 함
+            print(f"alert store unavailable: {exc}")
+    else:
+        print("DATABASE_URL 미설정: 알람 기능 비활성")
     yield
+    if loop_task:
+        loop_task.cancel()
+    await alert_service.store.close()
     print("Application shutdown")
 
 
@@ -206,6 +221,7 @@ app.include_router(monitoring.router, prefix=V2, tags=["Monitoring"], dependenci
 app.include_router(logs.router, prefix=V2, tags=["Logs"], dependencies=PROTECTED)
 app.include_router(export.router, prefix=V2, tags=["Export"], dependencies=PROTECTED)
 app.include_router(resource_map.router, prefix=V2, tags=["Resource Map"], dependencies=PROTECTED)
+app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
