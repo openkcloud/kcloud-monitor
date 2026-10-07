@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.deps import get_settings
@@ -23,9 +23,11 @@ def get_jwt_config(settings: Settings = Depends(get_settings)):
     }
 
 class Token(BaseModel):
-    access_token: str
-    token_type: str
-    expires_in: int
+    """로그인 토큰 응답"""
+
+    access_token: str = Field(..., description="JWT 액세스 토큰. 이후 요청의 Authorization: Bearer 헤더에 사용")
+    token_type: str = Field(..., description="토큰 종류 (bearer)")
+    expires_in: int = Field(..., description="토큰 유효 시간 (초)")
 
 class TokenData(BaseModel):
     username: Optional[str] = None
@@ -89,7 +91,11 @@ def verify_token(
 
 def verify_token_or_api_key(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer_optional),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_api_key: Optional[str] = Header(
+        None,
+        alias="X-API-Key",
+        description="API 키 인증 값. Bearer 토큰 대신 사용 가능, 서버에 API_KEY 가 설정된 경우만 유효",
+    ),
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Accept a valid API key (X-API-Key) or a JWT bearer token — parallel auth.

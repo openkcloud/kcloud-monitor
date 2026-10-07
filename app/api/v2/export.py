@@ -43,14 +43,17 @@ def _safe_filename_part(value: str) -> str:
 @router.get("/export/power", summary="전력 데이터 내보내기")
 async def export_power(
     request: Request,
-    format: str = Query("csv", description="내보내기 포맷: csv | json"),
+    format: str = Query("csv", description="응답 형식 (csv | json)"),
     params: TimeseriesParams = Depends(),
 ):
-    """전력 측정값을 파일로 내보내기
+    """기간 내 전력 측정값을 CSV 또는 JSON 으로 내보내기
 
-    - 행 구성 : 시각, 노드 이름, 측정 구분(server | cpu | accelerator), 전력(W)
-    - format=csv : CSV 파일로 바로 내려받기
-    - format=json : JSON 응답 본문의 rows 배열로 반환
+    - 행 : timestamp(측정 시각, ISO 8601 UTC), node(노드 이름), layer(측정 구분), watts(전력 W)
+    - layer : server(IPMI 서버 총전력) | cpu(Kepler CPU 전력) | accelerator:벤더(가속기 전력)
+    - format=csv : 첨부 파일(power_시작_종료.csv)로 내려받기
+    - format=json : data.rows 배열로 반환
+
+    조회 기간과 간격은 period, start, end, step 으로 지정. csv, json 외 형식은 400. 계층별 데이터가 없으면 NO_DATA_SERVER_POWER, NO_DATA_CPU_POWER, NO_DATA_ACCELERATOR 경고.
     """
     _check_format(format)
 
@@ -81,17 +84,17 @@ async def export_power(
 @router.get("/export/metrics", summary="메트릭 데이터 내보내기")
 async def export_metrics(
     request: Request,
-    format: str = Query("csv", description="내보내기 포맷: csv | json"),
-    metric: Optional[str] = Query(None, description="내보낼 메트릭 이름. 미리 허용된 목록에 있는 값만 가능"),
+    format: str = Query("csv", description="응답 형식 (csv | json)"),
+    metric: Optional[str] = Query(None, description="조회할 메트릭 이름. 허용 목록에 있는 값만"),
     params: TimeseriesParams = Depends(),
 ):
-    """지정한 메트릭 값을 파일로 내보내기
+    """허용된 메트릭의 기간 내 값을 CSV 또는 JSON 으로 내보내기
 
-    - 행 구성 : 시각, 메트릭 라벨, 값
-    - format=csv : CSV 파일로 바로 내려받기
-    - format=json : JSON 응답 본문의 rows 배열로 반환
+    - 행 : timestamp(측정 시각, ISO 8601 UTC), labels(원본 메트릭 라벨), value(값)
+    - format=csv : 첨부 파일(metrics_메트릭_시작_종료.csv)로 내려받기. labels 는 키=값;키=값 문자열
+    - format=json : data.metric 과 data.rows 배열로 반환
 
-    metric 파라미터는 미리 허용된 메트릭 이름만 받음. 임의 PromQL 실행 방지 목적.
+    metric 은 미리 허용된 이름만 가능하며 그 외는 400 INVALID_METRIC. csv, json 외 형식은 400.
     """
     _check_format(format)
 
@@ -125,15 +128,15 @@ async def export_metrics(
     )
 
 
-@router.get("/export/report", summary="요약 리포트 생성", response_model=ReportExportResponse)
+@router.get("/export/report", summary="운영 요약 리포트 생성", response_model=ReportExportResponse)
 async def export_report(
     request: Request,
-    report_type: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="리포트 주기: daily | weekly | monthly"),
+    report_type: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="리포트 주기 (daily | weekly | monthly)"),
 ):
     """일간, 주간, 월간 운영 요약 리포트 생성
 
-    - report_type : daily | weekly | monthly
-    - PDF 생성 라이브러리가 설치되지 않아 status="partial" + warnings=["NOT_CONFIGURED"] 반환
+    - report_type : 리포트 주기(daily | weekly | monthly)
+    - 리포트 생성 기능 미설정 상태로 status="partial", data=null, NOT_CONFIGURED 경고 반환
     """
     return ReportExportResponse(
         status="partial",

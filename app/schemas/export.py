@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
+
 # ---------------------------------------------------------------------------
 # 허용 메트릭 목록 (EXPORT_METRIC_ALLOWLIST) — 키/값 모두 원본 메트릭명 또는 안전한 PromQL
 # ---------------------------------------------------------------------------
@@ -52,25 +54,31 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 class PowerExportRow(BaseModel):
-    """전력 내보내기 단일 행."""
+    """전력 내보내기 행 하나."""
 
-    timestamp: str
-    node: str
-    layer: str
-    watts: Optional[float]
+    timestamp: str = Field(..., description="측정 시각 (ISO 8601, UTC)")
+    node: str = Field(..., description="노드 이름. 확인 불가 시 unknown")
+    layer: str = Field(
+        ...,
+        description="측정 구분 (server | cpu | accelerator:nvidia | accelerator:furiosa | accelerator:rebellions). "
+        "server: IPMI 서버 총전력, cpu: Kepler CPU 전력, accelerator: 가속기 전력",
+    )
+    watts: Optional[float] = Field(..., description="전력(W). 값을 읽을 수 없으면 null")
 
 
 class PowerExportData(BaseModel):
-    rows: list[PowerExportRow]
+    """전력 내보내기 데이터."""
+
+    rows: list[PowerExportRow] = Field(..., description="전력 측정 행 목록")
 
 
 class PowerExportResponse(BaseModel):
-    """GET /export/power?format=json 응답."""
+    """전력 내보내기 응답."""
 
-    status: str
-    data: Optional[PowerExportData]
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: Optional[PowerExportData] = Field(..., description="전력 내보내기 데이터")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 # ---------------------------------------------------------------------------
@@ -78,25 +86,27 @@ class PowerExportResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class MetricExportRow(BaseModel):
-    """메트릭 내보내기 단일 행."""
+    """메트릭 내보내기 행 하나."""
 
-    timestamp: str
-    labels: dict[str, str]
-    value: Optional[float]
+    timestamp: str = Field(..., description="측정 시각 (ISO 8601, UTC)")
+    labels: dict[str, str] = Field(..., description="원본 메트릭 라벨 (키: 라벨 이름, 값: 라벨 값)")
+    value: Optional[float] = Field(..., description="메트릭 값. 원본 메트릭 단위 그대로, 값을 읽을 수 없으면 null")
 
 
 class MetricExportData(BaseModel):
-    metric: str
-    rows: list[MetricExportRow]
+    """메트릭 내보내기 데이터."""
+
+    metric: str = Field(..., description="내보낸 메트릭 이름")
+    rows: list[MetricExportRow] = Field(..., description="메트릭 측정 행 목록")
 
 
 class MetricExportResponse(BaseModel):
-    """GET /export/metrics?format=json 응답."""
+    """메트릭 내보내기 응답."""
 
-    status: str
-    data: Optional[MetricExportData]
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: Optional[MetricExportData] = Field(..., description="메트릭 내보내기 데이터")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +114,10 @@ class MetricExportResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReportExportResponse(BaseModel):
-    """리포트 생성 응답. PDF 생성 라이브러리가 없어 항상 NOT_CONFIGURED."""
+    """리포트 생성 응답. 생성 불가 시 NOT_CONFIGURED 경고 반환."""
 
-    status: str
-    data: Optional[Any] = None
-    report_type: str
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: Optional[Any] = Field(None, description="리포트 데이터. 생성 불가 시 null")
+    report_type: str = Field(..., description="리포트 주기 (daily | weekly | monthly)")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)

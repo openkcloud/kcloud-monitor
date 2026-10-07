@@ -83,6 +83,7 @@ VENDOR_CONFIG: dict[str, dict] = {
         "power_limit": 'DCGM_FI_DEV_POWER_MGMT_LIMIT{{cluster="{cluster}"{extra}}}',
         # DCGM 3.3부터 CLOCK_THROTTLE_REASONS가 CLOCKS_EVENT_REASONS로 이름이 바뀌어 둘 다 잡는다.
         "clock_reasons": '{{__name__=~"DCGM_FI_DEV_CLOCK(S_EVENT|_THROTTLE)_REASONS",cluster="{cluster}"{extra}}}',
+        # 기본 counters.csv에 없어 exporter 목록 파일에 추가해야 나온다. 값 0~15 (P0~P15)
         "throttle_temp": 85,  # 초기값
         "extra_keys": [
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
@@ -404,15 +405,16 @@ async def _single_metric(
 async def list_accelerators(
     request: Request, cluster: str, node: str, params: PaginationParams = Depends()
 ) -> AcceleratorListResponse:
-    """특정 노드에 장착된 가속기(GPU/NPU) 목록 조회
+    """노드 한 대에 장착된 가속기(GPU/NPU) 목록 조회
 
-    - 가속기 ID(UUID), 벤더, 모델명
-    - 사용률(%), 온도(°C), 전력(W)
-    - 사용 메모리, 총 메모리(bytes)
-    - 정상 동작 여부
-    - 전력 캡 상태: 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP), 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률·온도·전력 간접 판정)
-    - total, summary : 전체 개수와 집계 (평균 사용률·온도·전력, 전력 합계)
+    - 가속기 ID, 벤더, 클러스터, 노드, 모델명, 원본 메트릭 라벨(labels)
+    - 사용률(%), 온도(°C), 전력(W), 사용 메모리와 총 메모리(bytes), 정상 동작 여부
+    - 전력 상한(W)과 출처(measured | spec_tdp), 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부, 판정 근거(clock_reason | inferred), 클럭 제한 사유 목록(throttle_reasons)
+    - total : 노드의 전체 카드 수
+    - summary : 카드 수, 벤더, 평균 사용률(%), 평균 온도(°C), 평균 전력(W), 전력 합계(W)
+
+    limit, offset 으로 페이지 지정. total 과 summary 는 페이지와 무관한 전체 카드 기준.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -438,15 +440,16 @@ async def list_accelerators(
     )
 
 
-@router.get("/clusters/{cluster}/nodes/{node}/accelerators/topology", summary="가속기 인터커넥트 토폴로지")
+@router.get("/clusters/{cluster}/nodes/{node}/accelerators/topology", summary="가속기 간 연결 토폴로지")
 async def get_accelerators_topology(
     request: Request, cluster: str, node: str
 ) -> AcceleratorTopologyResponse:
     """가속기끼리 직접 연결된 통신 링크(NVLink) 조회
 
-    - 벤더
-    - 링크별 대역폭 값과 어느 카드에서 어느 카드로 이어지는지 나타내는 라벨
-    - NVIDIA 클러스터만 값이 채워지고 NPU 클러스터는 빈 목록 반환
+    - vendor : 가속기 벤더
+    - links : 링크별 대역폭 값(value)과 출발 카드, 도착 카드를 담은 원본 메트릭 라벨(metric_labels)
+
+    NPU 클러스터는 links 빈 목록과 TOPOLOGY_NOT_AVAILABLE 경고 반환.
     """
     vendor = await _get_vendor(cluster)
     if vendor != "nvidia":
@@ -474,12 +477,14 @@ async def get_accelerators_topology(
 async def get_accelerator(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorDetailResponse:
-    """가속기 ID(UUID)로 단일 가속기 상세 조회
+    """가속기 ID로 카드 한 장의 고정 정보 조회
 
     - 가속기 ID, 벤더, 클러스터, 노드, 모델명
     - 총 메모리(bytes)
-    - 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP)
-    - 사용률, 온도, 전력 같은 계속 바뀌는 값은 .../metrics 에서 조회
+    - 전력 상한(W)과 출처(measured | spec_tdp)
+    - 원본 메트릭 라벨(labels)
+
+    사용률, 온도, 전력 같은 실시간 값은 포함하지 않음. 카드가 없으면 data=null 과 ACCELERATOR_NOT_FOUND 경고.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -500,13 +505,15 @@ async def get_accelerator(
 async def get_accelerator_metrics(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorMetricsResponse:
-    """가속기 한 장이 지금 얼마나 일하고 있는지 조회
+    """가속기 한 장의 현재 사용 상태 조회
 
-    - 사용률(%), 사용 메모리, 총 메모리(bytes)
-    - 전력(W), 온도(°C), 정상 동작 여부
-    - 전력 캡 상태: 상한 대비 전력(%), 상한 도달 여부
-    - 쓰로틀링 여부와 판정 근거(클럭 제한 사유 직접 관측 또는 사용률, 온도, 전력 간접 판정)
-    - 벤더별 부가 메트릭(현재 NVIDIA만): 코어/메모리 클럭(MHz), 인코딩, 디코딩 사용률(%), PCIe 재전송 누적 횟수
+    - acc_id, vendor : 가속기 ID, 벤더
+    - 사용률(%), 사용 메모리와 총 메모리(bytes), 전력(W), 온도(°C), 정상 동작 여부
+    - 상한 대비 전력(%), 상한 도달 여부
+    - 쓰로틀링 여부, 판정 근거(clock_reason | inferred), 클럭 제한 사유 목록
+    - extra : 벤더별 부가 메트릭. 코어 클럭과 메모리 클럭(MHz), 메모리 복사, 인코더, 디코더 사용률(%), PCIe 재전송 누적 횟수
+
+    extra 는 해당 메트릭을 제공하는 벤더만 채워지고 그 외는 빈 객체.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -545,10 +552,10 @@ async def get_accelerator_metrics(
 async def get_accelerator_power(
     request: Request, cluster: str, node: str, acc_id: str
 ) -> AcceleratorPowerResponse:
-    """가속기 한 장이 지금 쓰고 있는 전력 조회
+    """가속기 한 장의 현재 전력 조회
 
-    - 가속기 ID
-    - 전력(W), 벤더 exporter가 직접 보고한 실측값
+    - acc_id : 가속기 ID
+    - power_watts : 벤더 exporter 가 보고한 전력 실측값(W)
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -574,9 +581,10 @@ async def get_accelerator_power_timeseries(
 ) -> AcceleratorPowerTimeseriesResponse:
     """가속기 한 장의 전력 변화 추이 조회
 
-    - 가속기 ID
-    - (시각, 전력값) 쌍 목록
-    - 조회 기간과 간격은 period, start, end, step 파라미터로 지정
+    - acc_id : 가속기 ID
+    - series : 원본 메트릭 라벨(metric_labels)과 (시각, 전력 W) 쌍 목록(values)
+
+    조회 기간과 간격은 period, start, end, step 으로 지정. 기간 미지정 시 최근 1시간.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -617,8 +625,8 @@ async def get_accelerator_temperature(
 ) -> AcceleratorTemperatureResponse:
     """가속기 한 장의 현재 온도 조회
 
-    - 가속기 ID
-    - 온도(°C)
+    - acc_id : 가속기 ID
+    - temperature_celsius : 온도(°C)
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -649,10 +657,10 @@ async def get_accelerator_temperature(
 async def list_partitions(
     request: Request, cluster: str, node: str, acc_id: str, params: PaginationParams = Depends()
 ) -> PartitionListResponse:
-    """가속기 한 장을 여러 조각으로 나눈 파티션 목록 조회
+    """가속기 한 장을 나눈 파티션 목록 조회
 
     - 파티션 ID, 프로파일, 사용률(%)
-    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    - 파티션 데이터 미수집 상태로 status="partial", data 빈 목록, PARTITION_DATA_NOT_AVAILABLE 경고 반환
     """
     return PartitionListResponse(status="partial", data=[], warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
@@ -664,10 +672,10 @@ async def list_partitions(
 async def get_partition(
     request: Request, cluster: str, node: str, acc_id: str, partition_id: str
 ) -> PartitionDetailResponse:
-    """파티션 ID로 단일 파티션 상세 조회
+    """파티션 ID로 파티션 한 개의 상세 조회
 
     - 파티션 ID, 프로파일, 사용률(%)
-    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    - 파티션 데이터 미수집 상태로 status="partial", data=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
     """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])
 
@@ -679,11 +687,11 @@ async def get_partition(
 async def get_partition_power(
     request: Request, cluster: str, node: str, acc_id: str, partition_id: str
 ) -> PartitionPowerResponse:
-    """파티션 한 조각에 배분되는 전력 조회
+    """파티션 한 개에 배분되는 전력 조회
 
-    - 가속기 ID, 파티션 ID
-    - 전력(W), 카드 전력을 파티션 점유 비율로 나눈 추정치
-    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    - acc_id, partition_id : 가속기 ID, 파티션 ID
+    - power_watts : 카드 전력을 파티션 점유 비율로 나눈 추정 전력(W)
+    - 파티션 데이터 미수집 상태로 status="partial", power_watts=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
     """
     return PartitionPowerResponse(
         status="partial",
@@ -706,11 +714,11 @@ async def get_partition_power_timeseries(
     partition_id: str,
     params: TimeseriesParams = Depends(),
 ) -> PartitionPowerTimeseriesResponse:
-    """파티션 한 조각의 전력 변화 추이 조회
+    """파티션 한 개의 전력 변화 추이 조회
 
-    - 가속기 ID, 파티션 ID
-    - (시각, 전력값) 쌍 목록
-    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    - acc_id, partition_id : 가속기 ID, 파티션 ID
+    - series : 원본 메트릭 라벨과 (시각, 전력 W) 쌍 목록
+    - 파티션 데이터 미수집 상태로 status="partial", series 빈 목록, PARTITION_DATA_NOT_AVAILABLE 경고 반환
     """
     return PartitionPowerTimeseriesResponse(
         status="partial",
@@ -734,17 +742,16 @@ def _accelerator_links(cluster: str, acc_id: str, node: Optional[str]) -> dict:
     return links
 
 
-@router.get("/clusters/{cluster}/accelerators/{acc_id}", summary="가속기 상세(노드 생략 경로)")
+@router.get("/clusters/{cluster}/accelerators/{acc_id}", summary="가속기 상세(노드 없이 조회)")
 async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
-    """노드 이름을 몰라도 가속기 ID(UUID)만으로 상세 조회
+    """노드 이름 없이 가속기 ID만으로 카드 한 장의 고정 정보 조회
 
     - 가속기 ID, 벤더, 클러스터, 노드, 모델명
-    - 총 메모리(bytes)
-    - 전력 상한(W)과 출처(카드 설정값 또는 스펙 TDP)
-    - 사용률, 온도, 전력 같은 계속 바뀌는 값은 .../metrics 에서 조회
-    - `_links.canonical` 에 노드까지 포함한 정식 경로 안내
+    - 총 메모리(bytes), 전력 상한(W)과 출처(measured | spec_tdp), 원본 메트릭 라벨
+    - _links.self : 이번 요청 경로
+    - _links.canonical : 클러스터와 노드를 포함한 정식 경로 (카드를 찾은 경우만)
 
-    클러스터 전체를 훑어 ID가 일치하는 카드를 찾는 방식.
+    클러스터 전체에서 ID가 일치하는 카드를 찾는 방식. 없으면 ACCELERATOR_NOT_FOUND, 모르는 클러스터면 UNKNOWN_CLUSTER 경고.
     """
     vendor = await _get_vendor(cluster)
     if vendor is None:
@@ -765,14 +772,14 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
 
 @router.get(
     "/clusters/{cluster}/accelerators/{acc_id}/partitions/{partition_id}",
-    summary="파티션 상세(노드 생략 경로)",
+    summary="파티션 상세(노드 없이 조회)",
 )
 async def get_partition_alias(
     request: Request, cluster: str, acc_id: str, partition_id: str
 ) -> PartitionDetailResponse:
-    """노드 이름을 몰라도 파티션 ID만으로 상세 조회
+    """노드 이름 없이 파티션 ID만으로 파티션 한 개의 상세 조회
 
     - 파티션 ID, 프로파일, 사용률(%)
-    - 현재 카드 분할 기능을 쓰지 않아 status="not_implemented" 반환
+    - 파티션 데이터 미수집 상태로 status="partial", data=null, PARTITION_DATA_NOT_AVAILABLE 경고 반환
     """
     return PartitionDetailResponse(status="partial", data=None, warnings=["PARTITION_DATA_NOT_AVAILABLE"])

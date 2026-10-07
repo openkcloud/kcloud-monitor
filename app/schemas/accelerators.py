@@ -12,302 +12,295 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class AcceleratorItem(BaseModel):
-    """단일 가속기 요약 정보."""
+_DESC_ACC_ID = "가속기 ID. NVIDIA, Rebellions 는 카드 UUID, Furiosa 는 장치 이름(예: npu0)"
+_DESC_VENDOR = "가속기 벤더 (nvidia | furiosa | rebellions)"
+_DESC_LABELS = "원본 메트릭 라벨 (키: 라벨 이름, 값: 라벨 값)"
+_DESC_UTIL = "사용률(%). 미수집 시 null"
+_DESC_TEMP = "온도(°C). 미수집 시 null"
+_DESC_POWER = "전력(W). 미수집 시 null"
+_DESC_MEM_USED = "사용 메모리(bytes). 벤더마다 다른 원본 단위를 bytes 로 통일, 미수집 시 null"
+_DESC_MEM_TOTAL = "총 메모리(bytes). 벤더마다 다른 원본 단위를 bytes 로 통일, 미수집 시 null"
+_DESC_HEALTHY = (
+    "정상 동작 여부. NVIDIA: 최근 10분 XID 오류 없음, Furiosa: 장치 응답 정상, "
+    "Rebellions: 장치 상태 정상. 미수집 시 null"
+)
+_DESC_POWER_LIMIT = "전력 상한(W). 카드에서 읽은 설정값, 없으면 제조사 규격 TDP. 둘 다 없으면 null"
+_DESC_POWER_LIMIT_SOURCE = (
+    "전력 상한 출처 (measured | spec_tdp). measured: 카드 설정값, spec_tdp: 제조사 규격 TDP. "
+    "상한이 없으면 null"
+)
+_DESC_POWER_LIMIT_PERCENT = "전력 상한 대비 현재 전력(%). 판정 불가 시 null"
+_DESC_POWER_CAPPED = (
+    "전력 상한 도달 여부. 클럭 제한 사유가 없으면 상한 대비 95% 이상일 때 true, 판정 불가 시 null"
+)
+_DESC_THROTTLED = "쓰로틀링 여부. 판정에 필요한 값이 비면 null"
+_DESC_THROTTLE_SOURCE = (
+    "쓰로틀링 판정 근거 (clock_reason | inferred). clock_reason: GPU 클럭 제한 사유 직접 관측, "
+    "inferred: 사용률 90% 이상 유지, 최근 10분 고온, 전력 하락으로 간접 판정. 판정 불가 시 null"
+)
+_DESC_THROTTLE_REASONS = (
+    "클럭 제한 사유 목록 (sw_power_cap | hw_slowdown | sw_thermal | hw_thermal | hw_power_brake). "
+    "판정 근거가 clock_reason 일 때만 채움"
+)
+_DESC_SERIES_VALUES = "(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC, 값은 전력(W) 숫자 문자열"
 
-    acc_id: str
-    vendor: str
-    cluster: str
-    node: Optional[str] = None
-    model: Optional[str] = None
-    utilization_percent: Optional[float] = Field(
-        None, description="사용률 (%). NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
-    )
-    temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
-    power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
-    memory_used_bytes: Optional[float] = Field(
-        None, description="사용 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
-    )
-    memory_total_bytes: Optional[float] = Field(
-        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
-    )
-    healthy: Optional[bool] = None
-    power_limit_watts: Optional[float] = Field(
-        None, description="전력 상한 (와트 W). 카드에서 읽은 설정값, 없으면 제조사 스펙 TDP"
-    )
-    power_limit_source: Optional[str] = Field(
-        None, description="상한 출처. measured = 카드 설정값 / spec_tdp = 스펙 TDP로 대체"
-    )
-    power_limit_percent: Optional[float] = Field(None, description="상한 대비 현재 전력 (%)")
-    power_capped: Optional[bool] = Field(
-        None, description="전력 상한에 걸린 상태 여부. 클럭 사유가 없으면 상한 대비 95% 이상일 때 참"
-    )
-    throttled: Optional[bool] = Field(
-        None, description="쓰로틀링 여부. 판정에 필요한 값이 비면 null(미판정)"
-    )
-    throttle_source: Optional[str] = Field(
-        None,
-        description="판정 근거. clock_reason = GPU 클럭 제한 사유 직접 관측 / "
-        "inferred = 사용률 90% 이상 유지, 최근 10분 고온, 전력이 15분 최대의 85% 미만으로 간접 판정",
-    )
-    throttle_reasons: list[str] = Field(
-        default_factory=list,
-        description="클럭 제한 사유(clock_reason일 때만). sw_power_cap, hw_slowdown, sw_thermal, hw_thermal, hw_power_brake",
-    )
-    labels: dict[str, str] = {}
+
+class AcceleratorItem(BaseModel):
+    """가속기 한 장의 현재 상태."""
+
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    vendor: str = Field(..., description=_DESC_VENDOR)
+    cluster: str = Field(..., description="소속 클러스터 이름")
+    node: Optional[str] = Field(None, description="카드가 장착된 노드(호스트) 이름. 확인 불가 시 null")
+    model: Optional[str] = Field(None, description="모델명 (예: NVIDIA L40S, RNGD). 확인 불가 시 null")
+    utilization_percent: Optional[float] = Field(None, description=_DESC_UTIL)
+    temperature_celsius: Optional[float] = Field(None, description=_DESC_TEMP)
+    power_watts: Optional[float] = Field(None, description=_DESC_POWER)
+    memory_used_bytes: Optional[float] = Field(None, description=_DESC_MEM_USED)
+    memory_total_bytes: Optional[float] = Field(None, description=_DESC_MEM_TOTAL)
+    healthy: Optional[bool] = Field(None, description=_DESC_HEALTHY)
+    power_limit_watts: Optional[float] = Field(None, description=_DESC_POWER_LIMIT)
+    power_limit_source: Optional[str] = Field(None, description=_DESC_POWER_LIMIT_SOURCE)
+    power_limit_percent: Optional[float] = Field(None, description=_DESC_POWER_LIMIT_PERCENT)
+    power_capped: Optional[bool] = Field(None, description=_DESC_POWER_CAPPED)
+    throttled: Optional[bool] = Field(None, description=_DESC_THROTTLED)
+    throttle_source: Optional[str] = Field(None, description=_DESC_THROTTLE_SOURCE)
+    throttle_reasons: list[str] = Field(default_factory=list, description=_DESC_THROTTLE_REASONS)
+    labels: dict[str, str] = Field({}, description=_DESC_LABELS)
 
 
 class AcceleratorSummaryData(BaseModel):
-    """가속기 집계 요약 데이터."""
+    """가속기 집계 요약."""
 
-    count: int
-    vendor: Optional[str] = None
-    avg_utilization_percent: Optional[float] = Field(
-        None, description="평균 사용률 (%). NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
-    )
-    avg_temperature_celsius: Optional[float] = Field(None, description="평균 온도 (섭씨 °C)")
-    avg_power_watts: Optional[float] = Field(None, description="평균 전력 (와트 W)")
-    total_power_watts: Optional[float] = Field(None, description="전력 합계 (와트 W)")
+    count: int = Field(..., description="집계에 포함된 가속기(카드) 수")
+    vendor: Optional[str] = Field(None, description=_DESC_VENDOR)
+    avg_utilization_percent: Optional[float] = Field(None, description="평균 사용률(%). 미수집 시 null")
+    avg_temperature_celsius: Optional[float] = Field(None, description="평균 온도(°C). 미수집 시 null")
+    avg_power_watts: Optional[float] = Field(None, description="평균 전력(W). 미수집 시 null")
+    total_power_watts: Optional[float] = Field(None, description="전력 합계(W). 미수집 시 null")
 
 
 class AcceleratorListResponse(BaseModel):
-    """GET .../accelerators 응답."""
+    """가속기 목록 응답."""
 
-    status: str
-    data: list[AcceleratorItem] = []
-    total: int = Field(0, description="페이지와 무관한 전체 가속기 개수")
+    status: str = Field(..., description=DESC_STATUS)
+    data: list[AcceleratorItem] = Field([], description="가속기 목록. limit, offset 으로 자른 페이지")
+    total: int = Field(0, description=DESC_TOTAL)
     summary: Optional[AcceleratorSummaryData] = Field(
-        None, description="노드 가속기 집계. 개수, 벤더, 평균 사용률·온도·전력, 전력 합계"
+        None, description="노드 가속기 집계. 카드 수, 벤더, 평균 사용률, 평균 온도, 평균 전력, 전력 합계"
     )
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class TopologyLinkItem(BaseModel):
-    """토폴로지 연결 1건(NVLink/PCIe 대역폭)."""
+    """가속기 간 통신 링크 하나."""
 
-    metric_labels: dict[str, str]
-    value: Optional[float] = None
+    metric_labels: dict[str, str] = Field(
+        ..., description="원본 메트릭 라벨 (키: 라벨 이름, 값: 라벨 값). 출발 카드와 도착 카드 정보 포함"
+    )
+    value: Optional[float] = Field(None, description="링크 대역폭 값. 벤더 exporter 원본 값, 미수집 시 null")
 
 
 class AcceleratorTopologyData(BaseModel):
-    """가속기 인터커넥트 토폴로지 데이터."""
+    """가속기 간 연결 토폴로지."""
 
-    vendor: Optional[str] = None
-    links: list[TopologyLinkItem] = []
+    vendor: Optional[str] = Field(None, description=_DESC_VENDOR)
+    links: list[TopologyLinkItem] = Field([], description="링크 목록. NPU 클러스터는 빈 목록")
 
 
 class AcceleratorTopologyResponse(BaseModel):
-    """GET .../accelerators/topology 응답."""
+    """가속기 토폴로지 응답."""
 
-    status: str
-    data: AcceleratorTopologyData
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: AcceleratorTopologyData = Field(..., description="가속기 간 연결 토폴로지")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class AcceleratorInfo(BaseModel):
-    """가속기 한 장의 정체 정보. 계속 바뀌는 사용량은 .../metrics 에서 조회."""
+    """가속기 한 장의 고정 정보."""
 
-    acc_id: str
-    vendor: str
-    cluster: str
-    node: Optional[str] = None
-    model: Optional[str] = None
-    memory_total_bytes: Optional[float] = Field(
-        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
-    )
-    power_limit_watts: Optional[float] = Field(
-        None, description="전력 상한 (와트 W). 카드에서 읽은 설정값, 없으면 제조사 스펙 TDP"
-    )
-    power_limit_source: Optional[str] = Field(
-        None, description="상한 출처. measured = 카드 설정값 / spec_tdp = 스펙 TDP로 대체"
-    )
-    labels: dict[str, str] = {}
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    vendor: str = Field(..., description=_DESC_VENDOR)
+    cluster: str = Field(..., description="소속 클러스터 이름")
+    node: Optional[str] = Field(None, description="카드가 장착된 노드(호스트) 이름. 확인 불가 시 null")
+    model: Optional[str] = Field(None, description="모델명 (예: NVIDIA L40S, RNGD). 확인 불가 시 null")
+    memory_total_bytes: Optional[float] = Field(None, description=_DESC_MEM_TOTAL)
+    power_limit_watts: Optional[float] = Field(None, description=_DESC_POWER_LIMIT)
+    power_limit_source: Optional[str] = Field(None, description=_DESC_POWER_LIMIT_SOURCE)
+    labels: dict[str, str] = Field({}, description=_DESC_LABELS)
 
 
 class AcceleratorDetailResponse(BaseModel):
-    """GET .../accelerators/{acc_id} 응답."""
+    """가속기 상세 응답."""
 
-    status: str
-    data: Optional[AcceleratorInfo] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: Optional[AcceleratorInfo] = Field(None, description="가속기 상세. 대상이 없으면 null")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class AcceleratorMetricsData(BaseModel):
-    """가속기 실시간 메트릭 상세 데이터."""
+    """가속기 실시간 메트릭."""
 
-    utilization_percent: Optional[float] = Field(
-        None, description="사용률 (%). NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
-    )
-    memory_used_bytes: Optional[float] = Field(
-        None, description="사용 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
-    )
-    memory_total_bytes: Optional[float] = Field(
-        None, description="총 메모리 (bytes). 벤더마다 다른 원본 단위를 bytes로 통일"
-    )
-    power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
-    temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
-    healthy: Optional[bool] = None
-    power_limit_percent: Optional[float] = Field(None, description="전력 상한 대비 현재 전력 (%)")
-    power_capped: Optional[bool] = Field(
-        None, description="전력 상한에 걸린 상태 여부. 클럭 사유가 없으면 상한 대비 95% 이상일 때 참"
-    )
-    throttled: Optional[bool] = Field(
-        None, description="쓰로틀링 여부. 판정에 필요한 값이 비면 null(미판정)"
-    )
-    throttle_source: Optional[str] = Field(
-        None,
-        description="판정 근거. clock_reason = GPU 클럭 제한 사유 직접 관측 / "
-        "inferred = 사용률 90% 이상 유지, 최근 10분 고온, 전력이 15분 최대의 85% 미만으로 간접 판정",
-    )
-    throttle_reasons: list[str] = Field(
-        default_factory=list,
-        description="클럭 제한 사유(clock_reason일 때만). sw_power_cap, hw_slowdown, sw_thermal, hw_thermal, hw_power_brake",
-    )
+    utilization_percent: Optional[float] = Field(None, description=_DESC_UTIL)
+    memory_used_bytes: Optional[float] = Field(None, description=_DESC_MEM_USED)
+    memory_total_bytes: Optional[float] = Field(None, description=_DESC_MEM_TOTAL)
+    power_watts: Optional[float] = Field(None, description=_DESC_POWER)
+    temperature_celsius: Optional[float] = Field(None, description=_DESC_TEMP)
+    healthy: Optional[bool] = Field(None, description=_DESC_HEALTHY)
+    power_limit_percent: Optional[float] = Field(None, description=_DESC_POWER_LIMIT_PERCENT)
+    power_capped: Optional[bool] = Field(None, description=_DESC_POWER_CAPPED)
+    throttled: Optional[bool] = Field(None, description=_DESC_THROTTLED)
+    throttle_source: Optional[str] = Field(None, description=_DESC_THROTTLE_SOURCE)
+    throttle_reasons: list[str] = Field(default_factory=list, description=_DESC_THROTTLE_REASONS)
     extra: dict[str, float] = Field(
         default_factory=dict,
-        description="벤더별 부가 메트릭(현재 NVIDIA만). sm_clock, mem_clock = 동작 주파수(MHz) / "
-        "mem_copy_util, dec_util, enc_util = 사용률(%) / pcie_replay = 누적 발생 횟수",
+        description="벤더별 부가 메트릭. 키: sm_clock, mem_clock(MHz), mem_copy_util, dec_util, enc_util(%), "
+        "pcie_replay(누적 횟수). 해당 메트릭이 없는 벤더는 빈 객체",
     )
 
 
 class AcceleratorMetricsResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/metrics 응답."""
+    """가속기 실시간 메트릭 응답."""
 
-    status: str
-    acc_id: str
-    vendor: Optional[str] = None
-    data: AcceleratorMetricsData
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    vendor: Optional[str] = Field(None, description=_DESC_VENDOR + ". 모르는 클러스터면 null")
+    data: AcceleratorMetricsData = Field(..., description="가속기 실시간 메트릭. 대상이 없으면 모든 값 null")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PowerData(BaseModel):
     """가속기 전력 현재값."""
 
-    power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
+    power_watts: Optional[float] = Field(None, description="전력(W). 벤더 exporter 실측값, 미수집 시 null")
 
 
 class AcceleratorPowerResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/power 응답."""
+    """가속기 전력 응답."""
 
-    status: str
-    acc_id: str
-    data: PowerData
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    data: PowerData = Field(..., description="가속기 전력 현재값")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PowerSeriesItem(BaseModel):
-    """전력 시계열 단일 시리즈."""
+    """전력 시계열 하나."""
 
-    metric_labels: dict[str, str]
-    values: list[tuple[str, str]] = Field(
-        ..., description="(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC 형식"
-    )
+    metric_labels: dict[str, str] = Field(..., description=_DESC_LABELS)
+    values: list[tuple[str, str]] = Field(..., description=_DESC_SERIES_VALUES)
 
 
 class AcceleratorPowerTimeseriesResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/power/timeseries 응답."""
+    """가속기 전력 시계열 응답."""
 
-    status: str
-    acc_id: str
-    series: list[PowerSeriesItem] = []
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    series: list[PowerSeriesItem] = Field([], description="메트릭 라벨별 전력 시계열 목록")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class TemperatureData(BaseModel):
     """가속기 온도 현재값."""
 
-    temperature_celsius: Optional[float] = Field(None, description="온도 (섭씨 °C)")
+    temperature_celsius: Optional[float] = Field(None, description=_DESC_TEMP)
 
 
 class AcceleratorTemperatureResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/temperature 응답."""
+    """가속기 온도 응답."""
 
-    status: str
-    acc_id: str
-    data: TemperatureData
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    data: TemperatureData = Field(..., description="가속기 온도 현재값")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PartitionItem(BaseModel):
-    """가속기를 나눈 파티션 한 조각의 정보. 현재 수집 데이터 없음."""
+    """가속기를 나눈 파티션 한 개의 정보."""
 
-    partition_id: str
-    profile: Optional[str] = None
-    utilization_percent: Optional[float] = Field(
-        None, description="사용률 (%). NVIDIA=0~100 확정, Furiosa/Rebellions 스케일 미확정"
-    )
+    partition_id: str = Field(..., description="파티션 ID")
+    profile: Optional[str] = Field(None, description="파티션 프로파일 이름. 미수집 시 null")
+    utilization_percent: Optional[float] = Field(None, description=_DESC_UTIL)
 
 
 class PartitionListResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/partitions 응답."""
+    """파티션 목록 응답."""
 
-    status: str
-    data: list[PartitionItem] = []
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: list[PartitionItem] = Field([], description="파티션 목록")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PartitionDetailResponse(BaseModel):
-    """GET .../accelerators/{acc_id}/partitions/{partition_id} 응답."""
+    """파티션 상세 응답."""
 
-    status: str
-    data: Optional[PartitionItem] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    data: Optional[PartitionItem] = Field(None, description="파티션 상세. 대상이 없으면 null")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PartitionPowerData(BaseModel):
-    """파티션 한 조각에 배분된 전력 추정값. 현재 수집 데이터 없음."""
+    """파티션 한 개에 배분된 전력 추정값."""
 
-    power_watts: Optional[float] = Field(None, description="전력 (와트 W)")
+    power_watts: Optional[float] = Field(
+        None, description="카드 전력을 파티션 점유 비율로 나눈 추정 전력(W). 미수집 시 null"
+    )
 
 
 class PartitionPowerResponse(BaseModel):
-    """GET .../partitions/{partition_id}/power 응답."""
+    """파티션 전력 응답."""
 
-    status: str
-    acc_id: str
-    partition_id: str
-    data: PartitionPowerData
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    partition_id: str = Field(..., description="파티션 ID")
+    data: PartitionPowerData = Field(..., description="파티션 전력 추정값")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class PartitionPowerTimeseriesResponse(BaseModel):
-    """GET .../partitions/{partition_id}/power/timeseries 응답."""
+    """파티션 전력 시계열 응답."""
 
-    status: str
-    acc_id: str
-    partition_id: str
-    series: list[PowerSeriesItem] = []
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    status: str = Field(..., description=DESC_STATUS)
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
+    partition_id: str = Field(..., description="파티션 ID")
+    series: list[PowerSeriesItem] = Field([], description="메트릭 라벨별 전력 시계열 목록")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
 class ThrottlingSeriesItem(BaseModel):
-    """카드 1장의 기간 내 쓰로틀링 판정 시계열."""
+    """카드 한 장의 기간 내 쓰로틀링 판정 시계열."""
 
-    vendor: str
-    cluster: str
-    node: Optional[str] = None
-    acc_id: str
+    vendor: str = Field(..., description=_DESC_VENDOR)
+    cluster: str = Field(..., description="소속 클러스터 이름")
+    node: Optional[str] = Field(None, description="카드가 장착된 노드(호스트) 이름. 확인 불가 시 null")
+    acc_id: str = Field(..., description=_DESC_ACC_ID)
     values: list[tuple[str, str]] = Field(
-        ..., description="(시각, 값) 쌍 목록. 값 1 = 쓰로틀링, 0 = 아님. 판정에 필요한 값이 빠진 시각은 점 없음"
+        ...,
+        description="(시각, 판정값) 쌍 목록. 시각은 ISO 8601 UTC, 판정값 (1 | 0). 1: 쓰로틀링, 0: 정상. "
+        "판정에 필요한 값이 빠진 시각은 점 없음",
     )
     throttle_events: int = Field(..., description="기간 안에서 쓰로틀링이 시작된 횟수")
-    throttled_minutes: float = Field(..., description="기간 안에서 쓰로틀링 상태였던 시간 (분). 1인 점 수 × step")
+    throttled_minutes: float = Field(
+        ..., description="기간 안에서 쓰로틀링 상태였던 시간(분). 판정값 1인 점 수와 step 의 곱"
+    )
 
 
 class ThrottlingSummary(BaseModel):
@@ -316,17 +309,19 @@ class ThrottlingSummary(BaseModel):
     cards_total: int = Field(..., description="판정 값이 있는 카드 수")
     cards_throttled: int = Field(..., description="기간 안에 한 번이라도 쓰로틀링이 난 카드 수")
     throttle_events: int = Field(..., description="쓰로틀링 시작 횟수 합계")
-    throttled_minutes: float = Field(..., description="쓰로틀링 시간 합계 (분). 카드별 시간을 더한 값")
-    step_seconds: float = Field(..., description="판정 간격 (초). 이보다 짧게 끝난 쓰로틀링은 놓칠 수 있음")
+    throttled_minutes: float = Field(..., description="쓰로틀링 시간 합계(분). 카드별 시간을 더한 값")
+    step_seconds: float = Field(..., description="판정 간격(초). 이보다 짧게 끝난 쓰로틀링은 놓칠 수 있음")
 
 
 class ThrottlingTimeseriesResponse(BaseModel):
-    """GET /monitoring/throttling/timeseries 응답."""
+    """쓰로틀링 시계열 응답."""
 
-    status: str
+    status: str = Field(..., description=DESC_STATUS)
     series: list[ThrottlingSeriesItem] = Field(
-        default_factory=list, description="카드별 시계열. detail=true일 때만 채움"
+        default_factory=list, description="카드별 쓰로틀링 판정 시계열 목록. detail=true 일 때만 채움"
     )
-    summary: Optional[ThrottlingSummary] = None
-    observed_at: str = Field(default_factory=_now)
-    warnings: list[str] = []
+    summary: Optional[ThrottlingSummary] = Field(
+        None, description="조회 대상 카드 전체의 쓰로틀링 합계. 판정 값이 없으면 null"
+    )
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
