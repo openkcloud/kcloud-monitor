@@ -19,6 +19,7 @@ from app.api.v2 import (
     nodes,
     openstack,
     resource_map,
+    slo,
     storage,
     system,
     workloads,
@@ -152,6 +153,7 @@ API_DESCRIPTION = """
 - Export : 전력, 메트릭, 리포트를 CSV 또는 JSON으로 내보내기
 - Resource Map : Pod 하나가 올라간 노드, VM, 물리 서버 추적
 - Alerts : 알람 정책, 알림 채널, 활성 알람, 이력
+- SLO : LLM 서빙 응답 속도(TTFT, TPOT) 목표 달성률, 오류 예산, 시계열
 """
 
 app = FastAPI(
@@ -222,6 +224,7 @@ app.include_router(logs.router, prefix=V2, tags=["Logs"], dependencies=PROTECTED
 app.include_router(export.router, prefix=V2, tags=["Export"], dependencies=PROTECTED)
 app.include_router(resource_map.router, prefix=V2, tags=["Resource Map"], dependencies=PROTECTED)
 app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTECTED)
+app.include_router(slo.router, prefix=V2, tags=["SLO"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
