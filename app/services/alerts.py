@@ -415,7 +415,9 @@ async def evaluate_resource(policy: dict) -> tuple[dict[str, dict], list[str]]:
 
 def _logql(policy: dict) -> str:
     target = policy.get("target") or {}
-    sel = f'{{cluster="{target["cluster"]}"}}' if target.get("cluster") else '{cluster=~".+"}'
+    # Loki 는 자기가 실행한 쿼리를 로그로 남기므로 우리 정규식이 그 줄에 다시 걸림. Loki 컨테이너 로그는 제외
+    cluster = f'cluster="{target["cluster"]}"' if target.get("cluster") else 'cluster=~".+"'
+    sel = f'{{{cluster}, container!="loki"}}'
     regex = LOG_METRICS[policy["metric"]][1]
     pattern = regex.replace("\\", "\\\\").replace('"', '\\"')
     return f'sum by (cluster) (count_over_time({sel} |~ "{pattern}" [{int(policy.get("window_min", 5))}m]))'
@@ -436,11 +438,10 @@ async def evaluate_log(policy: dict) -> tuple[dict[str, dict], list[str]]:
             continue
         results[_fp(policy["id"], t)] = {"target": t, "value": value,
                                           "cond": OPS[policy["op"]](value, policy["threshold"])}
-    # Loki 는 0건인 스트림을 아예 돌려주지 않는다. 대상 cluster 가 고정이면 0건으로 채워 해제가 되게 한다.
-    target = policy.get("target") or {}
-    if target.get("cluster") and not results:
-        t = {"cluster": target["cluster"]}
-        results[_fp(policy["id"], t)] = {"target": t, "value": 0.0, "cond": OPS[policy["op"]](0.0, policy["threshold"])}
+    # Loki 는 0건인 스트림을 아예 돌려주지 않음. 지금 걸려 있는 알람 중 결과에 없는 대상은 0건으로 채워 해제되게 함
+    for fp, row in (await store.active_for_policy(policy["id"])).items():
+        if fp not in results:
+            results[fp] = {"target": row["target"], "value": 0.0, "cond": OPS[policy["op"]](0.0, policy["threshold"])}
     return results, []
 
 
