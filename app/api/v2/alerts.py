@@ -26,7 +26,7 @@ from app.schemas.alerts import (
     PreviewItem,
 )
 from app.services import alerts
-from app.services.alerts import LOG_METRICS, RESOURCE_METRICS, metric_kind, store
+from app.services.alerts import LOG_METRICS, RESOURCE_METRICS, SLO_METRICS, metric_kind, store
 
 router = APIRouter(prefix="/alerts")
 
@@ -36,7 +36,7 @@ def _require_store() -> None:
         raise HTTPException(status_code=503, detail="ALERT_STORE_NOT_CONFIGURED: DATABASE_URL 을 설정하세요")
 
 
-_SELECTOR_KEYS = {"resource": {"cluster", "node", "acc_id"}, "log": {"cluster"}}
+_SELECTOR_KEYS = {"resource": {"cluster", "node", "acc_id"}, "log": {"cluster"}, "slo": {"cluster", "model"}}
 # 대상 값은 PromQL, LogQL 셀렉터에 그대로 들어가므로 라벨 값에 쓰이는 문자만 허용 (주입 방지)
 _SELECTOR_VALUE = re.compile(r"^[A-Za-z0-9_.:\-/]+$")
 _DURATION = re.compile(r"^(\d+)m$")
@@ -115,7 +115,7 @@ async def list_metrics():
 
     응답
 
-    * 지표별 `key`, 종류(`resource` | `log`), 이름, 단위
+    * 지표별 `key`, 종류(`resource` | `log` | `slo`), 이름, 단위
     * `total`: 지표 개수
 
     사용법
@@ -123,9 +123,11 @@ async def list_metrics():
     * 정책 생성 시 `metric` 에 `key` 를 그대로 넣음
     * `resource`: 가속기 값 (온도, 사용률 등)
     * `log`: 정해진 시간 동안 특정 로그가 나온 건수
+    * `slo`: vLLM 서빙의 최근 `window_min` 분 TTFT, TPOT p95(ms)와 지금 대기 요청 수
     """
     data = [MetricItem(key=k, kind="resource", label=v[0], unit=v[1]) for k, v in RESOURCE_METRICS.items()]
     data += [MetricItem(key=k, kind="log", label=v[0], unit="건") for k, v in LOG_METRICS.items()]
+    data += [MetricItem(key=k, kind="slo", label=v[0], unit=v[1]) for k, v in SLO_METRICS.items()]
     return ListResponse(data=data, total=len(data))
 
 
@@ -141,7 +143,7 @@ async def list_policies():
 
     응답
 
-    * 정책별 ID, 이름, 종류(`resource` | `log`), 지표
+    * 정책별 ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부
     * `total`: 정책 개수
@@ -167,8 +169,9 @@ async def create_policy(body: PolicyCreate):
     * `op`: `>=` | `>` | `<=` | `<` | `==` | `!=` (기본 `>=`)
     * `threshold`: 임계값 숫자 (필수)
     * `duration`: 이 시간 동안 계속되면 발생, `5m` 처럼 숫자 + `m` (기본 `0m`, 즉시)
-    * `window_min`: `log` 지표만, 건수를 세는 기간(분) (기본 `5`)
+    * `window_min`: `log`, `slo` 지표만, 건수를 세거나 p95 를 계산하는 기간(분) (기본 `5`)
     * `selector`: 감시 대상, `cluster=l40s,node=innogrid-l40s` (기본 전체)
+    * `slo` 지표의 `selector` 예: `cluster=l40s,model=qwen2.5-3b`
     * `severity`: `info` | `warning` | `critical` (기본 `warning`)
     * `channels`: `email` | `slack` | `webhook` 중 여러 개 (기본 없음)
 
@@ -180,6 +183,7 @@ async def create_policy(body: PolicyCreate):
 
     * 422: 목록에 없는 지표, `duration` 형식 오류, 쓸 수 없는 대상 키, 등록되지 않은 채널 종류
     * `log` 지표의 `selector` 는 `cluster` 만 가능
+    * `slo` 지표의 `selector` 는 `cluster`, `model` 만 가능
     """
     _require_store()
     row = await store.create_policy(await _to_row(body.model_dump()))
@@ -196,7 +200,7 @@ async def get_policy(policy_id: str):
 
     응답
 
-    * ID, 이름, 종류(`resource` | `log`), 지표
+    * ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부, 생성·수정 시각
 
@@ -231,7 +235,7 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
 
     오류
 
-    * 422: 종류(`resource` | `log`)가 다른 지표로 변경
+    * 422: 종류(`resource` | `log` | `slo`)가 다른 지표로 변경
     * 404: 없는 정책
     """
     _require_store()
@@ -240,7 +244,7 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
         raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     if "metric" in patch and metric_kind(patch["metric"]) != cur["kind"]:
-        raise HTTPException(status_code=422, detail="정책 종류(resource | log)는 바꿀 수 없음")
+        raise HTTPException(status_code=422, detail="정책 종류(resource | log | slo)는 바꿀 수 없음")
     if "duration" in patch:
         patch["for_min"] = _minutes(patch.pop("duration"))
     if "selector" in patch:

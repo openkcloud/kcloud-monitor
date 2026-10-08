@@ -3,7 +3,8 @@ KCloud Monitor v2 — 알람 서비스.
 
 네 부품으로 구성된다.
   1. AlertStore   : PostgreSQL(asyncpg) 저장소. policies / channels / alerts / events 4개 테이블.
-  2. 평가기        : kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki).
+  2. 평가기        : kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki),
+                     kind=slo 는 vLLM 서빙 지연(TTFT, TPOT p95)과 대기 요청 수(Prometheus).
   3. 상태머신      : pending -> firing -> resolved. plan_transition() 은 순수 함수라 DB 없이 테스트한다.
   4. 발송기        : webhook(httpx), email(smtplib).
 
@@ -51,12 +52,26 @@ LOG_METRICS: dict[str, tuple[str, str]] = {
 }
 
 
+# SLO 지표 키. 값은 (설명, 단위, PromQL). {sel} 은 대상 셀렉터, {w} 는 window_min 분. 대상은 (cluster, model_name).
+_TTFT_P95 = "histogram_quantile(0.95, sum by (le, cluster, model_name) (rate({m}_bucket{{sel}}[{{w}}m]))) * 1000"
+SLO_METRICS: dict[str, tuple[str, str, str]] = {
+    "slo_ttft_p95_ms": ("LLM 첫 글자까지 걸린 시간 p95 (TTFT)", "ms",
+                        _TTFT_P95.format(m="vllm:time_to_first_token_seconds")),
+    "slo_tpot_p95_ms": ("LLM 글자 하나당 걸린 시간 p95 (TPOT)", "ms",
+                        _TTFT_P95.format(m="vllm:request_time_per_output_token_seconds")),
+    "slo_requests_waiting": ("LLM 대기 요청 수", "건",
+                             "sum by (cluster, model_name) (vllm:num_requests_waiting{sel})"),
+}
+
+
 def metric_kind(key: str) -> Optional[str]:
     """지표 키로 정책 종류를 정함. 목록에 없으면 None."""
     if key in RESOURCE_METRICS:
         return "resource"
     if key in LOG_METRICS:
         return "log"
+    if key in SLO_METRICS:
+        return "slo"
     return None
 
 
@@ -74,7 +89,7 @@ CREATE TABLE IF NOT EXISTS alert_policies (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
-    kind          TEXT NOT NULL CHECK (kind IN ('resource','log')),
+    kind          TEXT NOT NULL CHECK (kind IN ('resource','log','slo')),
     metric        TEXT NOT NULL,
     op            TEXT NOT NULL DEFAULT '>=',
     threshold     DOUBLE PRECISION NOT NULL,
@@ -124,6 +139,9 @@ CREATE TABLE IF NOT EXISTS alert_events (
     message       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS alert_events_ts_idx ON alert_events(ts DESC);
+-- slo 종류 추가 전에 만든 테이블의 CHECK 제약 갱신
+ALTER TABLE alert_policies DROP CONSTRAINT IF EXISTS alert_policies_kind_check;
+ALTER TABLE alert_policies ADD CONSTRAINT alert_policies_kind_check CHECK (kind IN ('resource','log','slo'));
 """
 
 # 첫 기동 시 시드. 포탈에서 숫자만 바꿔 쓰는 것을 전제로 한다.
@@ -158,6 +176,12 @@ SEED_POLICIES: list[dict] = [
          for_min=0, severity="warning", description="프로그램이 죽고 재시작을 반복"),
     dict(id="log-006", name="커널 하드웨어 오류", kind="log", metric="log_hw_error", op=">=",
          threshold=1, window_min=5, for_min=0, severity="critical", description="CPU·메모리 하드웨어 오류"),
+    dict(id="slo-001", name="LLM 첫 응답 지연", kind="slo", metric="slo_ttft_p95_ms", op=">=",
+         threshold=500, window_min=5, for_min=2, severity="warning",
+         description="최근 5분 TTFT p95 가 목표 500ms 이상. 대기 줄이나 KV 캐시 부족 의심"),
+    dict(id="slo-002", name="LLM 생성 속도 저하", kind="slo", metric="slo_tpot_p95_ms", op=">=",
+         threshold=50, window_min=5, for_min=2, severity="warning",
+         description="최근 5분 TPOT p95 가 목표 50ms 이상. 동시 처리 과다나 GPU 쓰로틀링 의심"),
 ]
 
 
@@ -196,10 +220,13 @@ class AlertStore:
         self.pool = await asyncpg.create_pool(settings.DATABASE_URL, min_size=1, max_size=4)
         async with self.pool.acquire() as con:
             await con.execute(SCHEMA_SQL)
-            if await con.fetchval("SELECT count(*) FROM alert_policies") == 0:
-                for p in SEED_POLICIES:
-                    await self.create_policy(p)
-                logger.info("alert policies seeded: %d", len(SEED_POLICIES))
+            # 종류별로 정책이 하나도 없을 때만 시드. 사용자가 지운 시드가 재기동 때 되살아나지 않게 함
+            for kind in ("resource", "log", "slo"):
+                if await con.fetchval("SELECT count(*) FROM alert_policies WHERE kind=$1", kind) == 0:
+                    seeds = [p for p in SEED_POLICIES if p["kind"] == kind]
+                    for p in seeds:
+                        await self.create_policy(p)
+                    logger.info("alert policies seeded: kind=%s %d", kind, len(seeds))
 
     async def close(self) -> None:
         if self.pool:
@@ -339,7 +366,8 @@ store = AlertStore()
 # ---------------------------------------------------------------------------
 
 def _fp(policy_id: str, target: dict) -> str:
-    return policy_id + ":" + "/".join(str(target.get(k, "*")) for k in ("cluster", "node", "acc_id"))
+    fp = policy_id + ":" + "/".join(str(target.get(k, "*")) for k in ("cluster", "node", "acc_id"))
+    return fp + f"/{target['model']}" if target.get("model") else fp
 
 
 def _resource_value(metric: str, entry: dict, vendor: str) -> Optional[float]:
@@ -423,6 +451,30 @@ def _logql(policy: dict) -> str:
     return f'sum by (cluster) (count_over_time({sel} |~ "{pattern}" [{int(policy.get("window_min", 5))}m]))'
 
 
+async def evaluate_slo(policy: dict) -> tuple[dict[str, dict], list[str]]:
+    """vLLM 서빙(cluster, model_name)별 값. 기간 안에 요청이 없어 p95 가 NaN 이면 건너뜀(결측은 상태 유지)."""
+    from app.services.prometheus import prometheus_client
+
+    target = policy.get("target") or {}
+    esc = lambda v: v.replace("\\", "\\\\").replace('"', '\\"')
+    labels = {"cluster": target.get("cluster"), "model_name": target.get("model")}
+    sel = "{" + ",".join(f'{k}="{esc(v)}"' for k, v in labels.items() if v) + "}"
+    q = SLO_METRICS[policy["metric"]][2].format(sel=sel, w=int(policy.get("window_min", 5)))
+    results: dict[str, dict] = {}
+    for item in await prometheus_client.instant(q):
+        m = item.get("metric", {})
+        try:
+            value = float(item["value"][1])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if value != value:  # NaN
+            continue
+        t = {"cluster": m.get("cluster", "*"), "model": m.get("model_name", "*")}
+        results[_fp(policy["id"], t)] = {"target": t, "value": round(value, 2),
+                                          "cond": OPS[policy["op"]](value, policy["threshold"])}
+    return results, [] if results else ["NO_DATA"]
+
+
 async def evaluate_log(policy: dict) -> tuple[dict[str, dict], list[str]]:
     from app.services.loki import loki_client
 
@@ -471,8 +523,8 @@ def plan_transition(existing: Optional[dict], cond: bool, for_min: int, repeat_m
 
 
 def _message(policy: dict, target: dict, value: float, state: str) -> str:
-    unit = RESOURCE_METRICS.get(policy["metric"], ("", "건"))[1] if policy["kind"] == "resource" else "건"
-    where = " ".join(str(target[k]) for k in ("cluster", "node", "acc_id") if target.get(k))
+    unit = {"resource": RESOURCE_METRICS, "slo": SLO_METRICS}.get(policy["kind"], {}).get(policy["metric"], ("", "건"))[1]
+    where = " ".join(str(target[k]) for k in ("cluster", "node", "acc_id", "model") if target.get(k))
     head = "[해제] " if state == RESOLVED else f"[{policy['severity']}] "
     return f"{head}{policy['name']} - {where}: {value:g}{unit} ({policy['op']} {policy['threshold']:g})"
 
@@ -504,7 +556,8 @@ async def _apply(policy: dict, results: dict[str, dict], now: datetime) -> None:
 
 
 async def evaluate_policy(policy: dict) -> tuple[dict[str, dict], list[str]]:
-    return await (evaluate_log(policy) if policy["kind"] == "log" else evaluate_resource(policy))
+    evaluate = {"log": evaluate_log, "slo": evaluate_slo}.get(policy["kind"], evaluate_resource)
+    return await evaluate(policy)
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,8 @@
 알람 API v2 Pydantic 스키마.
 
 정책(policy)은 "지표가 선을 얼마 동안 넘으면 어느 채널로 알린다" 한 문장을 저장한 것.
-kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki).
+kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki),
+kind=slo 는 vLLM 서빙 지연과 대기 요청 수(Prometheus).
 """
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Optional
@@ -28,6 +29,7 @@ class AlertTarget(BaseModel):
     cluster: Optional[str] = Field(None, description="클러스터 이름 (예: l40s, furiosa, rebellions), 미지정 시 전체")
     node: Optional[str] = Field(None, description="노드 이름, resource 정책만 사용, 미지정 시 전체")
     acc_id: Optional[str] = Field(None, description="가속기 ID, resource 정책만 사용, 미지정 시 전체")
+    model: Optional[str] = Field(None, description="vLLM 모델 이름 (예: qwen2.5-3b), slo 정책만 사용, 미지정 시 전체")
 
 
 class PolicyCreate(BaseModel):
@@ -39,10 +41,10 @@ class PolicyCreate(BaseModel):
     op: Op = Field(">=", description="비교 연산자 (>= | > | <= | < | == | !=)")
     threshold: float = Field(..., description="임계값, 단위는 지표 목록의 unit")
     duration: str = Field("0m", description="이 시간 동안 조건이 계속되면 발생 (예: 5m), 0m 이면 즉시")
-    window_min: int = Field(5, ge=1, le=1440, description="log 지표만 사용, 건수를 세는 기간(분)")
+    window_min: int = Field(5, ge=1, le=1440, description="log, slo 지표만 사용, 건수를 세거나 p95 를 계산하는 기간(분)")
     selector: str = Field(
         "",
-        description="감시 대상 (예: cluster=l40s,node=innogrid-l40s), 비우면 전체, log 지표는 cluster 만 사용",
+        description="감시 대상 (예: cluster=l40s,node=innogrid-l40s), 비우면 전체, log 지표는 cluster 만, slo 지표는 cluster, model 만 사용",
     )
     severity: Annotated[Severity, _lower] = Field("warning", description="심각도 (info | warning | critical), 대소문자 무시")
     channels: list[ChannelType] = Field(
@@ -57,11 +59,11 @@ class PolicyPatch(BaseModel):
 
     name: Optional[str] = Field(None, description="정책 이름")
     description: Optional[str] = Field(None, description="정책 설명")
-    metric: Optional[str] = Field(None, description="지표 키, 같은 종류(resource | log) 안에서만 변경 가능")
+    metric: Optional[str] = Field(None, description="지표 키, 같은 종류(resource | log | slo) 안에서만 변경 가능")
     op: Optional[Op] = Field(None, description="비교 연산자 (>= | > | <= | < | == | !=)")
     threshold: Optional[float] = Field(None, description="임계값, 단위는 지표 목록의 unit")
     duration: Optional[str] = Field(None, description="지속 시간 (예: 5m)")
-    window_min: Optional[int] = Field(None, ge=1, le=1440, description="log 지표만 사용, 건수를 세는 기간(분)")
+    window_min: Optional[int] = Field(None, ge=1, le=1440, description="log, slo 지표만 사용, 건수를 세거나 p95 를 계산하는 기간(분)")
     selector: Optional[str] = Field(None, description="감시 대상 (예: cluster=l40s), 빈 문자열이면 전체")
     severity: Optional[Annotated[Severity, _lower]] = Field(None, description="심각도 (info | warning | critical)")
     channels: Optional[list[ChannelType]] = Field(None, description="알림 받을 채널 종류 (email | slack | webhook)")
@@ -74,14 +76,14 @@ class Policy(BaseModel):
     id: str = Field(..., description="정책 ID")
     name: str = Field(..., description="정책 이름")
     description: str = Field(..., description="정책 설명")
-    kind: Literal["resource", "log"] = Field(..., description="정책 종류 (resource | log), resource: 가속기 메트릭 기준, log: 로그 건수 기준")
+    kind: Literal["resource", "log", "slo"] = Field(..., description="정책 종류 (resource | log | slo), resource: 가속기 메트릭 기준, log: 로그 건수 기준, slo: vLLM 서빙 지연 기준")
     metric: str = Field(..., description="지표 키")
     op: Op = Field(..., description="비교 연산자 (>= | > | <= | < | == | !=)")
     threshold: float = Field(..., description="임계값, 단위는 지표 목록의 unit")
-    window_min: int = Field(..., description="로그 집계 창(분), log 정책만 사용")
+    window_min: int = Field(..., description="집계 창(분), log, slo 정책만 사용")
     for_min: int = Field(..., description="지속 시간(분)")
     severity: Severity = Field(..., description="심각도 (info | warning | critical)")
-    target: AlertTarget = Field(..., description="감시 대상 범위 (cluster, node, acc_id)")
+    target: AlertTarget = Field(..., description="감시 대상 범위 (cluster, node, acc_id, model)")
     channel_ids: list[str] = Field(..., description="알림을 보낼 채널 ID 목록, 비어 있으면 알림 발송 없음")
     enabled: bool = Field(..., description="정책 활성 여부")
     created_at: datetime = Field(..., description="생성 시각 (ISO 8601, UTC)")
@@ -92,9 +94,9 @@ class MetricItem(BaseModel):
     """알람 정책에 고를 수 있는 지표 1개"""
 
     key: str = Field(..., description="지표 키, 정책 생성 시 metric 에 그대로 넣음")
-    kind: Literal["resource", "log"] = Field(..., description="정책 종류 (resource | log), resource: 가속기 메트릭, log: 로그 건수")
+    kind: Literal["resource", "log", "slo"] = Field(..., description="정책 종류 (resource | log | slo), resource: 가속기 메트릭, log: 로그 건수, slo: vLLM 서빙 지연")
     label: str = Field(..., description="화면 표시용 이름")
-    unit: str = Field(..., description="임계값 단위 (%, °C, W, s, 건)")
+    unit: str = Field(..., description="임계값 단위 (%, °C, W, s, ms, 건)")
 
 
 _CHANNEL_CONFIG_DESC = (
@@ -148,7 +150,7 @@ class ActiveAlert(BaseModel):
     policy_id: str = Field(..., description="알람을 만든 정책 ID")
     state: Literal["pending", "firing", "resolved"] = Field(..., description="알람 상태 (pending | firing | resolved), pending: 지속 시간 채우는 중, firing: 발생 중, resolved: 해제")
     severity: Severity = Field(..., description="심각도 (info | warning | critical)")
-    target: dict[str, Any] = Field(..., description="알람 대상 (cluster, node, acc_id 중 해당 키)")
+    target: dict[str, Any] = Field(..., description="알람 대상 (cluster, node, acc_id, model 중 해당 키)")
     value: Optional[float] = Field(None, description="마지막으로 평가한 지표 값, 값이 없으면 null")
     message: str = Field(..., description="알람 메시지")
     started_at: datetime = Field(..., description="조건이 처음 충족된 시각 (ISO 8601, UTC)")
@@ -171,7 +173,7 @@ class AlertEvent(BaseModel):
         ..., description="이벤트 종류 (fire | resolve | notified | notify_failed), fire: 발생, resolve: 해제, notified: 알림 발송, notify_failed: 알림 발송 실패"
     )
     severity: Severity = Field(..., description="심각도 (info | warning | critical)")
-    target: dict[str, Any] = Field(..., description="알람 대상 (cluster, node, acc_id 중 해당 키)")
+    target: dict[str, Any] = Field(..., description="알람 대상 (cluster, node, acc_id, model 중 해당 키)")
     value: Optional[float] = Field(None, description="기록 시점의 지표 값, 값이 없으면 null")
     message: str = Field(..., description="이벤트 메시지")
 
@@ -179,8 +181,8 @@ class AlertEvent(BaseModel):
 class PreviewItem(BaseModel):
     """알람 정책 미리 평가 결과 1건"""
 
-    target: dict[str, Any] = Field(..., description="평가 대상 (cluster, node, acc_id 중 해당 키)")
-    value: float = Field(..., description="현재 값, resource 정책은 지표 값, log 정책은 집계 창 동안의 건수")
+    target: dict[str, Any] = Field(..., description="평가 대상 (cluster, node, acc_id, model 중 해당 키)")
+    value: float = Field(..., description="현재 값, resource, slo 정책은 지표 값, log 정책은 집계 창 동안의 건수")
     cond: bool = Field(..., description="현재 값 기준 조건 충족 여부")
 
 
