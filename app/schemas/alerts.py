@@ -92,6 +92,8 @@ class Policy(BaseModel):
     for_min: int = Field(..., description="지속 시간(분)")
     severity: Severity = Field(..., description="심각도 (info | warning | critical)")
     target: AlertTarget = Field(..., description="감시 대상 범위 (cluster, node, acc_id, model)")
+    selector: str = Field("", description="감시 대상을 입력 형식으로 적은 것 (예: cluster=l40s), 빈 값이면 전체, 화면 표시용")
+    duration: str = Field("0m", description="지속 시간을 입력 형식으로 적은 것 (예: 5m), 화면 표시용")
     channel_ids: list[str] = Field(..., description="알림을 보낼 채널 ID 목록, 비어 있으면 알림 발송 없음")
     channels: dict[ChannelType, list[PolicyChannel]] = Field(
         default_factory=dict,

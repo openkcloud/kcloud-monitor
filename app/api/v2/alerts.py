@@ -86,7 +86,7 @@ async def _channel_ids(types: list[str]) -> list[str]:
 
 
 async def _policies_out(rows: list[dict]) -> list[Policy]:
-    """저장된 정책 + 연결된 채널을 종류별로 묶은 것 (화면에 ID 대신 보여줄 용도)"""
+    """저장된 정책 + 연결된 채널을 종류별로 묶은 것, 대상과 지속 시간을 입력 형식 문자로 (화면 표시용)"""
     chs = {c["id"]: c for c in await store.list_channels()}
     out = []
     for r in rows:
@@ -95,7 +95,8 @@ async def _policies_out(rows: list[dict]) -> list[Policy]:
             if ch := chs.get(cid):
                 grouped.setdefault(_channel_kind(ch), []).append(
                     {"id": cid, "name": ch["name"], "enabled": ch["enabled"]})
-        out.append(Policy(**r, channels=grouped))
+        selector = ",".join(f"{k}={v}" for k, v in (r.get("target") or {}).items() if v)
+        out.append(Policy(**r, channels=grouped, selector=selector, duration=f"{r['for_min']}m"))
     return out
 
 
@@ -160,6 +161,8 @@ async def list_policies():
     * 정책별 ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부
+    * `selector`: 감시 대상을 입력 형식으로 (예: `cluster=l40s`), 빈 값이면 전체
+    * `duration`: 지속 시간을 입력 형식으로 (예: `5m`)
     * `channels`: 연결된 채널을 종류(`email` | `slack` | `webhook`)별로 묶은 것, 채널마다 이름과 켜짐 여부
     * `total`: 정책 개수
     * 정책 ID 순으로 정렬
@@ -219,6 +222,7 @@ async def get_policy(policy_id: str):
     * ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부, 생성·수정 시각
+    * `selector`, `duration`: 대상과 지속 시간을 입력 형식으로
     * `channels`: 연결된 채널을 종류(`email` | `slack` | `webhook`)별로 묶은 것, 채널마다 이름과 켜짐 여부
 
     오류
