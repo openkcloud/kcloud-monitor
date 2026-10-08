@@ -85,6 +85,20 @@ async def _channel_ids(types: list[str]) -> list[str]:
     return ids
 
 
+async def _policies_out(rows: list[dict]) -> list[Policy]:
+    """저장된 정책 + 연결된 채널을 종류별로 묶은 것 (화면에 ID 대신 보여줄 용도)"""
+    chs = {c["id"]: c for c in await store.list_channels()}
+    out = []
+    for r in rows:
+        grouped: dict[str, list[dict]] = {}
+        for cid in r.get("channel_ids") or []:
+            if ch := chs.get(cid):
+                grouped.setdefault(_channel_kind(ch), []).append(
+                    {"id": cid, "name": ch["name"], "enabled": ch["enabled"]})
+        out.append(Policy(**r, channels=grouped))
+    return out
+
+
 async def _to_row(body: dict) -> dict:
     """화면 입력 → 저장 형식"""
     kind = metric_kind(body["metric"])
@@ -146,12 +160,13 @@ async def list_policies():
     * 정책별 ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부
+    * `channels`: 연결된 채널을 종류(`email` | `slack` | `webhook`)별로 묶은 것, 채널마다 이름과 켜짐 여부
     * `total`: 정책 개수
     * 정책 ID 순으로 정렬
     """
     _require_store()
     rows = await store.list_policies()
-    return ListResponse(data=[Policy(**r) for r in rows], total=len(rows))
+    return ListResponse(data=await _policies_out(rows), total=len(rows))
 
 
 @router.post("/policies", summary="알람 정책 생성", response_model=ItemResponse, status_code=201)
@@ -178,6 +193,7 @@ async def create_policy(body: PolicyCreate):
     응답
 
     * 저장된 정책 (ID, 종류, 지표, 조건, 지속 시간, 심각도, 대상, 채널 ID 목록)
+    * `channels`: 연결된 채널을 종류별로 묶은 것, 채널마다 이름과 켜짐 여부
 
     오류
 
@@ -187,7 +203,7 @@ async def create_policy(body: PolicyCreate):
     """
     _require_store()
     row = await store.create_policy(await _to_row(body.model_dump()))
-    return ItemResponse(data=Policy(**row))
+    return ItemResponse(data=(await _policies_out([row]))[0])
 
 
 @router.get("/policies/{policy_id}", summary="알람 정책 상세", response_model=ItemResponse)
@@ -203,6 +219,7 @@ async def get_policy(policy_id: str):
     * ID, 이름, 종류(`resource` | `log` | `slo`), 지표
     * 조건(연산자, 임계값), 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부, 생성·수정 시각
+    * `channels`: 연결된 채널을 종류(`email` | `slack` | `webhook`)별로 묶은 것, 채널마다 이름과 켜짐 여부
 
     오류
 
@@ -212,7 +229,7 @@ async def get_policy(policy_id: str):
     row = await store.get_policy(policy_id)
     if not row:
         raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
-    return ItemResponse(data=Policy(**row))
+    return ItemResponse(data=(await _policies_out([row]))[0])
 
 
 @router.patch("/policies/{policy_id}", summary="알람 정책 수정", response_model=ItemResponse)
@@ -252,7 +269,7 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
     if "channels" in patch:
         patch["channel_ids"] = await _channel_ids(patch.pop("channels"))
     row = await store.update_policy(policy_id, patch)
-    return ItemResponse(data=Policy(**row))
+    return ItemResponse(data=(await _policies_out([row]))[0])
 
 
 @router.delete("/policies/{policy_id}", summary="알람 정책 삭제", status_code=204)

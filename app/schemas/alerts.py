@@ -70,6 +70,14 @@ class PolicyPatch(BaseModel):
     enabled: Optional[bool] = Field(None, description="정책 활성 여부")
 
 
+class PolicyChannel(BaseModel):
+    """정책에 연결된 채널 1개 (화면 표시용)"""
+
+    id: str = Field(..., description="채널 ID")
+    name: str = Field(..., description="채널 이름")
+    enabled: bool = Field(..., description="채널 활성 여부, false 면 이 채널로는 발송 안 함")
+
+
 class Policy(BaseModel):
     """저장된 알람 정책"""
 
@@ -85,6 +93,10 @@ class Policy(BaseModel):
     severity: Severity = Field(..., description="심각도 (info | warning | critical)")
     target: AlertTarget = Field(..., description="감시 대상 범위 (cluster, node, acc_id, model)")
     channel_ids: list[str] = Field(..., description="알림을 보낼 채널 ID 목록, 비어 있으면 알림 발송 없음")
+    channels: dict[ChannelType, list[PolicyChannel]] = Field(
+        default_factory=dict,
+        description="연결된 채널을 종류(email | slack | webhook)별로 묶은 것, 연결된 채널이 없는 종류와 삭제된 채널은 빠짐",
+    )
     enabled: bool = Field(..., description="정책 활성 여부")
     created_at: datetime = Field(..., description="생성 시각 (ISO 8601, UTC)")
     updated_at: datetime = Field(..., description="마지막 수정 시각 (ISO 8601, UTC)")
