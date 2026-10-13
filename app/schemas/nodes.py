@@ -6,16 +6,11 @@ Nodes API v2 Pydantic 스키마.
   - observed_at: ISO 8601 수집 시각
   - warnings[]: NO_DATA, NO_POWER_DATA, IPMI_NOT_AVAILABLE 등 (정상 시 빈 목록)
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS, _now
 
 
 _DESC_NODE_TYPE = "노드 종류 (physical | virtual). physical: 물리 서버, virtual: VM"

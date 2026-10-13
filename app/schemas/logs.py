@@ -5,16 +5,11 @@
   - observed_at, warnings[] 동일
   - 로그 응답은 data[] + pagination 구조 (sample_api §11)
 """
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 
 # ---------------------------------------------------------------------------

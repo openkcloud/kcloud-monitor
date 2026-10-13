@@ -3,16 +3,11 @@ Pod 추적(resource map) 응답 스키마.
 
 Pod에서 워크로드, 가속기, K8s 노드, VM, 물리서버까지 이어지는 경로.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_WARNINGS, _now
 
 
 class TraceHop(BaseModel):
