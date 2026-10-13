@@ -214,9 +214,5 @@ class ClusterDiscovery:
                 if proj:
                     info.openstack_project = proj
 
-    def invalidate(self) -> None:
-        self._cache.clear()
-        self._cache_ts = 0.0
-
 
 cluster_discovery = ClusterDiscovery()
