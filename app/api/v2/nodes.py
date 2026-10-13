@@ -10,8 +10,9 @@ hardware 하위 경로는 IPMI 센서를 걷어오지 않는 노드에서 IPMI_N
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
+from app.api.v2.clusters import _card_id, _collect_cards, _phys_node_set, _require_cluster
 from app.api.v2.deps import PaginationParams, TimeseriesParams
 from app.schemas.nodes import (
     CpuCoreUsage,
@@ -45,8 +46,8 @@ from app.schemas.nodes import (
     NodeSummaryItem,
     NodesSummaryData,
 )
-from app.services.cluster_discovery import ClusterInfo, cluster_discovery, cluster_label
-from app.services.prometheus import esc, first_finite, prometheus_client
+from app.services.cluster_discovery import ClusterInfo, cluster_label
+from app.services.prometheus import esc, first_finite, prometheus_client, value_map
 
 router = APIRouter()
 
@@ -58,33 +59,6 @@ REAL_FS = 'fstype=~"ext4|xfs|btrfs"'
 def _cl(cluster: str) -> str:
     """cluster path param → escaped PromQL label value."""
     return esc(cluster_label(cluster))
-
-
-async def _require_cluster(cluster: str) -> ClusterInfo:
-    """알 수 없는 클러스터는 404. clusters.py의 동일 계약을 nodes.py에도 적용."""
-    info = await cluster_discovery.get_cluster(cluster)
-    if info is None:
-        raise HTTPException(status_code=404, detail=f"알 수 없는 클러스터: {cluster}")
-    return info
-
-
-async def _phys_node_set() -> set[str]:
-    """machine_cpu_cores의 node 라벨 집합 — 물리 노드 판별 기준(clusters.py topology와 동일 로직)."""
-    results = await prometheus_client.instant("machine_cpu_cores")
-    return {n for it in results if (n := it.get("metric", {}).get("node"))}
-
-
-def _card_id(metric: dict) -> str:
-    """가속기 카드 식별자 (벤더 공통). clusters.py의 동일 함수 복사(순환 import 방지)."""
-    return (
-        metric.get("UUID") or metric.get("uuid") or metric.get("gpu")
-        or metric.get("device") or "unknown"
-    )
-
-
-def _card_host(metric: dict) -> str:
-    """카드가 보고된 호스트 (벤더별 라벨 차이 흡수). clusters.py의 동일 함수 복사."""
-    return metric.get("Hostname") or metric.get("hostname") or metric.get("instance") or "unknown"
 
 
 async def _accelerator_count_for_host(host: str) -> int:
@@ -112,29 +86,12 @@ async def _service_cluster_hosts(
     호스트 발견에 쓴 사용률 응답을 그대로 평균 내어 호스트 사용률도 함께 돌려준다 (추가 쿼리 없음).
     Returns: (host, is_physical, accelerator_count, power_watts, utilization_percent) 목록.
     """
-    if not info.utilization_query:
-        return []
-    util_res = await prometheus_client.instant(info.utilization_query)
-    power_res = await prometheus_client.instant(info.power_query) if info.power_query else []
-
-    power_by_id: dict[str, float] = {}
-    for it in power_res:
-        cid = _card_id(it.get("metric", {}))
-        try:
-            power_by_id[cid] = power_by_id.get(cid, 0.0) + float(it["value"][1])
-        except (KeyError, IndexError, ValueError):
-            continue
-
+    cards_by_key, power_by_id = await _collect_cards(info)
     host_cards: dict[str, set[str]] = {}
     host_utils: dict[str, list[float]] = {}
-    for it in util_res:
-        m = it.get("metric", {})
-        host = _card_host(m)
-        host_cards.setdefault(host, set()).add(_card_id(m))
-        try:
-            host_utils.setdefault(host, []).append(float(it["value"][1]))
-        except (KeyError, IndexError, ValueError):
-            continue
+    for (host, cid), e in cards_by_key.items():
+        host_cards.setdefault(host, set()).add(cid)
+        host_utils.setdefault(host, []).extend(e["utils"])
 
     rows: list[tuple[str, bool, int, Optional[float], Optional[float]]] = []
     for host, cards in host_cards.items():
@@ -162,8 +119,16 @@ async def _resolve_instance(cluster: str, node: str) -> str:
     return node
 
 
-async def _ipmi_node_power_instant(node: str) -> tuple[list[dict], str]:
-    """물리 노드 서버 총전력(현재값) — BMC 실측. 결과와 산출 경로를 함께 반환.
+async def _node_label(cluster: str, node: str) -> tuple[str, str]:
+    """404 확인 후 노드를 instance로 풀어 (instance, node-exporter PromQL 라벨 조건) 반환."""
+    await _require_cluster(cluster)
+    instance = await _resolve_instance(cluster, node)
+    return instance, f'cluster="{_cl(cluster)}",instance="{esc(instance)}"'
+
+
+async def _ipmi_node_power(node: str, *window: str) -> tuple[list[dict], str]:
+    """물리 노드 서버 총전력 — BMC 실측. 결과와 산출 경로를 함께 반환.
+    window(start, end, step)를 주면 같은 기준의 시계열.
 
     노드 전력은 IPMI를 기준으로 삼는다. BMC가 전원공급장치를 직접 읽으므로 CPU·메모리뿐
     아니라 가속기·팬·디스크·PSU 손실까지 포함한 벽면 전력이고, 노드 8대가 같은 기준이라
@@ -175,29 +140,16 @@ async def _ipmi_node_power_instant(node: str) -> tuple[list[dict], str]:
     (compute5 실측 DCMI 417W vs PSU 입력 합 400W) source로 구분해 알린다.
     ipmi 메트릭에는 cluster 라벨이 없어 물리 `node` 라벨로 식별한다.
     """
+    async def query(q: str) -> list[dict]:
+        if window:
+            return await prometheus_client.range_query(q, *window)
+        return await prometheus_client.instant(q)
+
     n = esc(node)
-    dcmi = await prometheus_client.instant(f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}')
+    dcmi = await query(f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}')
     if dcmi:
         return dcmi, "ipmi-dcmi"
-    psu = await prometheus_client.instant(
-        f'sum(ipmi_power_watts{{node="{n}",name=~".*(Power In|Input Power)"}})'
-    )
-    return psu, "ipmi-psu-input"
-
-
-async def _ipmi_node_power_range(
-    node: str, start: str, end: str, step: str
-) -> tuple[list[dict], str]:
-    """물리 노드 서버 총전력(시계열) — _ipmi_node_power_instant의 range 버전."""
-    n = esc(node)
-    dcmi = await prometheus_client.range_query(
-        f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}', start, end, step
-    )
-    if dcmi:
-        return dcmi, "ipmi-dcmi"
-    psu = await prometheus_client.range_query(
-        f'sum(ipmi_power_watts{{node="{n}",name=~".*(Power In|Input Power)"}})', start, end, step
-    )
+    psu = await query(f'sum(ipmi_power_watts{{node="{n}",name=~".*(Power In|Input Power)"}})')
     return psu, "ipmi-psu-input"
 
 
@@ -331,12 +283,7 @@ async def list_nodes(
             val = first_finite([item]) or 0.0
             ready_map[n] = ready_map.get(n, False) or val == 1.0
 
-        power_map: dict[str, float] = {}
-        for item in psu_results + power_results:  # DCMI가 나중에 덮어써 우선한다
-            n = item.get("metric", {}).get("node")
-            val = first_finite([item])
-            if n and val is not None:
-                power_map[n] = val
+        power_map = value_map(psu_results + power_results, "node", finite=True)  # DCMI가 나중에 덮어써 우선한다
 
         # kube_node_info 1시계열 = k8s 노드 1대. (node, internal_ip, os, kubelet_version)로 수집.
         nodes = []
@@ -425,14 +372,11 @@ async def get_node(request: Request, cluster: str, node: str):
 
     * 404: 없는 클러스터
     """
-    await _require_cluster(cluster)
-    raw_node = node
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    instance, label = await _node_label(cluster, node)
 
     up_results = await prometheus_client.instant(f"up{{{label}}}")
     uname_results = await prometheus_client.instant(f"node_uname_info{{{label}}}")
-    accel_count = await _accelerator_count_for_host(raw_node)
+    accel_count = await _accelerator_count_for_host(node)
 
     if not up_results and not uname_results and accel_count == 0:
         return NodeDetailResponse(status="partial", data=None, warnings=["NO_DATA"])
@@ -440,17 +384,16 @@ async def get_node(request: Request, cluster: str, node: str):
     boot_results = await prometheus_client.instant(f"node_boot_time_seconds{{{label}}}")
     mem_results = await prometheus_client.instant(f"node_memory_MemTotal_bytes{{{label}}}")
 
-    phys_nodes = await _phys_node_set()
-    cpu_val = first_finite(
-        await prometheus_client.instant(f'machine_cpu_cores{{node="{esc(raw_node)}"}}')
-    )
+    # machine_cpu_cores(cAdvisor)가 있으면 물리 노드
+    phys_results = await prometheus_client.instant(f'machine_cpu_cores{{node="{esc(node)}"}}')
+    cpu_val = first_finite(phys_results)
     if cpu_val is None:
         cpu_val = first_finite(
             await prometheus_client.instant(f'count(node_cpu_seconds_total{{{label},mode="idle"}})')
         )
 
     ready_results = await prometheus_client.instant(
-        f'kube_node_status_condition{{condition="Ready",status="true",node="{esc(raw_node)}"}}'
+        f'kube_node_status_condition{{condition="Ready",status="true",node="{esc(node)}"}}'
     )
     ready = any(first_finite([item]) == 1.0 for item in ready_results) if ready_results else None
 
@@ -473,14 +416,14 @@ async def get_node(request: Request, cluster: str, node: str):
     )
 
     data = NodeDetailData(
-        instance=node,
+        instance=instance,
         cluster=cluster,
         up=up,
         os=os_info,
         boot_time=boot_time,
         cpu_cores=int(cpu_val) if cpu_val is not None else None,
         memory_total_bytes=first_finite(mem_results),
-        node_type="physical" if raw_node in phys_nodes else "virtual",
+        node_type="physical" if phys_results else "virtual",
         ready=ready,
         accelerator_count=accel_count,
     )
@@ -521,9 +464,7 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
 
     * CPU 와 네트워크 값은 최근 5분 평균
     """
-    await _require_cluster(cluster)
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    _, label = await _node_label(cluster, node)
 
     cpu_results = await prometheus_client.instant(
         f'100 - (avg(rate(node_cpu_seconds_total{{{label},mode="idle"}}[5m])) * 100)'
@@ -594,9 +535,7 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
 
     * 사용률과 시간 비율은 최근 5분 평균
     """
-    await _require_cluster(cluster)
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    _, label = await _node_label(cluster, node)
 
     usage_results = await prometheus_client.instant(
         f'100 - (avg(rate(node_cpu_seconds_total{{{label},mode="idle"}}[5m])) * 100)'
@@ -660,9 +599,7 @@ async def get_node_memory(request: Request, cluster: str, node: str):
 
     * 404: 없는 클러스터
     """
-    await _require_cluster(cluster)
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    _, label = await _node_label(cluster, node)
 
     total_results = await prometheus_client.instant(f"node_memory_MemTotal_bytes{{{label}}}")
     avail_results = await prometheus_client.instant(f"node_memory_MemAvailable_bytes{{{label}}}")
@@ -727,22 +664,14 @@ async def get_node_storage(request: Request, cluster: str, node: str):
 
     * Ceph 분산 스토리지 용량은 포함하지 않음
     """
-    await _require_cluster(cluster)
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    _, label = await _node_label(cluster, node)
 
     size_results = await prometheus_client.instant(f"node_filesystem_size_bytes{{{label}}}")
     avail_results = await prometheus_client.instant(f"node_filesystem_avail_bytes{{{label}}}")
     read_results = await prometheus_client.instant(f"rate(node_disk_read_bytes_total{{{label}}}[5m])")
     write_results = await prometheus_client.instant(f"rate(node_disk_written_bytes_total{{{label}}}[5m])")
 
-    avail_map: dict[str, float] = {}
-    for item in avail_results:
-        mp = item.get("metric", {}).get("mountpoint")
-        val = first_finite([item])
-        if mp and val is not None:
-            avail_map[mp] = val
-
+    avail_map = value_map(avail_results, "mountpoint", finite=True)
     filesystems = []
     for item in size_results:
         metric = item.get("metric", {})
@@ -754,13 +683,7 @@ async def get_node_storage(request: Request, cluster: str, node: str):
             FilesystemUsage(mountpoint=mp, fstype=metric.get("fstype"), size_bytes=size, avail_bytes=avail, used_percent=used_pct)
         )
 
-    write_map: dict[str, float] = {}
-    for item in write_results:
-        device = item.get("metric", {}).get("device")
-        val = first_finite([item])
-        if device and val is not None:
-            write_map[device] = val
-
+    write_map = value_map(write_results, "device", finite=True)
     disks = [
         DiskIoRate(
             device=item.get("metric", {}).get("device", "?"),
@@ -807,26 +730,16 @@ async def get_node_network(request: Request, cluster: str, node: str):
 
     * 모든 값은 최근 5분 평균
     """
-    await _require_cluster(cluster)
-    node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
+    _, label = await _node_label(cluster, node)
 
     rx_results = await prometheus_client.instant(f"rate(node_network_receive_bytes_total{{{label}}}[5m])")
     tx_results = await prometheus_client.instant(f"rate(node_network_transmit_bytes_total{{{label}}}[5m])")
     rx_err_results = await prometheus_client.instant(f"rate(node_network_receive_errs_total{{{label}}}[5m])")
     tx_err_results = await prometheus_client.instant(f"rate(node_network_transmit_errs_total{{{label}}}[5m])")
 
-    def _by_device(results: list[dict]) -> dict[str, Optional[float]]:
-        out: dict[str, Optional[float]] = {}
-        for item in results:
-            dev = item.get("metric", {}).get("device")
-            if dev:
-                out[dev] = first_finite([item])
-        return out
-
-    tx_map = _by_device(tx_results)
-    rx_err_map = _by_device(rx_err_results)
-    tx_err_map = _by_device(tx_err_results)
+    tx_map = value_map(tx_results, "device", finite=True)
+    rx_err_map = value_map(rx_err_results, "device", finite=True)
+    tx_err_map = value_map(tx_err_results, "device", finite=True)
 
     interfaces = [
         NetworkInterfaceStats(
@@ -886,7 +799,7 @@ async def get_node_power(request: Request, cluster: str, node: str):
     * CPU, 메모리, 가속기, 팬, 디스크, 전원 장치 손실 포함
     """
     await _require_cluster(cluster)
-    results, source = await _ipmi_node_power_instant(node)
+    results, source = await _ipmi_node_power(node)
 
     if not results:
         return NodePowerResponse(status="partial", data=None, warnings=["NO_POWER_DATA"])
@@ -942,7 +855,7 @@ async def get_node_power_timeseries(
     end = params.end or now.isoformat()
     step = params.step
 
-    results, source = await _ipmi_node_power_range(node, start, end, step)
+    results, source = await _ipmi_node_power(node, start, end, step)
 
     if not results:
         return NodePowerTimeseriesResponse(status="partial", series=[], warnings=["NO_POWER_DATA"])

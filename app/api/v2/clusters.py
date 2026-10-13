@@ -29,8 +29,8 @@ from app.schemas.clusters import (
     TopologyAccelerator,
     TopologyNode,
 )
-from app.services.cluster_discovery import ClusterInfo, cluster_discovery, cluster_label
-from app.services.prometheus import prometheus_client
+from app.services.cluster_discovery import ClusterInfo, cluster_discovery
+from app.services.prometheus import first_finite, first_value, prometheus_client, sample_value
 
 router = APIRouter()
 
@@ -53,63 +53,31 @@ async def _node_counts(label_value: str) -> tuple[int, int, int, int, list[str]]
     Returns: (node_up, node_total, target_up, target_total, sorted_nodes)
     """
     node_info_results = await prometheus_client.instant(f'kube_node_info{{cluster="{label_value}"}}')
-    node_names: set[str] = set()
-    for item in node_info_results:
-        metric = item.get("metric", {})
-        node = metric.get("node")
-        if node:
-            node_names.add(node)
-    node_total = len(node_names)
-    sorted_nodes = sorted(node_names)
+    node_names = {n for it in node_info_results if (n := it.get("metric", {}).get("node"))}
 
     ready_results = await prometheus_client.instant(
         f'kube_node_status_condition{{cluster="{label_value}",condition="Ready",status="true"}}'
     )
-    node_up = 0
-    for item in ready_results:
-        try:
-            val = float(item.get("value", [0, "0"])[1])
-        except (IndexError, ValueError):
-            val = 0.0
-        if val == 1.0:
-            node_up += 1
-
     target_results = await prometheus_client.instant(f'up{{cluster="{label_value}"}}')
-    target_up = 0
-    for item in target_results:
-        try:
-            val = float(item.get("value", [0, "0"])[1])
-        except (IndexError, ValueError):
-            val = 0.0
-        if val == 1.0:
-            target_up += 1
-    target_total = len(target_results)
+    node_up = sum(1 for it in ready_results if sample_value(it) == 1.0)
+    target_up = sum(1 for it in target_results if sample_value(it) == 1.0)
 
-    return node_up, node_total, target_up, target_total, sorted_nodes
+    return node_up, len(node_names), target_up, len(target_results), sorted(node_names)
+
+
+async def _scalar(expr: Optional[str]) -> Optional[float]:
+    """단일 스칼라 PromQL 결과(집계식 그대로). 없으면 None."""
+    if not expr:
+        return None
+    return first_value(await prometheus_client.instant(expr))
 
 
 async def _avg(query: Optional[str]) -> Optional[float]:
-    if not query:
-        return None
-    results = await prometheus_client.instant(f"avg({query})")
-    if not results:
-        return None
-    try:
-        return float(results[0]["value"][1])
-    except (KeyError, IndexError, ValueError):
-        return None
+    return await _scalar(f"avg({query})") if query else None
 
 
 async def _sum(query: Optional[str]) -> Optional[float]:
-    if not query:
-        return None
-    results = await prometheus_client.instant(f"sum({query})")
-    if not results:
-        return None
-    try:
-        return float(results[0]["value"][1])
-    except (KeyError, IndexError, ValueError):
-        return None
+    return await _scalar(f"sum({query})") if query else None
 
 
 async def _accelerator_count(query: Optional[str]) -> int:
@@ -118,13 +86,16 @@ async def _accelerator_count(query: Optional[str]) -> int:
     (util은 Furiosa가 코어 단위로 쪼개져 과대집계되므로 쓰지 않는다.)"""
     if not query:
         return 0
-    results = await prometheus_client.instant(f"count({query})")
-    if not results:
-        return 0
-    try:
-        return int(float(results[0]["value"][1]))
-    except (KeyError, IndexError, ValueError):
-        return 0
+    count = first_finite(await prometheus_client.instant(f"count({query})"))
+    return int(count) if count is not None else 0
+
+
+async def _targets(info: ClusterInfo) -> list[ClusterInfo]:
+    """집계 대상 클러스터. 관리 클러스터는 하위 서비스 클러스터 전체, 그 외는 자기 자신."""
+    if info.type != "management":
+        return [info]
+    clusters = await cluster_discovery.get_clusters()
+    return [i for i in clusters.values() if i.type == "service"]
 
 
 async def _distinct_instances(query: Optional[str]) -> int:
@@ -372,21 +343,8 @@ async def get_cluster(request: Request, cluster: str):
     return ClusterDetailResponse(status=status, data=data, warnings=warnings)
 
 
-async def _scalar(expr: Optional[str]) -> Optional[float]:
-    """단일 스칼라 PromQL 결과(집계식 그대로). 없으면 None."""
-    if not expr:
-        return None
-    results = await prometheus_client.instant(expr)
-    if not results:
-        return None
-    try:
-        return float(results[0]["value"][1])
-    except (KeyError, IndexError, ValueError):
-        return None
-
-
-def _rnd(x: Optional[float], n: int = 1) -> Optional[float]:
-    return round(x, n) if x is not None else None
+def _rnd(x: Optional[float]) -> Optional[float]:
+    return round(x, 1) if x is not None else None
 
 
 async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources], Optional[float]]:
@@ -395,13 +353,11 @@ async def _acc_summary(info: ClusterInfo) -> tuple[Optional[AcceleratorResources
     active/idle은 벤더별 산출 기준이 지저분해 현재 생략(None). total/avg_util/power만 채운다.
     """
     if info.type == "management":
-        clusters = await cluster_discovery.get_clusters()
-        services = [i for i in clusters.values() if i.type == "service"]
         total = 0
         power_sum = 0.0
         power_any = False
         utils: list[float] = []
-        for s in services:
+        for s in await _targets(info):
             total += await _accelerator_count(s.power_query)
             p = await _sum(s.power_query)
             if p is not None:
@@ -551,10 +507,19 @@ def _card_model(metric: dict) -> Optional[str]:
     return None
 
 
-async def _collect_topo(info: ClusterInfo, node_map: dict[str, dict[str, dict]]) -> None:
-    """한 클러스터의 가속기를 (host → id → 카드정보)로 수집. core 단위는 카드로 합침."""
+async def _phys_node_set() -> set[str]:
+    """machine_cpu_cores의 node 라벨 집합. 물리 노드 판별 기준."""
+    results = await prometheus_client.instant("machine_cpu_cores")
+    return {n for it in results if (n := it.get("metric", {}).get("node"))}
+
+
+async def _collect_cards(info: ClusterInfo) -> tuple[dict[tuple[str, str], dict], dict[str, float]]:
+    """한 클러스터의 가속기를 카드별로 수집. 토폴로지와 노드 목록 공용.
+
+    Returns: ({(host, id): {"model", "utils"(코어 값 목록)}}, 카드 id별 전력 합)
+    """
     if not info.utilization_query:
-        return
+        return {}, {}
     util_res = await prometheus_client.instant(info.utilization_query)
     power_res = await prometheus_client.instant(info.power_query) if info.power_query else []
 
@@ -566,26 +531,16 @@ async def _collect_topo(info: ClusterInfo, node_map: dict[str, dict[str, dict]])
         except (KeyError, IndexError, ValueError):
             continue
 
-    # util: 카드(=host,id)별로 코어 값 평균
-    acc: dict[tuple[str, str], dict] = {}
+    # util: core 단위 시계열을 카드(=host,id)로 묶음
+    cards: dict[tuple[str, str], dict] = {}
     for it in util_res:
         m = it.get("metric", {})
-        cid = _card_id(m)
-        host = _card_host(m)
-        e = acc.setdefault((host, cid), {"model": _card_model(m), "utils": []})
+        e = cards.setdefault((_card_host(m), _card_id(m)), {"model": _card_model(m), "utils": []})
         try:
             e["utils"].append(float(it["value"][1]))
         except (KeyError, IndexError, ValueError):
             pass
-
-    for (host, cid), e in acc.items():
-        util = _rnd(sum(e["utils"]) / len(e["utils"])) if e["utils"] else None
-        node_map.setdefault(host, {})[cid] = {
-            "id": cid,
-            "model": e["model"],
-            "utilization_percent": util,
-            "power_watts": _rnd(power_by_id.get(cid)),
-        }
+    return cards, power_by_id
 
 
 @router.get(
@@ -627,23 +582,20 @@ async def get_cluster_topology(request: Request, cluster: str):
     """
     info = await _require_cluster(cluster)
     warnings: list[str] = []
-    clusters = await cluster_discovery.get_clusters()
 
-    if info.type == "management":
-        targets = [i for i in clusters.values() if i.type == "service"]
-    else:
-        targets = [info]
-
+    # host → id → 카드정보. core 단위 사용률은 카드별 평균
     node_map: dict[str, dict[str, dict]] = {}
-    for tinfo in targets:
-        await _collect_topo(tinfo, node_map)
+    for tinfo in await _targets(info):
+        cards, power_by_id = await _collect_cards(tinfo)
+        for (host, cid), e in cards.items():
+            node_map.setdefault(host, {})[cid] = {
+                "id": cid,
+                "model": e["model"],
+                "utilization_percent": _rnd(sum(e["utils"]) / len(e["utils"])) if e["utils"] else None,
+                "power_watts": _rnd(power_by_id.get(cid)),
+            }
 
-    # 물리 노드 집합 (machine_cpu_cores의 node 라벨) → node_type 판별
-    phys_nodes: set[str] = set()
-    for it in await prometheus_client.instant("machine_cpu_cores"):
-        n = it.get("metric", {}).get("node")
-        if n:
-            phys_nodes.add(n)
+    phys_nodes = await _phys_node_set()
 
     nodes: list[TopologyNode] = []
     for host, cards in sorted(node_map.items()):
@@ -703,14 +655,8 @@ async def get_cluster_power(request: Request, cluster: str):
     info = await _require_cluster(cluster)
     warnings: list[str] = []
 
-    if info.type == "management":
-        clusters = await cluster_discovery.get_clusters()
-        targets = [i for i in clusters.values() if i.type == "service"]
-    else:
-        targets = [info]
-
     cards: list[ClusterPowerCard] = []
-    for tinfo in targets:
+    for tinfo in await _targets(info):
         if not tinfo.power_query:
             continue
         for item in await prometheus_client.instant(tinfo.power_query):

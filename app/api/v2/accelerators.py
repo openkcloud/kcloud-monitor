@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.v2.deps import PaginationParams, TimeseriesParams
+from app.api.v2.deps import PaginationParams, TimeseriesParams, with_links
 from app.schemas.accelerators import (
     AcceleratorDetailResponse,
     AcceleratorInfo,
@@ -85,6 +85,9 @@ VENDOR_CONFIG: dict[str, dict] = {
         "clock_reasons": '{{__name__=~"DCGM_FI_DEV_CLOCK(S_EVENT|_THROTTLE)_REASONS",cluster="{cluster}"{extra}}}',
         # 기본 counters.csv에 없어 exporter 목록 파일에 추가해야 나온다. 값 0~15 (P0~P15)
         "pstate": 'DCGM_FI_DEV_PSTATE{{cluster="{cluster}"{extra}}}',
+        # 헬스: health_key 메트릭 값이 healthy_value 면 정상. NVIDIA는 최근 10분 XID 에러 0건
+        "health_key": "xid_errors",
+        "healthy_value": 0.0,
         "throttle_temp": 85,  # 초기값
         "extra_keys": [
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
@@ -103,6 +106,8 @@ VENDOR_CONFIG: dict[str, dict] = {
         "mem_used": 'kcloud_furiosa_memory_used_bytes{{cluster="{cluster}"{extra}}}',
         "mem_total": 'kcloud_furiosa_memory_total_bytes{{cluster="{cluster}"{extra}}}',
         "alive": 'kcloud_furiosa_device_alive{{cluster="{cluster}"{extra}}}',
+        "health_key": "alive",
+        "healthy_value": 1.0,
         "throttle_temp": 85,  # 초기값. RNGD 쓰로틀링 진입 온도 미공개
         "extra_keys": [],
     },
@@ -116,6 +121,8 @@ VENDOR_CONFIG: dict[str, dict] = {
         "mem_used": 'RBLN_DEVICE_STATUS:DRAM_USED{{cluster="{cluster}"{extra}}}',
         "mem_total": 'RBLN_DEVICE_STATUS:DRAM_TOTAL{{cluster="{cluster}"{extra}}}',
         "health": 'RBLN_DEVICE_STATUS:HEALTH{{cluster="{cluster}"{extra}}}',
+        "health_key": "health",
+        "healthy_value": 0.0,
         # 드라이버 쓰로틀링 진입 온도. 2025-09-30 릴리스부터 90°C(이전 75°C). ×1000 보정 후 °C 기준
         "throttle_temp": 90,
         "extra_keys": [],
@@ -244,7 +251,8 @@ async def _collect_accelerators(
     """cluster/vendor 스코프의 가속기별 사용률·온도·전력·메모리·헬스 수집. node 지정 시 필터."""
     warnings: list[str] = []
     acc_map: dict[str, dict] = {}
-    id_label = VENDOR_CONFIG[vendor]["id_label"]
+    cfg = VENDOR_CONFIG[vendor]
+    id_label = cfg["id_label"]
 
     def merge(results: list[dict], field: str) -> bool:
         found = False
@@ -278,25 +286,15 @@ async def _collect_accelerators(
             entry["memory_total_bytes"] = (
                 (used + free) * MIB_TO_BYTES if used is not None and free is not None else None
             )
-        merge(await _instant_metric(vendor, cluster, "xid_errors"), "_xid")
-        for entry in acc_map.values():
-            xid = entry.pop("_xid", None)
-            entry["healthy"] = (xid == 0.0) if xid is not None else None
-    elif vendor == "furiosa":
+    else:
         merge(await _instant_metric(vendor, cluster, "mem_used"), "memory_used_bytes")
         merge(await _instant_metric(vendor, cluster, "mem_total"), "memory_total_bytes")
-        merge(await _instant_metric(vendor, cluster, "alive"), "_alive")
-        for entry in acc_map.values():
-            alive = entry.pop("_alive", None)
-            entry["healthy"] = (alive == 1.0) if alive is not None else None
-    elif vendor == "rebellions":
-        merge(await _instant_metric(vendor, cluster, "mem_used"), "memory_used_bytes")
-        merge(await _instant_metric(vendor, cluster, "mem_total"), "memory_total_bytes")
-        merge(await _instant_metric(vendor, cluster, "health"), "_health")
-        for entry in acc_map.values():
-            health = entry.pop("_health", None)
-            entry["healthy"] = (health == 0.0) if health is not None else None
+    merge(await _instant_metric(vendor, cluster, cfg["health_key"]), "_health")
+    for entry in acc_map.values():
+        health = entry.pop("_health", None)
+        entry["healthy"] = (health == cfg["healthy_value"]) if health is not None else None
 
+    # 라벨 병합 순서(labels 내용)가 바뀌지 않도록 헬스 뒤에 따로 수집
     if vendor == "nvidia":
         merge(await _instant_metric(vendor, cluster, "power_limit"), "_power_limit")
         merge(await _instant_metric(vendor, cluster, "clock_reasons"), "_clock_reasons")
@@ -446,9 +444,7 @@ async def list_accelerators(
     total = len(acc_map)
     summary = _summarize(acc_map, vendor)
 
-    offset = params.offset
-    limit = params.limit
-    items = items[offset : offset + limit]
+    items = items[params.offset : params.offset + params.limit]
 
     return AcceleratorListResponse(
         status="success" if items else "partial",
@@ -981,18 +977,18 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
     vendor = await _get_vendor(cluster)
     if vendor is None:
         resp = AcceleratorDetailResponse(status="partial", data=None, warnings=["UNKNOWN_CLUSTER"])
-        return {**resp.model_dump(), "_links": _accelerator_links(cluster, acc_id, None)}
+        return with_links(resp, _accelerator_links(cluster, acc_id, None))
 
     acc_map, warnings = await _collect_accelerators(cluster, vendor, node=None)
     entry = acc_map.get(acc_id)
     if entry is None:
         warnings.append("ACCELERATOR_NOT_FOUND")
         resp = AcceleratorDetailResponse(status="partial", data=None, warnings=warnings)
-        return {**resp.model_dump(), "_links": _accelerator_links(cluster, acc_id, None)}
+        return with_links(resp, _accelerator_links(cluster, acc_id, None))
 
     item = _to_info(acc_id, entry, vendor, cluster, None)
     resp = AcceleratorDetailResponse(status="success", data=item, warnings=warnings)
-    return {**resp.model_dump(), "_links": _accelerator_links(cluster, acc_id, item.node)}
+    return with_links(resp, _accelerator_links(cluster, acc_id, item.node))
 
 
 @router.get(

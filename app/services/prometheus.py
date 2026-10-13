@@ -116,6 +116,21 @@ def first_finite(results: list[dict]) -> Optional[float]:
     return parse_finite(first_value(results))
 
 
+def value_map(results: list[dict], *labels: str, finite: bool = False) -> dict:
+    """instant 결과를 라벨 값(여러 개면 튜플) → value 사전으로. 없는 라벨은 "", 값 없는 항목은 제외.
+
+    finite=True 면 NaN/Inf 도 값 없음으로 보고 제외.
+    """
+    out: dict = {}
+    for item in results:
+        metric = item.get("metric", {})
+        key = tuple(metric.get(label, "") for label in labels)
+        val = parse_finite(sample_value(item)) if finite else sample_value(item)
+        if val is not None:
+            out[key if len(labels) > 1 else key[0]] = val
+    return out
+
+
 def ts_iso(ts) -> Optional[str]:
     """Prometheus epoch(초) → ISO 8601 UTC 문자열."""
     if ts is None:

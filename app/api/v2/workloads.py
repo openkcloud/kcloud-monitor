@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.v2.deps import WorkloadFilterParams
+from app.api.v2.deps import WorkloadFilterParams, with_links
 from app.schemas.workloads import (
     ContainerDetailResponse,
     ContainerItem,
@@ -31,7 +31,7 @@ from app.schemas.workloads import (
     PodSummaryResponse,
 )
 from app.services.cluster_discovery import cluster_discovery, cluster_label
-from app.services.prometheus import esc, first_value, prometheus_client, ts_iso
+from app.services.prometheus import esc, first_value, prometheus_client, ts_iso, value_map
 
 router = APIRouter()
 
@@ -60,17 +60,6 @@ def _derive_service_name(
         return re.sub(r"-[a-f0-9]{7,10}$", "", created_by_name)
     stripped = re.sub(r"(-[a-z0-9]{5,10}){1,2}$", "", pod_name)
     return stripped if stripped != pod_name else None
-
-
-def _scalar_map(results: list[dict]) -> dict[tuple[str, str], float]:
-    out: dict[tuple[str, str], float] = {}
-    for item in results:
-        m = item.get("metric", {})
-        key = (m.get("namespace", ""), m.get("pod", ""))
-        val = first_value([item])
-        if val is not None:
-            out[key] = val
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -119,21 +108,16 @@ async def fetch_pods(
         m = item.get("metric", {})
         phase_map[(m.get("namespace", ""), m.get("pod", ""))] = m.get("phase", "Unknown")
 
-    created_map: dict[tuple[str, str], Optional[str]] = {}
-    for item in created_results:
-        m = item.get("metric", {})
-        key = (m.get("namespace", ""), m.get("pod", ""))
-        created_map[key] = ts_iso(first_value([item]))
-
     labels_map: dict[tuple[str, str], dict[str, str]] = {}
     for item in label_results:
         m = item.get("metric", {})
         labels_map[(m.get("namespace", ""), m.get("pod", ""))] = m
 
-    restarts = _scalar_map(restart_results)
-    counts = _scalar_map(cnt_results)
-    cpus = _scalar_map(cpu_results)
-    mems = _scalar_map(mem_results)
+    created = value_map(created_results, "namespace", "pod")
+    restarts = value_map(restart_results, "namespace", "pod")
+    counts = value_map(cnt_results, "namespace", "pod")
+    cpus = value_map(cpu_results, "namespace", "pod")
+    mems = value_map(mem_results, "namespace", "pod")
 
     items: list[PodItem] = []
     for key, info in pod_map.items():
@@ -151,7 +135,7 @@ async def fetch_pods(
                 phase=phase_map.get(key),
                 pod_ip=info.get("pod_ip"),
                 host_ip=info.get("host_ip"),
-                created_at=created_map.get(key),
+                created_at=ts_iso(created.get(key)),
                 workload_type=info.get("created_by_kind"),
                 workload_name=info.get("created_by_name"),
                 service_name=svc,
@@ -204,12 +188,7 @@ async def fetch_pods_summary(cluster: str) -> tuple[PodSummaryData, list[str]]:
         if val is not None:
             phase_counts[phase] = int(val)
 
-    ns_dist: dict[str, int] = {}
-    for item in ns_results:
-        ns = item.get("metric", {}).get("namespace", "")
-        val = first_value([item])
-        if val is not None:
-            ns_dist[ns] = int(val)
+    ns_dist = {ns: int(val) for ns, val in value_map(ns_results, "namespace").items()}
 
     total = sum(phase_counts.values())
     data = PodSummaryData(
@@ -337,38 +316,14 @@ async def fetch_pod_containers(
         f"kube_pod_container_resource_limits{{{label}}}"
     )
 
-    def _by_c(results: list[dict]) -> dict[str, Optional[float]]:
-        out: dict[str, Optional[float]] = {}
-        for item in results:
-            cn = item.get("metric", {}).get("container", "")
-            if cn:
-                out[cn] = first_value([item])
-        return out
-
-    running_m = _by_c(running_results)
-    waiting_m = _by_c(waiting_results)
-    terminated_m = _by_c(terminated_results)
-    restart_m = _by_c(restart_results)
-    cpu_m = _by_c(cpu_results)
-    mem_m = _by_c(mem_results)
-
-    req_map: dict[tuple[str, str], float] = {}
-    for item in req_results:
-        mi = item.get("metric", {})
-        cn = mi.get("container", "")
-        res = mi.get("resource", "")
-        val = first_value([item])
-        if cn and res and val is not None:
-            req_map[(cn, res)] = val
-
-    lim_map: dict[tuple[str, str], float] = {}
-    for item in lim_results:
-        mi = item.get("metric", {})
-        cn = mi.get("container", "")
-        res = mi.get("resource", "")
-        val = first_value([item])
-        if cn and res and val is not None:
-            lim_map[(cn, res)] = val
+    running_m = value_map(running_results, "container")
+    waiting_m = value_map(waiting_results, "container")
+    terminated_m = value_map(terminated_results, "container")
+    restart_m = value_map(restart_results, "container")
+    cpu_m = value_map(cpu_results, "container")
+    mem_m = value_map(mem_results, "container")
+    req_map = value_map(req_results, "container", "resource")
+    lim_map = value_map(lim_results, "container", "resource")
 
     def _status(cn: str) -> Optional[str]:
         if running_m.get(cn) == 1.0:
@@ -504,20 +459,11 @@ async def fetch_cluster_containers(
         f'container_memory_working_set_bytes{{cluster="{c}",container!=""}}'
     )
 
-    def _by_key(results: list[dict]) -> dict[tuple[str, str, str], float]:
-        out: dict[tuple[str, str, str], float] = {}
-        for item in results:
-            mi = item.get("metric", {})
-            key = (mi.get("namespace", ""), mi.get("pod", ""), mi.get("container", ""))
-            val = first_value([item])
-            if val is not None:
-                out[key] = val
-        return out
-
-    running_m = _by_key(running_results)
-    restart_m = _by_key(restart_results)
-    cpu_m = _by_key(cpu_results)
-    mem_m = _by_key(mem_results)
+    keys = ("namespace", "pod", "container")
+    running_m = value_map(running_results, *keys)
+    restart_m = value_map(restart_results, *keys)
+    cpu_m = value_map(cpu_results, *keys)
+    mem_m = value_map(mem_results, *keys)
 
     items: list[ContainerItem] = []
     for item in info_results:
@@ -563,12 +509,12 @@ async def fetch_container_by_id(
         f'kube_pod_container_info{{cluster="{c}"}}'
     )
 
-    query_id = container_id.split("://", 1)[-1] if "://" in container_id else container_id
+    query_id = container_id.split("://", 1)[-1]
 
     for item in info_results:
         mi = item.get("metric", {})
         raw_id = mi.get("container_id", "")
-        stored_id = raw_id.split("://", 1)[-1] if "://" in raw_id else raw_id
+        stored_id = raw_id.split("://", 1)[-1]
         if stored_id and stored_id.startswith(query_id):
             ns = mi.get("namespace", "")
             pd = mi.get("pod", "")
@@ -1151,13 +1097,10 @@ async def get_pod_alias(request: Request, cluster: str, namespace: str, pod: str
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
     resp = PodDetailResponse(status=status, data=data, warnings=warnings)
-    return {
-        **resp.model_dump(),
-        "_links": {
-            "self": f"/api/v2/clusters/{cluster}/pods/{namespace}/{pod}",
-            "canonical": f"/api/v2/clusters/{cluster}/workloads/pods/{namespace}/{pod}",
-        },
-    }
+    return with_links(resp, {
+        "self": f"/api/v2/clusters/{cluster}/pods/{namespace}/{pod}",
+        "canonical": f"/api/v2/clusters/{cluster}/workloads/pods/{namespace}/{pod}",
+    })
 
 
 @router.get(
@@ -1193,10 +1136,7 @@ async def get_container_alias(request: Request, cluster: str, container_id: str)
     data, warnings = await fetch_container_by_id(cluster, container_id)
     status = "success" if data else "partial"
     resp = ContainerDetailResponse(status=status, data=data, warnings=warnings)
-    return {
-        **resp.model_dump(),
-        "_links": {
-            "self": f"/api/v2/clusters/{cluster}/containers/{container_id}",
-            "canonical": f"/api/v2/clusters/{cluster}/workloads/containers/{container_id}",
-        },
-    }
+    return with_links(resp, {
+        "self": f"/api/v2/clusters/{cluster}/containers/{container_id}",
+        "canonical": f"/api/v2/clusters/{cluster}/workloads/containers/{container_id}",
+    })
