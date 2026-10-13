@@ -1,9 +1,5 @@
 """
-KCloud Monitor v2 설정.
-
-스캐폴드 단계에서 실제로 사용되는 키는 인증/운영 그룹뿐이다.
-"v2 데이터소스" 그룹은 구현 시 사용할 자리(placeholder)로,
-data_source_v1_to_v2.md §4(v1→v2 config 전환표)를 따른다.
+KCloud Monitor v2 설정 (.env 또는 환경변수).
 """
 from typing import Optional
 
@@ -30,10 +26,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, description="클라이언트당 분당 요청 수")
     LOG_LEVEL: str = Field("INFO", description="로그 레벨")
 
-    # ── v2 데이터소스 (스캐폴드 단계 미사용 — 구현 시 활성화) ─────────────
+    # ── v2 데이터소스 ─────────────────────────────────────────────────────
     PROMETHEUS_URL: Optional[str] = Field("http://localhost:9090", description="Prometheus HTTP API URL",)
     LOKI_URL: Optional[str] = Field(None, description="Loki HTTP API URL")
-    TEMPO_URL: Optional[str] = Field(None, description="Tempo HTTP API URL")
     DATABASE_URL: Optional[str] = Field(
         None, description="PostgreSQL — 알람 저장소(정책/채널/활성 알람/이력), resource-map 원장(예정)"
     )
@@ -45,9 +40,6 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = Field(None, description="SMTP 계정")
     SMTP_PASSWORD: Optional[str] = Field(None, description="SMTP 비밀번호")
     SMTP_FROM: Optional[str] = Field(None, description="알람 메일 발신 주소")
-    REDIS_URL: Optional[str] = Field(
-        None, description="Redis — 캐시 + Streams 이벤트 버스 (예: redis://host:6379/0)"
-    )
     OPENSTACK_AUTH_URL: Optional[str] = Field(
         None, description="Keystone auth URL (예: http://host:5000/v3)"
     )
@@ -57,15 +49,9 @@ class Settings(BaseSettings):
     OPENSTACK_USER_DOMAIN: str = Field("Default", description="Keystone 사용자 도메인")
     OPENSTACK_PROJECT_DOMAIN: str = Field("Default", description="Keystone 프로젝트 도메인")
     OPENSTACK_NOVA_URL: Optional[str] = Field(None, description="Nova compute API URL 오버라이드")
-    OPENSTACK_PLACEMENT_URL: Optional[str] = Field(None, description="Placement API URL 오버라이드")
     OPENSTACK_MAGNUM_URL: Optional[str] = Field(None, description="Magnum(container-infra) API URL 오버라이드")
     OPENSTACK_CYBORG_URL: Optional[str] = Field(
         None, description="Cyborg(accelerator) API URL 오버라이드 (예: http://host:6666/accelerator/v2)"
-    )
-    CLUSTER_REGISTRY: Optional[str] = Field(
-        None,
-        description="클러스터 레지스트리 JSON — 관리/서비스 구분·접속 정보. "
-        '예: [{"name":"mgmt","type":"management"},{"name":"svc-1","type":"service"}]',
     )
 
 

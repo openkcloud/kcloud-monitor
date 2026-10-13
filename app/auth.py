@@ -14,23 +14,12 @@ security_basic = HTTPBasic()
 security_bearer = HTTPBearer()
 security_bearer_optional = HTTPBearer(auto_error=False)
 
-# JWT Configuration - loaded from settings
-def get_jwt_config(settings: Settings = Depends(get_settings)):
-    return {
-        "secret_key": settings.JWT_SECRET_KEY,
-        "algorithm": settings.JWT_ALGORITHM,
-        "expire_minutes": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-    }
-
 class Token(BaseModel):
     """로그인 토큰 응답"""
 
     access_token: str = Field(..., description="JWT 액세스 토큰. 이후 요청의 Authorization: Bearer 헤더에 사용")
     token_type: str = Field(..., description="토큰 종류 (bearer)")
     expires_in: int = Field(..., description="토큰 유효 시간 (초)")
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
 
 def verify_credentials(
     credentials: HTTPBasicCredentials = Depends(security_basic), 
@@ -48,21 +37,10 @@ def verify_credentials(
         )
     return credentials.username
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, settings: Settings = None) -> str:
+def create_access_token(data: dict, expires_delta: timedelta, settings: Settings) -> str:
     """Create JWT access token."""
-    if settings is None:
-        from app.deps import get_settings
-        settings = get_settings()
-    
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-    return encoded_jwt
+    to_encode = {**data, "exp": datetime.utcnow() + expires_delta}
+    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 def _decode_jwt(token: str, settings: Settings) -> str:
     """Decode a JWT and return its subject (username). Raises 401 on failure."""

@@ -43,9 +43,6 @@ class OpenStackClient:
         self.nova_url: Optional[str] = (
             settings.OPENSTACK_NOVA_URL.rstrip("/") if settings.OPENSTACK_NOVA_URL else None
         )
-        self.placement_url: Optional[str] = (
-            settings.OPENSTACK_PLACEMENT_URL.rstrip("/") if settings.OPENSTACK_PLACEMENT_URL else None
-        )
         self.magnum_url: Optional[str] = (
             settings.OPENSTACK_MAGNUM_URL.rstrip("/") if settings.OPENSTACK_MAGNUM_URL else None
         )

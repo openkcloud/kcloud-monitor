@@ -25,17 +25,6 @@ class LokiClient:
     def configured(self) -> bool:
         return bool(self.base_url)
 
-    async def ping(self) -> bool:
-        if not self.configured:
-            return False
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                r = await client.get(f"{self.base_url}/ready")
-                return r.status_code == 200
-        except httpx.HTTPError as exc:
-            logger.warning("Loki ping failed: %s — url=%s", exc, self.base_url)
-            return False
-
     async def query_range(
         self,
         query: str,
