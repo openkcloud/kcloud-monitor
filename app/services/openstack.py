@@ -114,6 +114,23 @@ class OpenStackClient:
         self._token_exp = time.monotonic() + 1800
         return token
 
+    async def _get(
+        self, label: str, configured: bool, base: Optional[str], path: str, extra_headers: Optional[dict] = None
+    ) -> dict:
+        """토큰 인증 GET 공통부. 미설정이면 NOT_CONFIGURED, 호출 실패면 UPSTREAM_ERROR(label은 로그용)."""
+        if not configured:
+            raise OpenStackError("NOT_CONFIGURED")
+        headers = {"X-Auth-Token": await self._get_token(), **(extra_headers or {})}
+        url = f"{base}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(url, headers=headers)
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPError as exc:
+            logger.warning("%s 호출 실패: %s — url=%s", label, exc, url)
+            raise OpenStackError("UPSTREAM_ERROR") from exc
+
     async def _nova_get(self, path: str, microversion: Optional[str] = None) -> dict:
         """Nova GET (catalog 무시, endpoint_override + microversion). 실패 시 OpenStackError.
 
@@ -121,76 +138,31 @@ class OpenStackClient:
         running_vms 등)는 2.88에서 삭제되어 placement로 이관됐으므로, 하이퍼바이저
         조회는 2.53으로 낮춰 호출해야 한다.
         """
-        if not self.nova_configured:
-            raise OpenStackError("NOT_CONFIGURED")
-        token = await self._get_token()
-        url = f"{self.nova_url}{path}"
-        headers = {
-            "X-Auth-Token": token,
-            "OpenStack-API-Version": f"compute {microversion or NOVA_MICROVERSION}",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(url, headers=headers)
-                r.raise_for_status()
-                return r.json()
-        except httpx.HTTPError as exc:
-            logger.warning("Nova 호출 실패: %s — url=%s", exc, url)
-            raise OpenStackError("UPSTREAM_ERROR") from exc
+        return await self._get(
+            "Nova", self.nova_configured, self.nova_url, path,
+            {"OpenStack-API-Version": f"compute {microversion or NOVA_MICROVERSION}"},
+        )
 
     async def _keystone_get(self, path: str) -> dict:
         """Keystone GET (auth_url 기준, 토큰 인증). 실패 시 OpenStackError."""
-        if not self.configured:
-            raise OpenStackError("NOT_CONFIGURED")
-        token = await self._get_token()
-        url = f"{self.auth_url.rstrip('/')}{path}"
-        headers = {"X-Auth-Token": token}
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(url, headers=headers)
-                r.raise_for_status()
-                return r.json()
-        except httpx.HTTPError as exc:
-            logger.warning("Keystone 호출 실패: %s — url=%s", exc, url)
-            raise OpenStackError("UPSTREAM_ERROR") from exc
+        return await self._get("Keystone", self.configured, (self.auth_url or "").rstrip("/"), path)
 
     async def _magnum_get(self, path: str) -> dict:
         """Magnum GET (endpoint_override + container-infra microversion). 실패 시 OpenStackError."""
-        if not self.magnum_configured:
-            raise OpenStackError("NOT_CONFIGURED")
-        token = await self._get_token()
-        url = f"{self.magnum_url}{path}"
-        headers = {
-            "X-Auth-Token": token,
-            "OpenStack-API-Version": "container-infra latest",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(url, headers=headers)
-                r.raise_for_status()
-                return r.json()
-        except httpx.HTTPError as exc:
-            logger.warning("Magnum 호출 실패: %s — url=%s", exc, url)
-            raise OpenStackError("UPSTREAM_ERROR") from exc
+        return await self._get(
+            "Magnum", self.magnum_configured, self.magnum_url, path,
+            {"OpenStack-API-Version": "container-infra latest"},
+        )
 
     async def _cyborg_get(self, path: str) -> dict:
         """Cyborg GET (endpoint_override). 실패 시 OpenStackError.
 
         버전 헤더는 숫자만 쓴다. "accelerator 2.0"처럼 접두어를 붙이면 Cyborg가 무시하고 2.0으로 처리한다.
         """
-        if not self.cyborg_configured:
-            raise OpenStackError("NOT_CONFIGURED")
-        token = await self._get_token()
-        url = f"{self.cyborg_url}{path}"
-        headers = {"X-Auth-Token": token, "OpenStack-API-Version": "2.0"}
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(url, headers=headers)
-                r.raise_for_status()
-                return r.json()
-        except httpx.HTTPError as exc:
-            logger.warning("Cyborg 호출 실패: %s — url=%s", exc, url)
-            raise OpenStackError("UPSTREAM_ERROR") from exc
+        return await self._get(
+            "Cyborg", self.cyborg_configured, self.cyborg_url, path,
+            {"OpenStack-API-Version": "2.0"},
+        )
 
     async def bound_accelerators(self) -> dict[str, tuple[str, int]]:
         """VM uuid → (alias, 카드 수). Cyborg에서 실제로 장치가 바인딩된 VM만.
