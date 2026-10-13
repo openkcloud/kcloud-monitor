@@ -4,16 +4,11 @@ OpenStack API v2 Pydantic 스키마.
 공통 응답 정책: status(success|partial|error) / observed_at / warnings.
 경고 코드: NOT_CONFIGURED(크리덴셜 미설정), UPSTREAM_ERROR(OpenStack 호출 실패), NO_DATA.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 
 _D_HV_STATE = "물리 서버 연결 상태 (up | down)"

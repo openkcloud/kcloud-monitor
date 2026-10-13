@@ -3,16 +3,11 @@
 
 Pod / Container / Namespace / Service 응답 모델.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS, _now
 
 
 # 같은 뜻의 필드가 여러 모델에 반복되어 문구를 한 곳에 둠

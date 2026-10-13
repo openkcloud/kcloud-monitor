@@ -9,12 +9,11 @@ FastAPI response_model을 적용하지 않는다(json 포맷만 아래 모델을
 (예: DCGM_FI_DEV_POWER_USAGE), 별칭이 아닌 실제 메트릭명을 키로 사용해 임의 PromQL
 주입을 차단한다.
 """
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 # ---------------------------------------------------------------------------
 # 허용 메트릭 목록 (EXPORT_METRIC_ALLOWLIST) — 키/값 모두 원본 메트릭명 또는 안전한 PromQL
@@ -43,10 +42,6 @@ EXPORT_METRIC_ALLOWLIST: dict[str, str] = {
     "ipmi_dcmi_power_consumption_watts": "ipmi_dcmi_power_consumption_watts",
     "kepler_node_cpu_watts": "kepler_node_cpu_watts",
 }
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

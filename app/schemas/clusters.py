@@ -1,7 +1,6 @@
 """
 클러스터 API v2 Pydantic 스키마.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -14,11 +13,8 @@ from app.schemas._common import (
     DESC_STATUS,
     DESC_TOTAL,
     DESC_WARNINGS,
+    _now,
 )
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 _DESC_TYPE = (

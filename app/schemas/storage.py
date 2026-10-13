@@ -8,16 +8,11 @@
   cluster 단위 값(total_bytes, used_bytes)은 복제본까지 포함한 실제 디스크 소모량이고,
   풀 단위 stored_bytes 는 복제 전 논리 데이터량이다. 3벌 복제면 둘은 3배 차이가 난다.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS, _now
 
 
 # ---------------------------------------------------------------------------

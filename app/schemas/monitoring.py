@@ -6,12 +6,11 @@
   - observed_at: ISO 8601 수집 시각
   - warnings[]: STALE_DATA, PARTIAL_SOURCE, ESTIMATED_POWER 등 (정상 시 빈 목록)
 """
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 # ---------------------------------------------------------------------------
 # 메트릭 허용 목록 (METRIC_ALLOWLIST)
@@ -43,15 +42,6 @@ METRIC_ALLOWLIST: dict[str, str] = {
     "rebellions_health": 'RBLN_DEVICE_STATUS:HEALTH{cluster="rebellions"}',    # 0=정상!
     "gpu_xid_errors": 'changes(DCGM_FI_DEV_XID_ERRORS{cluster="l40s"}[10m])', # 0=정상
 }
-
-
-# ---------------------------------------------------------------------------
-# 공통 헬퍼
-# ---------------------------------------------------------------------------
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

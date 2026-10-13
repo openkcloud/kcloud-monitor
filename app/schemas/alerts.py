@@ -5,16 +5,12 @@
 kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki),
 kind=slo 는 vLLM 서빙 지연과 대기 요청 수(Prometheus).
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, BeforeValidator, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 
 Severity = Literal["info", "warning", "critical"]

@@ -3,16 +3,11 @@ LLM 서빙 SLO(TTFT·TPOT) API v2 Pydantic 스키마.
 
 vLLM 이 내보내는 히스토그램을 Prometheus 에서 읽어 분위수, 목표 달성률, 남은 오류 예산을 계산한다.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_TOTAL, DESC_WARNINGS, _now
 
 
 class LatencySlo(BaseModel):
