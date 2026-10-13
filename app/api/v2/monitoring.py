@@ -55,11 +55,31 @@ from app.services.power import (
     power_summary,
     power_timeseries,
 )
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import first_finite, first_value, prometheus_client, ts_iso
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def time_range(params: TimeseriesParams) -> tuple[str, str, str]:
+    """시계열 조회 구간 (start, end, step). 시작과 끝을 같은 now 기준으로 계산."""
+    now = datetime.now(timezone.utc)
+    return params.start_iso(now), params.end_iso(now), params.step
+
+
+def _check_metric(metric: Optional[str]) -> None:
+    """metric 누락 또는 허용 목록에 없는 이름이면 400."""
+    if metric is None:
+        raise HTTPException(
+            status_code=400,
+            detail="metric 파라미터 필수. 허용 목록: " + str(list(METRIC_ALLOWLIST.keys())),
+        )
+    if metric not in METRIC_ALLOWLIST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"허용되지 않은 메트릭: {metric}. 허용 목록: {list(METRIC_ALLOWLIST.keys())}",
+        )
 
 
 @router.get("/monitoring/overview", summary="전체 인프라 현황(KPI)", response_model=OverviewResponse)
@@ -116,36 +136,19 @@ async def get_overview(request: Request):
     )
 
     # 노드 집계: 물리(관리 클러스터 kube_node_info) + 가상(서비스 클러스터 node_uname_info 합)
-    physical_results = await prometheus_client.instant("count(kube_node_info)")
-    physical_total = 0
-    if physical_results:
-        try:
-            physical_total = int(float(physical_results[0]["value"][1]))
-        except (KeyError, IndexError, ValueError):
-            physical_total = 0
-
-    physical_ready_results = await prometheus_client.instant(
+    # count() 값은 정수라 NaN/Inf 가 없음. 미수집이면 0
+    physical_total = int(first_finite(await prometheus_client.instant("count(kube_node_info)")) or 0)
+    physical_ready = int(first_finite(await prometheus_client.instant(
         'count(kube_node_status_condition{condition="Ready",status="true"})'
-    )
-    physical_ready = 0
-    if physical_ready_results:
-        try:
-            physical_ready = int(float(physical_ready_results[0]["value"][1]))
-        except (KeyError, IndexError, ValueError):
-            physical_ready = 0
+    )) or 0)
 
     virtual_total = 0
     for c in clusters_info.values():
         if c.type != "service":
             continue
-        vm_results = await prometheus_client.instant(
+        virtual_total += int(first_finite(await prometheus_client.instant(
             f'count(node_uname_info{{cluster="{c.label_value}"}})'
-        )
-        if vm_results:
-            try:
-                virtual_total += int(float(vm_results[0]["value"][1]))
-            except (KeyError, IndexError, ValueError):
-                pass
+        )) or 0)
 
     node_counts = NodeCounts(
         total=physical_total + virtual_total,
@@ -157,38 +160,20 @@ async def get_overview(request: Request):
     )
 
     # 3. L40S 평균 온도
-    l40s_temp_results = await prometheus_client.instant(
+    l40s_avg_temp = first_value(await prometheus_client.instant(
         'avg(DCGM_FI_DEV_GPU_TEMP{cluster="l40s"})'
-    )
-    l40s_avg_temp: Optional[float] = None
-    if l40s_temp_results:
-        try:
-            l40s_avg_temp = float(l40s_temp_results[0]["value"][1])
-        except (KeyError, IndexError, ValueError):
-            pass
+    ))
 
     # 4. Furiosa 평균 온도
-    furiosa_temp_results = await prometheus_client.instant(
+    furiosa_avg_temp = first_value(await prometheus_client.instant(
         'avg(kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"})'
-    )
-    furiosa_avg_temp: Optional[float] = None
-    if furiosa_temp_results:
-        try:
-            furiosa_avg_temp = float(furiosa_temp_results[0]["value"][1])
-        except (KeyError, IndexError, ValueError):
-            pass
+    ))
 
     # 5. Rebellions 평균 온도 — exporter가 실측의 1/1000로 표출하므로 ×1000 보정
     #    (rbln-stat 카드 실측 39°C·18.4W와 대조 확정, 2026-08-24)
-    rebellions_temp_results = await prometheus_client.instant(
+    rebellions_avg_temp = first_value(await prometheus_client.instant(
         'avg({__name__="RBLN_DEVICE_STATUS:TEMPERATURE",cluster="rebellions"}) * 1000'
-    )
-    rebellions_avg_temp: Optional[float] = None
-    if rebellions_temp_results:
-        try:
-            rebellions_avg_temp = float(rebellions_temp_results[0]["value"][1])
-        except (KeyError, IndexError, ValueError):
-            pass
+    ))
     warnings.append("REBELLIONS_SCALE_CORRECTED_X1000")
 
     # 6. Prometheus 결과 없으면 status="partial"
@@ -307,10 +292,7 @@ async def get_power_timeseries(request: Request, params: TimeseriesParams = Depe
 
     * 누적 그래프에 바로 쓰는 형태
     """
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     r = await power_timeseries(start, end, step)
     return PowerTimeseriesResponse(
@@ -385,10 +367,7 @@ async def get_power_efficiency_timeseries(request: Request, params: TimeseriesPa
     * 사용률이 0이면 효율도 0
     * 서버 전체 전력은 포함하지 않음
     """
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     r = await power_efficiency_timeseries(start, end, step)
     return PowerEfficiencyTimeseriesResponse(
@@ -486,8 +465,7 @@ async def get_accelerator_utilization_timeseries(
     * 값은 각 `step` 시점의 순간값 평균
     * `step` 사이의 짧은 변화는 반영되지 않음
     """
-    now = datetime.now(timezone.utc)
-    r = await accelerator_utilization_timeseries(params.start_iso(now), params.end_iso(now), params.step, by=by)
+    r = await accelerator_utilization_timeseries(*time_range(params), by=by)
     return AcceleratorUtilizationTimeseriesResponse(
         status=r["status"],
         series=[UtilizationSeriesItem(**s) for s in r["data"]["series"]],
@@ -525,16 +503,7 @@ async def query_metrics(
 
     * 400: `metric` 누락 또는 허용 목록에 없는 이름
     """
-    if metric is None:
-        raise HTTPException(
-            status_code=400,
-            detail="metric 파라미터 필수. 허용 목록: " + str(list(METRIC_ALLOWLIST.keys())),
-        )
-    if metric not in METRIC_ALLOWLIST:
-        raise HTTPException(
-            status_code=400,
-            detail=f"허용되지 않은 메트릭: {metric}. 허용 목록: {list(METRIC_ALLOWLIST.keys())}",
-        )
+    _check_metric(metric)
 
     results = await prometheus_client.instant(METRIC_ALLOWLIST[metric])
 
@@ -623,21 +592,9 @@ async def get_metrics_timeseries(
     * `by` 지정 시 그 라벨 값이 같은 시리즈를 묶고 각 `step` 구간을 `aggregation` 방식으로 요약
     * `by` 가 없으면 시리즈별 순간값
     """
-    if metric is None:
-        raise HTTPException(
-            status_code=400,
-            detail="metric 파라미터 필수. 허용 목록: " + str(list(METRIC_ALLOWLIST.keys())),
-        )
-    if metric not in METRIC_ALLOWLIST:
-        raise HTTPException(
-            status_code=400,
-            detail=f"허용되지 않은 메트릭: {metric}. 허용 목록: {list(METRIC_ALLOWLIST.keys())}",
-        )
+    _check_metric(metric)
 
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     results = await prometheus_client.range_query(
         _grouped_query(METRIC_ALLOWLIST[metric], by, params.aggregation, step), start, end, step
@@ -656,10 +613,7 @@ async def get_metrics_timeseries(
     series = [
         MetricSample(
             metric=item.get("metric", {}),
-            values=[
-                (datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat(), str(v[1]))
-                for v in item.get("values", [])
-            ],
+            values=[(ts_iso(v[0]), str(v[1])) for v in item.get("values", [])],
         )
         for item in results
     ]
@@ -705,75 +659,29 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
     * `NO_DATA_FURIOSA`: 퓨리오사 온도 미수집
     * `NO_DATA_REBELLIONS`: 리벨리온 온도 미수집
     """
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     warnings: list[str] = []
-
-    # L40S GPU 온도
-    l40s_results = await prometheus_client.range_query(
-        'DCGM_FI_DEV_GPU_TEMP{cluster="l40s"}', start, end, step
-    )
-    # Furiosa NPU 온도
-    furiosa_results = await prometheus_client.range_query(
-        'kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"}', start, end, step
-    )
-
     series: list[TemperatureSeriesItem] = []
 
-    if not l40s_results:
-        warnings.append("NO_DATA_NVIDIA")
-    else:
-        for item in l40s_results:
+    # (벤더, 클러스터, 쿼리). 클러스터가 None 이면 퓨리오사처럼 라벨값을 씀
+    for vendor, cluster, query in (
+        ("nvidia", "l40s", 'DCGM_FI_DEV_GPU_TEMP{cluster="l40s"}'),
+        ("furiosa", None, 'kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"}'),
+        # Rebellions NPU 온도 — exporter가 실측의 1/1000로 표출하므로 ×1000 보정
+        # (rbln-stat 대조 확정, 2026-08-24)
+        ("rebellions", "rebellions", '({__name__="RBLN_DEVICE_STATUS:TEMPERATURE",cluster="rebellions"}) * 1000'),
+    ):
+        results = await prometheus_client.range_query(query, start, end, step)
+        if not results:
+            warnings.append(f"NO_DATA_{vendor.upper()}")
+        for item in results:
             series.append(
                 TemperatureSeriesItem(
-                    vendor="nvidia",
-                    cluster="l40s",
+                    vendor=vendor,
+                    cluster=cluster or item.get("metric", {}).get("cluster", "furiosa"),
                     metric_labels=item.get("metric", {}),
-                    values=[
-                        (datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat(), str(v[1]))
-                        for v in item.get("values", [])
-                    ],
-                )
-            )
-
-    if not furiosa_results:
-        warnings.append("NO_DATA_FURIOSA")
-    else:
-        for item in furiosa_results:
-            series.append(
-                TemperatureSeriesItem(
-                    vendor="furiosa",
-                    cluster=item.get("metric", {}).get("cluster", "furiosa"),
-                    metric_labels=item.get("metric", {}),
-                    values=[
-                        (datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat(), str(v[1]))
-                        for v in item.get("values", [])
-                    ],
-                )
-            )
-
-    # Rebellions NPU 온도 — exporter가 실측의 1/1000로 표출하므로 ×1000 보정
-    # (rbln-stat 대조 확정, 2026-08-24)
-    rebellions_results = await prometheus_client.range_query(
-        '({__name__="RBLN_DEVICE_STATUS:TEMPERATURE",cluster="rebellions"}) * 1000',
-        start, end, step,
-    )
-    if not rebellions_results:
-        warnings.append("NO_DATA_REBELLIONS")
-    else:
-        for item in rebellions_results:
-            series.append(
-                TemperatureSeriesItem(
-                    vendor="rebellions",
-                    cluster="rebellions",
-                    metric_labels=item.get("metric", {}),
-                    values=[
-                        (datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat(), str(v[1]))
-                        for v in item.get("values", [])
-                    ],
+                    values=[(ts_iso(v[0]), str(v[1])) for v in item.get("values", [])],
                 )
             )
     warnings.append("REBELLIONS_SCALE_CORRECTED_X1000")
@@ -835,8 +743,7 @@ async def get_throttling_timeseries(
     * 값이 빠진 시각은 점이 없음
     * `step` 이 길면 짧은 쓰로틀링을 놓칠 수 있음
     """
-    now = datetime.now(timezone.utc)
-    start, end, step = params.start_iso(now), params.end_iso(now), params.step
+    start, end, step = time_range(params)
     step_seconds = parse_period(step).total_seconds()
 
     series: list[ThrottlingSeriesItem] = []
@@ -864,6 +771,35 @@ async def get_throttling_timeseries(
     return ThrottlingTimeseriesResponse(status="success", series=series if detail else [], summary=summary)
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sse_poll(request: Request, event: str, poll, *log_args) -> StreamingResponse:
+    """heartbeat 다음 poll() 결과를 event 이름으로 보내기를 15초마다 반복하는 SSE. 조회 실패는 error 이벤트 후 계속."""
+    async def generate():
+        event_id = 0
+        while True:
+            if await request.is_disconnected():
+                break
+
+            event_id += 1
+            yield f"id: {event_id}\nevent: heartbeat\ndata: {json.dumps({'observed_at': _now_iso()})}\n\n"
+
+            try:
+                payload = await poll()
+                event_id += 1
+                yield f"id: {event_id}\nevent: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            except Exception:
+                logger.exception(*log_args)
+                event_id += 1
+                yield f"id: {event_id}\nevent: error\ndata: {json.dumps({'error': 'poll_failed', 'observed_at': _now_iso()})}\n\n"
+
+            await asyncio.sleep(15)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 @router.get("/monitoring/stream/power", summary="실시간 전력 스트림(SSE)")
 async def stream_power(request: Request):
     """전력 요약값을 주기적으로 보내는 SSE 스트림
@@ -884,38 +820,11 @@ async def stream_power(request: Request):
     * 15초 간격으로 전송
     * 각 이벤트에 연결 이후 1부터 증가하는 `id` 포함
     """
-    _now_iso = lambda: datetime.now(timezone.utc).isoformat()
-    event_id = 0
+    async def poll() -> dict:
+        r = await power_summary()
+        return {"status": r["status"], "data": r["data"], "warnings": r["warnings"], "observed_at": _now_iso()}
 
-    async def generate():
-        nonlocal event_id
-        while True:
-            if await request.is_disconnected():
-                break
-
-            # heartbeat
-            event_id += 1
-            yield f"id: {event_id}\nevent: heartbeat\ndata: {json.dumps({'observed_at': _now_iso()})}\n\n"
-
-            # 데이터 폴링
-            try:
-                r = await power_summary()
-                payload = {
-                    "status": r["status"],
-                    "data": r["data"],
-                    "warnings": r["warnings"],
-                    "observed_at": _now_iso(),
-                }
-                event_id += 1
-                yield f"id: {event_id}\nevent: power\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            except Exception:
-                logger.exception("SSE power poll error")
-                event_id += 1
-                yield f"id: {event_id}\nevent: error\ndata: {json.dumps({'error': 'poll_failed', 'observed_at': _now_iso()})}\n\n"
-
-            await asyncio.sleep(15)
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_poll(request, "power", poll, "SSE power poll error")
 
 
 @router.get("/monitoring/stream/metrics", summary="실시간 메트릭 스트림(SSE)")
@@ -955,43 +864,21 @@ async def stream_metrics(
             detail=f"metric 파라미터 필수(허용 목록). 사용 가능: {available}",
         )
 
-    _now_iso = lambda: datetime.now(timezone.utc).isoformat()
-    event_id = 0
+    async def poll() -> dict:
+        results = await prometheus_client.instant(METRIC_ALLOWLIST[metric])
+        samples = [
+            {
+                "metric": item.get("metric", {}),
+                "value": [item["value"][0], item["value"][1]],
+            }
+            for item in results
+            if "value" in item
+        ]
+        return {
+            "status": "success" if samples else "partial",
+            "metric": metric,
+            "results": samples,
+            "observed_at": _now_iso(),
+        }
 
-    async def generate():
-        nonlocal event_id
-        while True:
-            if await request.is_disconnected():
-                break
-
-            # heartbeat
-            event_id += 1
-            yield f"id: {event_id}\nevent: heartbeat\ndata: {json.dumps({'observed_at': _now_iso()})}\n\n"
-
-            # 데이터 폴링
-            try:
-                results = await prometheus_client.instant(METRIC_ALLOWLIST[metric])
-                samples = [
-                    {
-                        "metric": item.get("metric", {}),
-                        "value": [item["value"][0], item["value"][1]],
-                    }
-                    for item in results
-                    if "value" in item
-                ]
-                event_id += 1
-                payload = {
-                    "status": "success" if samples else "partial",
-                    "metric": metric,
-                    "results": samples,
-                    "observed_at": _now_iso(),
-                }
-                yield f"id: {event_id}\nevent: metric\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            except Exception:
-                logger.exception("SSE metric poll error for %s", metric)
-                event_id += 1
-                yield f"id: {event_id}\nevent: error\ndata: {json.dumps({'error': 'poll_failed', 'observed_at': _now_iso()})}\n\n"
-
-            await asyncio.sleep(15)
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_poll(request, "metric", poll, "SSE metric poll error for %s", metric)

@@ -33,6 +33,7 @@ from app.schemas.logs import (
 )
 from app.services.cluster_discovery import cluster_discovery
 from app.services.loki import loki_client
+from app.services.power import _card_host
 
 logger = logging.getLogger(__name__)
 
@@ -853,7 +854,6 @@ async def pod_logs(
         level=_level(log_level),
     )
 
-    warnings: list[str] = []
     entries, pagination = await _query_page(logql, start, end, limit, direction, cursor)
 
     return PodLogResponse(
@@ -862,7 +862,6 @@ async def pod_logs(
         pod=pod,
         data=entries,
         pagination=pagination,
-        warnings=warnings,
     )
 
 
@@ -937,8 +936,7 @@ async def accelerator_logs(
     # 카드 ID → 노드. 가속기 목록 API와 같은 메트릭(전력)과 호스트 라벨 순서를 씀
     node = None
     for item in await _instant_metric(info.vendor, cluster, "power", acc_id=accelerator_id):
-        m = item.get("metric", {})
-        node = m.get("Hostname") or m.get("hostname") or m.get("node") or m.get("instance")
+        node = _card_host(item.get("metric", {}), None)
         if node:
             break
     if node is None:
