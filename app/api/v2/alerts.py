@@ -508,14 +508,20 @@ async def list_active(
     return ListResponse(data=data, total=len(rows))
 
 
-@router.post("/active/{fingerprint}/ack", summary="활성 알람 확인 처리", response_model=ItemResponse)
+# fingerprint 에 / 가 들어 있어(log-001:mgmt/*/*) 일반 경로 변수로는 매칭 안 됨. path 변환기로 받음
+@router.post("/active/{fingerprint:path}/ack", summary="활성 알람 확인 처리", response_model=ItemResponse)
 async def ack_alert(fingerprint: str):
     """알람 확인 처리
 
     입력 예시
 
-    * `POST /api/v2/alerts/active/{fingerprint}/ack`
-    * `fingerprint` 는 활성 알람 목록의 값을 그대로 사용
+    * `POST /api/v2/alerts/active/log-001:mgmt/*/*/ack`
+    * `POST /api/v2/alerts/active/res-003:l40s/innogrid-l40s/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/ack`
+
+    입력 옵션
+
+    * `fingerprint`: 활성 알람 목록(`GET /api/v2/alerts/active`) 응답의 `fingerprint` 값 그대로 (경로, 필수)
+    * 형식은 `정책ID:클러스터/노드/가속기ID`, 해당 없는 칸은 `*`
 
     응답
 
