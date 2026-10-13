@@ -77,20 +77,7 @@ class LokiClient:
         """라벨 키 목록. 실패 시 None (빈 목록과 구분)."""
         if not self.configured:
             return None
-        url = f"{self.base_url}/loki/api/v1/labels"
-        params: dict[str, str] = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params=params)
-                r.raise_for_status()
-                return r.json().get("data", [])
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            logger.warning("Loki labels error: %s", exc)
-            return None
+        return await self._get_list("labels", start, end)
 
     async def label_values(
         self, label_name: str, start: Optional[str] = None, end: Optional[str] = None,
@@ -98,7 +85,10 @@ class LokiClient:
         """라벨 값 목록. 실패 시 None (빈 목록과 구분)."""
         if not self.configured:
             return None
-        url = f"{self.base_url}/loki/api/v1/label/{label_name}/values"
+        return await self._get_list(f"label/{label_name}/values", start, end)
+
+    async def _get_list(self, path: str, start: Optional[str], end: Optional[str]) -> Optional[list[str]]:
+        """labels, label_values 공통 GET. 실패 시 None."""
         params: dict[str, str] = {}
         if start:
             params["start"] = start
@@ -106,11 +96,11 @@ class LokiClient:
             params["end"] = end
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params=params)
+                r = await client.get(f"{self.base_url}/loki/api/v1/{path}", params=params)
                 r.raise_for_status()
                 return r.json().get("data", [])
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            logger.warning("Loki label_values error: %s — label=%s", exc, label_name)
+            logger.warning("Loki %s error: %s", path, exc)
             return None
 
     async def volume(

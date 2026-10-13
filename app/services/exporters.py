@@ -14,6 +14,26 @@ from app.services.prometheus import parse_float, prometheus_client, ts_iso
 CPU_POWER_QUERY = 'kepler_node_cpu_watts{zone="psys"}'
 
 
+def _points(results: list[dict]):
+    """range 결과의 점마다 (시리즈 라벨, ISO 시각, 값). 모양이 깨진 점은 건너뜀."""
+    for series in results:
+        labels = series.get("metric", {})
+        for point in series.get("values", []):
+            try:
+                ts, raw = point[0], point[1]
+            except (IndexError, TypeError):
+                continue
+            yield labels, ts_iso(ts), parse_float(raw)
+
+
+def _power_rows(results: list[dict], layer: str, node_of) -> list[dict]:
+    """range 결과 → timestamp,node,layer,watts 행. node_of(라벨)로 노드 이름을 고름."""
+    return [
+        {"timestamp": ts, "node": node_of(labels), "layer": layer, "watts": watts}
+        for labels, ts, watts in _points(results)
+    ]
+
+
 async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict], list[str]]:
     """전력 3계층(server/cpu/accelerator) range 쿼리 → timestamp,node,layer,watts 행 목록.
 
@@ -21,57 +41,26 @@ async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict]
     시계열(비집계)을 직접 조회해 node 단위 행을 만든다.
     """
     warnings: list[str] = []
-    rows: list[dict] = []
 
     server_results = await prometheus_client.range_query(IPMI_POWER_METRIC, start, end, step)
     if not server_results:
         warnings.append("NO_DATA_SERVER_POWER")
-    for series in server_results:
-        node = series.get("metric", {}).get("node", "unknown")
-        for point in series.get("values", []):
-            try:
-                ts, raw = point[0], point[1]
-            except (IndexError, TypeError):
-                continue
-            rows.append(
-                {"timestamp": ts_iso(ts), "node": node, "layer": "server", "watts": parse_float(raw)}
-            )
+    rows = _power_rows(server_results, "server", lambda m: m.get("node", "unknown"))
 
     cpu_results = await prometheus_client.range_query(CPU_POWER_QUERY, start, end, step)
     if not cpu_results:
         warnings.append("NO_DATA_CPU_POWER")
-    for series in cpu_results:
-        node = series.get("metric", {}).get("node_name", "unknown")
-        for point in series.get("values", []):
-            try:
-                ts, raw = point[0], point[1]
-            except (IndexError, TypeError):
-                continue
-            rows.append(
-                {"timestamp": ts_iso(ts), "node": node, "layer": "cpu", "watts": parse_float(raw)}
-            )
+    rows += _power_rows(cpu_results, "cpu", lambda m: m.get("node_name", "unknown"))
 
     any_accel = False
     for vendor, query in ACCEL_POWER_QUERIES.items():
         accel_results = await prometheus_client.range_query(query, start, end, step)
         if accel_results:
             any_accel = True
-        for series in accel_results:
-            metric = series.get("metric", {})
-            node = metric.get("instance") or metric.get("hostname") or metric.get("node") or "unknown"
-            for point in series.get("values", []):
-                try:
-                    ts, raw = point[0], point[1]
-                except (IndexError, TypeError):
-                    continue
-                rows.append(
-                    {
-                        "timestamp": ts_iso(ts),
-                        "node": node,
-                        "layer": f"accelerator:{vendor}",
-                        "watts": parse_float(raw),
-                    }
-                )
+        rows += _power_rows(
+            accel_results, f"accelerator:{vendor}",
+            lambda m: m.get("instance") or m.get("hostname") or m.get("node") or "unknown",
+        )
     if not any_accel:
         warnings.append("NO_DATA_ACCELERATOR")
 
@@ -80,24 +69,10 @@ async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict]
 
 async def metric_export_rows(promql: str, start: str, end: str, step: str) -> tuple[list[dict], list[str]]:
     """단일 메트릭 range 쿼리 → timestamp,labels,value 행 목록."""
-    warnings: list[str] = []
-    rows: list[dict] = []
-
     results = await prometheus_client.range_query(promql, start, end, step)
     if not results:
-        warnings.append("NO_DATA")
-        return rows, warnings
-
-    for series in results:
-        labels = series.get("metric", {})
-        for point in series.get("values", []):
-            try:
-                ts, raw = point[0], point[1]
-            except (IndexError, TypeError):
-                continue
-            rows.append({"timestamp": ts_iso(ts), "labels": labels, "value": parse_float(raw)})
-
-    return rows, warnings
+        return [], ["NO_DATA"]
+    return [{"timestamp": ts, "labels": labels, "value": value} for labels, ts, value in _points(results)], []
 
 
 def rows_to_csv(rows: list[dict], fieldnames: list[str]) -> str:

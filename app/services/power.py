@@ -15,10 +15,9 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 각 서비스 함수는 `{"status": str, "data": <dict|list>, "warnings": list[str]}` 형태로 반환한다.
 """
 import asyncio
-from datetime import datetime, timezone
 from typing import Optional
 
-from app.services.prometheus import first_finite, parse_finite, prometheus_client
+from app.services.prometheus import first_finite, parse_finite, prometheus_client, ts_iso
 
 IPMI_POWER_METRIC = "ipmi_dcmi_power_consumption_watts"
 
@@ -79,7 +78,7 @@ def _range_values(results: list[dict]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for v in values:
         try:
-            ts = datetime.fromtimestamp(float(v[0]), tz=timezone.utc).isoformat()
+            ts = ts_iso(v[0])
             raw = str(v[1])
         except (IndexError, TypeError, ValueError, OverflowError, OSError):
             continue
@@ -93,40 +92,38 @@ def _accel_sum_expr() -> str:
     return " + ".join(parts)
 
 
-def _kepler_total_watts(results: list[dict]) -> Optional[float]:
-    """`kepler_node_cpu_watts` 전체 instant 조회 결과 → node_name별 그룹 →
-    zone=psys 있으면 그 값, 없으면 package(+dram) 합 → 전 노드 합산.
+def _kepler_by_node(results: list[dict]) -> dict[str, float]:
+    """`kepler_node_cpu_watts` instant 조회 결과 → node_name별 CPU 전력.
+    zone=psys 있으면 그 값, 없으면 package(+dram) 합.
 
     zone은 psys ⊇ package ⊇ core 포함관계이므로 단순 합산은 중복 계산된다.
     """
-    if not results:
-        return None
-
-    by_node: dict[str, dict[str, float]] = {}
+    zones_by_node: dict[str, dict[str, float]] = {}
     for item in results:
         metric = item.get("metric", {})
         node = metric.get("node_name")
         zone = metric.get("zone")
         if not node or not zone:
             continue
-        try:
-            raw = item["value"][1]
-        except (KeyError, IndexError, TypeError):
-            continue
-        val = parse_finite(raw)
+        val = first_finite([item])
         if val is None:
             continue
-        by_node.setdefault(node, {})[zone] = val
+        zones_by_node.setdefault(node, {})[zone] = val
+    return {
+        node: zones["psys"] if "psys" in zones else zones.get("package", 0.0) + zones.get("dram", 0.0)
+        for node, zones in zones_by_node.items()
+    }
 
+
+def _kepler_total_watts(results: list[dict]) -> Optional[float]:
+    """_kepler_by_node 의 전 노드 합산. 노드가 없으면 None."""
+    by_node = _kepler_by_node(results)
     if not by_node:
         return None
-
+    # sum() 은 3.12부터 보정 합산이라 결과가 달라질 수 있어 앞에서부터 더함
     total = 0.0
-    for zones in by_node.values():
-        if "psys" in zones:
-            total += zones["psys"]
-        else:
-            total += zones.get("package", 0.0) + zones.get("dram", 0.0)
+    for watts in by_node.values():
+        total += watts
     return total
 
 
@@ -224,22 +221,10 @@ async def power_breakdown(dimension: str) -> dict:
             val = first_finite([item])
             items.append({"key": node, "watts": val, "layer": "server"})
 
-        kepler_results = await prometheus_client.instant("kepler_node_cpu_watts")
-        by_node: dict[str, dict[str, float]] = {}
-        for item in kepler_results:
-            metric = item.get("metric", {})
-            node = metric.get("node_name")
-            zone = metric.get("zone")
-            if not node or not zone:
-                continue
-            val = first_finite([item])
-            if val is None:
-                continue
-            by_node.setdefault(node, {})[zone] = val
+        by_node = _kepler_by_node(await prometheus_client.instant("kepler_node_cpu_watts"))
         if not by_node:
             warnings.append("NO_DATA_CPU_POWER")
-        for node, zones in by_node.items():
-            watts = zones["psys"] if "psys" in zones else zones.get("package", 0.0) + zones.get("dram", 0.0)
+        for node, watts in by_node.items():
             items.append({"key": node, "watts": watts, "layer": "cpu"})
 
     elif dimension == "accelerator":
@@ -409,11 +394,11 @@ async def power_efficiency_timeseries(start: str, end: str, step: str) -> dict:
     return {"status": _status_from_warnings(warnings), "data": series, "warnings": warnings}
 
 
-def _card_host(metric: dict) -> str:
+def _card_host(metric: dict, default: Optional[str] = "unknown") -> Optional[str]:
     """카드가 꽂힌 호스트. 벤더마다 라벨 이름이 달라 차례로 찾는다 (퓨리오사는 node)."""
     return (
         metric.get("Hostname") or metric.get("hostname") or metric.get("node")
-        or metric.get("instance") or "unknown"
+        or metric.get("instance") or default
     )
 
 
@@ -465,8 +450,7 @@ async def accelerator_utilization(
 def _avg_series(per_ts: dict[float, list[float]]) -> list[tuple[str, str]]:
     """{epoch: [값...]} → 시각순 (ISO 8601 UTC, 평균값) 목록."""
     return [
-        (datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(), str(sum(v) / len(v)))
-        for ts, v in sorted(per_ts.items())
+        (ts_iso(ts), str(sum(v) / len(v))) for ts, v in sorted(per_ts.items())
     ]
 
 

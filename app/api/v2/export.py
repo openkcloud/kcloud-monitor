@@ -2,13 +2,13 @@
 
 지원 포맷은 csv와 json. 그 외 포맷 요청은 400 UNSUPPORTED_FORMAT 반환.
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from app.api.v2.deps import TimeseriesParams
+from app.api.v2.monitoring import time_range
 from app.schemas.export import (
     EXPORT_METRIC_ALLOWLIST,
     MetricExportData,
@@ -80,10 +80,7 @@ async def export_power(
     """
     _check_format(format)
 
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     rows, warnings = await power_export_rows(start, end, step)
     status = "partial" if warnings else "success"
@@ -150,10 +147,7 @@ async def export_metrics(
             detail=f"INVALID_METRIC: 허용 목록 {list(EXPORT_METRIC_ALLOWLIST.keys())} 중에서 선택하세요.",
         )
 
-    now = datetime.now(timezone.utc)
-    start = params.start_iso(now)
-    end = params.end_iso(now)
-    step = params.step
+    start, end, step = time_range(params)
 
     rows, warnings = await metric_export_rows(EXPORT_METRIC_ALLOWLIST[metric], start, end, step)
     status = "partial" if warnings else "success"
