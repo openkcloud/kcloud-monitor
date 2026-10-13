@@ -19,11 +19,10 @@ KCloud Monitor v2 — VM 사용량·전력 귀속 도메인 서비스 (libvirt e
 
 각 서비스 함수는 `{"status": str, "data": <dict|None>, "warnings": list[str]}`를 반환한다.
 """
-import math
 import re
 from typing import Optional
 
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import first_finite, prometheus_client
 
 # ── 메트릭 이름 (실측 확정) ────────────────────────────────────────────────
 CPU_TIME_METRIC = "libvirtd_domain_cpu_time"        # ns 누적
@@ -69,29 +68,8 @@ def _label_safe(value: Optional[str]) -> bool:
     return bool(value) and bool(_LABEL_SAFE.match(value))
 
 
-def _parse_float(raw) -> Optional[float]:
-    """Prometheus 값 → float. 실패/NaN/Inf는 None(JSON 비호환 방어)."""
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(value) or math.isinf(value):
-        return None
-    return value
-
-
-def _first_value(results: list[dict]) -> Optional[float]:
-    """instant 결과 첫 항목 value 파싱."""
-    if not results:
-        return None
-    try:
-        return _parse_float(results[0]["value"][1])
-    except (KeyError, IndexError, TypeError):
-        return None
-
-
 async def _instant_value(query: str) -> Optional[float]:
-    return _first_value(await prometheus_client.instant(query))
+    return first_finite(await prometheus_client.instant(query))
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ CPU/메모리만 재는 Kepler는 측정 범위가 CPU 세대에 따라 갈려(p
 hardware 하위 경로는 IPMI 센서를 걷어오지 않는 노드에서 IPMI_NOT_AVAILABLE 경고와
 함께 빈 데이터 반환.
 """
-import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -47,7 +46,7 @@ from app.schemas.nodes import (
     NodesSummaryData,
 )
 from app.services.cluster_discovery import ClusterInfo, cluster_discovery, cluster_label
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import esc, first_finite, prometheus_client
 
 router = APIRouter()
 
@@ -56,13 +55,9 @@ router = APIRouter()
 REAL_FS = 'fstype=~"ext4|xfs|btrfs"'
 
 
-def _esc(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def _cl(cluster: str) -> str:
     """cluster path param → escaped PromQL label value."""
-    return _esc(cluster_label(cluster))
+    return esc(cluster_label(cluster))
 
 
 async def _require_cluster(cluster: str) -> ClusterInfo:
@@ -95,7 +90,7 @@ def _card_host(metric: dict) -> str:
 async def _accelerator_count_for_host(host: str) -> int:
     """해당 호스트(node)에 연결된 가속기(카드) 수. cluster 라벨 없이 hostname/Hostname으로
     매칭한다 — compute6처럼 cluster 라벨이 누락된 물리 L40S도 이 방식이면 잡힌다."""
-    h = _esc(host)
+    h = esc(host)
     queries = [
         f'DCGM_FI_DEV_GPU_UTIL{{Hostname="{h}"}}',
         f'kcloud_furiosa_core_utilization{{node="{h}"}}',
@@ -158,26 +153,13 @@ async def _resolve_instance(cluster: str, node: str) -> str:
     이미 instance 형태거나 해석 불가면 원본을 그대로 반환(하위호환)."""
     c = _cl(cluster)
     r = await prometheus_client.instant(
-        f'node_uname_info{{cluster="{c}",nodename="{_esc(node)}"}}'
+        f'node_uname_info{{cluster="{c}",nodename="{esc(node)}"}}'
     )
     if r:
         inst = r[0].get("metric", {}).get("instance")
         if inst:
             return inst
     return node
-
-
-def _first_value(results: list[dict]) -> Optional[float]:
-    if not results:
-        return None
-    try:
-        value = float(results[0]["value"][1])
-    except (KeyError, IndexError, ValueError, TypeError):
-        return None
-    # IPMI 미적용 센서 등은 NaN/Inf로 오는데 JSON 비호환 → 값 없음으로 취급
-    if math.isnan(value) or math.isinf(value):
-        return None
-    return value
 
 
 async def _ipmi_node_power_instant(node: str) -> tuple[list[dict], str]:
@@ -193,7 +175,7 @@ async def _ipmi_node_power_instant(node: str) -> tuple[list[dict], str]:
     (compute5 실측 DCMI 417W vs PSU 입력 합 400W) source로 구분해 알린다.
     ipmi 메트릭에는 cluster 라벨이 없어 물리 `node` 라벨로 식별한다.
     """
-    n = _esc(node)
+    n = esc(node)
     dcmi = await prometheus_client.instant(f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}')
     if dcmi:
         return dcmi, "ipmi-dcmi"
@@ -207,7 +189,7 @@ async def _ipmi_node_power_range(
     node: str, start: str, end: str, step: str
 ) -> tuple[list[dict], str]:
     """물리 노드 서버 총전력(시계열) — _ipmi_node_power_instant의 range 버전."""
-    n = _esc(node)
+    n = esc(node)
     dcmi = await prometheus_client.range_query(
         f'ipmi_dcmi_power_consumption_watts{{node="{n}"}}', start, end, step
     )
@@ -310,10 +292,10 @@ async def list_nodes(
     c = _cl(cluster)
 
     # summary 블록의 메모리 합계. 클러스터 전체 sum 이라 노드 필터·페이지와 무관하다.
-    total_mem = _first_value(
+    total_mem = first_finite(
         await prometheus_client.instant(f'sum(node_memory_MemTotal_bytes{{cluster="{c}"}})')
     )
-    avail_mem = _first_value(
+    avail_mem = first_finite(
         await prometheus_client.instant(f'sum(node_memory_MemAvailable_bytes{{cluster="{c}"}})')
     )
 
@@ -346,13 +328,13 @@ async def list_nodes(
             n = metric.get("node")
             if not n:
                 continue
-            val = _first_value([item]) or 0.0
+            val = first_finite([item]) or 0.0
             ready_map[n] = ready_map.get(n, False) or val == 1.0
 
         power_map: dict[str, float] = {}
         for item in psu_results + power_results:  # DCMI가 나중에 덮어써 우선한다
             n = item.get("metric", {}).get("node")
-            val = _first_value([item])
+            val = first_finite([item])
             if n and val is not None:
                 power_map[n] = val
 
@@ -446,7 +428,7 @@ async def get_node(request: Request, cluster: str, node: str):
     await _require_cluster(cluster)
     raw_node = node
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     up_results = await prometheus_client.instant(f"up{{{label}}}")
     uname_results = await prometheus_client.instant(f"node_uname_info{{{label}}}")
@@ -459,20 +441,20 @@ async def get_node(request: Request, cluster: str, node: str):
     mem_results = await prometheus_client.instant(f"node_memory_MemTotal_bytes{{{label}}}")
 
     phys_nodes = await _phys_node_set()
-    cpu_val = _first_value(
-        await prometheus_client.instant(f'machine_cpu_cores{{node="{_esc(raw_node)}"}}')
+    cpu_val = first_finite(
+        await prometheus_client.instant(f'machine_cpu_cores{{node="{esc(raw_node)}"}}')
     )
     if cpu_val is None:
-        cpu_val = _first_value(
+        cpu_val = first_finite(
             await prometheus_client.instant(f'count(node_cpu_seconds_total{{{label},mode="idle"}})')
         )
 
     ready_results = await prometheus_client.instant(
-        f'kube_node_status_condition{{condition="Ready",status="true",node="{_esc(raw_node)}"}}'
+        f'kube_node_status_condition{{condition="Ready",status="true",node="{esc(raw_node)}"}}'
     )
-    ready = any(_first_value([item]) == 1.0 for item in ready_results) if ready_results else None
+    ready = any(first_finite([item]) == 1.0 for item in ready_results) if ready_results else None
 
-    up = any(_first_value([item]) == 1.0 for item in up_results)
+    up = any(first_finite([item]) == 1.0 for item in up_results)
 
     os_info = None
     if uname_results:
@@ -485,7 +467,7 @@ async def get_node(request: Request, cluster: str, node: str):
             nodename=metric.get("nodename"),
         )
 
-    boot_val = _first_value(boot_results)
+    boot_val = first_finite(boot_results)
     boot_time = (
         datetime.fromtimestamp(boot_val, tz=timezone.utc).isoformat() if boot_val is not None else None
     )
@@ -497,7 +479,7 @@ async def get_node(request: Request, cluster: str, node: str):
         os=os_info,
         boot_time=boot_time,
         cpu_cores=int(cpu_val) if cpu_val is not None else None,
-        memory_total_bytes=_first_value(mem_results),
+        memory_total_bytes=first_finite(mem_results),
         node_type="physical" if raw_node in phys_nodes else "virtual",
         ready=ready,
         accelerator_count=accel_count,
@@ -541,7 +523,7 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     cpu_results = await prometheus_client.instant(
         f'100 - (avg(rate(node_cpu_seconds_total{{{label},mode="idle"}}[5m])) * 100)'
@@ -560,8 +542,8 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
     net_rx_results = await prometheus_client.instant(f"sum(rate(node_network_receive_bytes_total{{{label}}}[5m]))")
     net_tx_results = await prometheus_client.instant(f"sum(rate(node_network_transmit_bytes_total{{{label}}}[5m]))")
 
-    mem_total = _first_value(mem_total_results)
-    mem_avail = _first_value(mem_avail_results)
+    mem_total = first_finite(mem_total_results)
+    mem_avail = first_finite(mem_avail_results)
     mem_used = (mem_total - mem_avail) if mem_total is not None and mem_avail is not None else None
     mem_pct = (mem_used / mem_total * 100) if mem_used is not None and mem_total else None
 
@@ -569,13 +551,13 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
     warnings: list[str] = [] if has_data else ["NO_DATA"]
 
     data = NodeMetricsData(
-        cpu_usage_percent=_first_value(cpu_results),
+        cpu_usage_percent=first_finite(cpu_results),
         memory_usage_percent=mem_pct,
         memory_total_bytes=mem_total,
         memory_used_bytes=mem_used,
-        disk_usage_percent=_first_value(disk_results),
-        network_receive_bytes_per_sec=_first_value(net_rx_results),
-        network_transmit_bytes_per_sec=_first_value(net_tx_results),
+        disk_usage_percent=first_finite(disk_results),
+        network_receive_bytes_per_sec=first_finite(net_rx_results),
+        network_transmit_bytes_per_sec=first_finite(net_tx_results),
     )
     return NodeMetricsResponse(status="success" if has_data else "partial", data=data, warnings=warnings)
 
@@ -614,7 +596,7 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     usage_results = await prometheus_client.instant(
         f'100 - (avg(rate(node_cpu_seconds_total{{{label},mode="idle"}}[5m])) * 100)'
@@ -628,11 +610,11 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
     load15_results = await prometheus_client.instant(f"node_load15{{{label}}}")
 
     per_core = [
-        CpuCoreUsage(cpu=item.get("metric", {}).get("cpu", "?"), usage_percent=_first_value([item]) or 0.0)
+        CpuCoreUsage(cpu=item.get("metric", {}).get("cpu", "?"), usage_percent=first_finite([item]) or 0.0)
         for item in per_core_results
     ]
     per_mode = [
-        CpuModeBreakdown(mode=item.get("metric", {}).get("mode", "?"), rate=_first_value([item]) or 0.0)
+        CpuModeBreakdown(mode=item.get("metric", {}).get("mode", "?"), rate=first_finite([item]) or 0.0)
         for item in per_mode_results
     ]
 
@@ -640,10 +622,10 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
     warnings: list[str] = [] if has_data else ["NO_DATA"]
 
     data = NodeCpuData(
-        usage_percent=_first_value(usage_results),
-        load1=_first_value(load1_results),
-        load5=_first_value(load5_results),
-        load15=_first_value(load15_results),
+        usage_percent=first_finite(usage_results),
+        load1=first_finite(load1_results),
+        load5=first_finite(load5_results),
+        load15=first_finite(load15_results),
         per_core=per_core,
         per_mode=per_mode,
     )
@@ -680,7 +662,7 @@ async def get_node_memory(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     total_results = await prometheus_client.instant(f"node_memory_MemTotal_bytes{{{label}}}")
     avail_results = await prometheus_client.instant(f"node_memory_MemAvailable_bytes{{{label}}}")
@@ -689,12 +671,12 @@ async def get_node_memory(request: Request, cluster: str, node: str):
     swap_total_results = await prometheus_client.instant(f"node_memory_SwapTotal_bytes{{{label}}}")
     swap_free_results = await prometheus_client.instant(f"node_memory_SwapFree_bytes{{{label}}}")
 
-    total = _first_value(total_results)
-    avail = _first_value(avail_results)
+    total = first_finite(total_results)
+    avail = first_finite(avail_results)
     used = (total - avail) if total is not None and avail is not None else None
     used_pct = (used / total * 100) if used is not None and total else None
-    swap_total = _first_value(swap_total_results)
-    swap_free = _first_value(swap_free_results)
+    swap_total = first_finite(swap_total_results)
+    swap_free = first_finite(swap_free_results)
     swap_used = (swap_total - swap_free) if swap_total is not None and swap_free is not None else None
 
     warnings: list[str] = [] if total_results else ["NO_DATA"]
@@ -704,8 +686,8 @@ async def get_node_memory(request: Request, cluster: str, node: str):
         available_bytes=avail,
         used_bytes=used,
         used_percent=used_pct,
-        cached_bytes=_first_value(cached_results),
-        buffers_bytes=_first_value(buffers_results),
+        cached_bytes=first_finite(cached_results),
+        buffers_bytes=first_finite(buffers_results),
         swap_total_bytes=swap_total,
         swap_free_bytes=swap_free,
         swap_used_bytes=swap_used,
@@ -747,7 +729,7 @@ async def get_node_storage(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     size_results = await prometheus_client.instant(f"node_filesystem_size_bytes{{{label}}}")
     avail_results = await prometheus_client.instant(f"node_filesystem_avail_bytes{{{label}}}")
@@ -757,7 +739,7 @@ async def get_node_storage(request: Request, cluster: str, node: str):
     avail_map: dict[str, float] = {}
     for item in avail_results:
         mp = item.get("metric", {}).get("mountpoint")
-        val = _first_value([item])
+        val = first_finite([item])
         if mp and val is not None:
             avail_map[mp] = val
 
@@ -765,7 +747,7 @@ async def get_node_storage(request: Request, cluster: str, node: str):
     for item in size_results:
         metric = item.get("metric", {})
         mp = metric.get("mountpoint", "?")
-        size = _first_value([item])
+        size = first_finite([item])
         avail = avail_map.get(mp)
         used_pct = (1 - avail / size) * 100 if size and avail is not None else None
         filesystems.append(
@@ -775,14 +757,14 @@ async def get_node_storage(request: Request, cluster: str, node: str):
     write_map: dict[str, float] = {}
     for item in write_results:
         device = item.get("metric", {}).get("device")
-        val = _first_value([item])
+        val = first_finite([item])
         if device and val is not None:
             write_map[device] = val
 
     disks = [
         DiskIoRate(
             device=item.get("metric", {}).get("device", "?"),
-            read_bytes_per_sec=_first_value([item]),
+            read_bytes_per_sec=first_finite([item]),
             write_bytes_per_sec=write_map.get(item.get("metric", {}).get("device")),
         )
         for item in read_results
@@ -827,7 +809,7 @@ async def get_node_network(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     node = await _resolve_instance(cluster, node)
-    label = f'cluster="{_cl(cluster)}",instance="{_esc(node)}"'
+    label = f'cluster="{_cl(cluster)}",instance="{esc(node)}"'
 
     rx_results = await prometheus_client.instant(f"rate(node_network_receive_bytes_total{{{label}}}[5m])")
     tx_results = await prometheus_client.instant(f"rate(node_network_transmit_bytes_total{{{label}}}[5m])")
@@ -839,7 +821,7 @@ async def get_node_network(request: Request, cluster: str, node: str):
         for item in results:
             dev = item.get("metric", {}).get("device")
             if dev:
-                out[dev] = _first_value([item])
+                out[dev] = first_finite([item])
         return out
 
     tx_map = _by_device(tx_results)
@@ -849,7 +831,7 @@ async def get_node_network(request: Request, cluster: str, node: str):
     interfaces = [
         NetworkInterfaceStats(
             device=item.get("metric", {}).get("device", "?"),
-            receive_bytes_per_sec=_first_value([item]),
+            receive_bytes_per_sec=first_finite([item]),
             transmit_bytes_per_sec=tx_map.get(item.get("metric", {}).get("device")),
             receive_errors_per_sec=rx_err_map.get(item.get("metric", {}).get("device")),
             transmit_errors_per_sec=tx_err_map.get(item.get("metric", {}).get("device")),
@@ -909,7 +891,7 @@ async def get_node_power(request: Request, cluster: str, node: str):
     if not results:
         return NodePowerResponse(status="partial", data=None, warnings=["NO_POWER_DATA"])
 
-    data = NodePowerData(watts=_first_value(results), source=source)
+    data = NodePowerData(watts=first_finite(results), source=source)
     return NodePowerResponse(status="success", data=data, warnings=[])
 
 
@@ -1014,14 +996,14 @@ async def get_hardware_sensors(request: Request, cluster: str, node: str):
     * 판독 불가 센서는 제외
     """
     await _require_cluster(cluster)
-    results = await prometheus_client.instant(f'{{__name__=~"ipmi_.*",node="{_esc(node)}"}}')
+    results = await prometheus_client.instant(f'{{__name__=~"ipmi_.*",node="{esc(node)}"}}')
 
     if not results:
         return HardwareSensorsResponse(status="partial", sensors=[], warnings=["IPMI_NOT_AVAILABLE"])
 
     sensors = []
     for item in results:
-        value = _first_value([item])
+        value = first_finite([item])
         if value is None:  # NaN 센서(미적용/판독불가) 제외 — JSON nan 방지
             continue
         metric = item.get("metric", {})
@@ -1071,13 +1053,13 @@ async def get_hardware_power(request: Request, cluster: str, node: str):
     """
     await _require_cluster(cluster)
     results = await prometheus_client.instant(
-        f'ipmi_dcmi_power_consumption_watts{{node="{_esc(node)}"}}'
+        f'ipmi_dcmi_power_consumption_watts{{node="{esc(node)}"}}'
     )
 
     if not results:
         return HardwarePowerResponse(status="partial", watts=None, warnings=["IPMI_NOT_AVAILABLE"])
 
-    return HardwarePowerResponse(status="success", watts=_first_value(results), warnings=[])
+    return HardwarePowerResponse(status="success", watts=first_finite(results), warnings=[])
 
 
 @router.get(
@@ -1110,13 +1092,13 @@ async def get_hardware_temperature(request: Request, cluster: str, node: str):
     * 404: 없는 클러스터
     """
     await _require_cluster(cluster)
-    results = await prometheus_client.instant(f'ipmi_temperature_celsius{{node="{_esc(node)}"}}')
+    results = await prometheus_client.instant(f'ipmi_temperature_celsius{{node="{esc(node)}"}}')
 
     if not results:
         return HardwareTemperatureResponse(status="partial", sensors=[], warnings=["IPMI_NOT_AVAILABLE"])
 
     sensors = [
-        HardwareTemperatureSensor(name=item.get("metric", {}).get("name", "?"), celsius=_first_value([item]) or 0.0)
+        HardwareTemperatureSensor(name=item.get("metric", {}).get("name", "?"), celsius=first_finite([item]) or 0.0)
         for item in results
     ]
     return HardwareTemperatureResponse(status="success", sensors=sensors, warnings=[])

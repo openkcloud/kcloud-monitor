@@ -4,6 +4,9 @@ KCloud Monitor v2 — Prometheus HTTP 클라이언트.
 데이터소스: Prometheus HTTP API (.env PROMETHEUS_URL 필수).
 """
 import logging
+import math
+from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 
@@ -44,11 +47,8 @@ class PrometheusClient:
                 r = await client.get(url, params={"query": query})
                 r.raise_for_status()
                 return r.json()["data"]["result"]
-        except httpx.HTTPStatusError as exc:
-            logger.warning("Prometheus instant query HTTP error: %s — query=%r", exc, query)
-            return []
-        except httpx.RequestError as exc:
-            logger.warning("Prometheus instant query request error: %s — query=%r", exc, query)
+        except httpx.HTTPError as exc:
+            logger.warning("Prometheus instant query error: %s — query=%r", exc, query)
             return []
 
     async def range_query(
@@ -70,18 +70,57 @@ class PrometheusClient:
                 r = await client.get(url, params=params)
                 r.raise_for_status()
                 return r.json()["data"]["result"]
-        except httpx.HTTPStatusError as exc:
+        except httpx.HTTPError as exc:
             logger.warning(
-                "Prometheus range query HTTP error: %s — query=%r start=%s end=%s",
+                "Prometheus range query error: %s — query=%r start=%s end=%s",
                 exc, query, start, end,
             )
             return []
-        except httpx.RequestError as exc:
-            logger.warning(
-                "Prometheus range query request error: %s — query=%r start=%s end=%s",
-                exc, query, start, end,
-            )
-            return []
+
+
+def esc(value: str) -> str:
+    """PromQL 라벨 값 이스케이프 (역슬래시, 큰따옴표)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def parse_float(raw) -> Optional[float]:
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_finite(raw) -> Optional[float]:
+    """parse_float + NaN/Inf 는 JSON 비호환이라 값 없음(None)으로 취급."""
+    value = parse_float(raw)
+    if value is None or math.isnan(value) or math.isinf(value):
+        return None
+    return value
+
+
+def sample_value(item: dict) -> Optional[float]:
+    """instant 결과 한 항목의 value 파싱. 없으면 None."""
+    try:
+        return parse_float(item["value"][1])
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def first_value(results: list[dict]) -> Optional[float]:
+    """instant 결과 첫 항목의 value."""
+    return sample_value(results[0]) if results else None
+
+
+def first_finite(results: list[dict]) -> Optional[float]:
+    """first_value 와 같되 NaN/Inf 는 None."""
+    return parse_finite(first_value(results))
+
+
+def ts_iso(ts) -> Optional[str]:
+    """Prometheus epoch(초) → ISO 8601 UTC 문자열."""
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
 
 
 prometheus_client = PrometheusClient()

@@ -38,7 +38,7 @@ from app.schemas.accelerators import (
 )
 from app.services.cluster_discovery import cluster_discovery
 from app.services.power import KNOWN_TDP_WATTS
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import esc, prometheus_client, sample_value
 
 router = APIRouter()
 
@@ -123,10 +123,6 @@ VENDOR_CONFIG: dict[str, dict] = {
 }
 
 
-def _esc(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 async def _get_vendor(cluster: str) -> Optional[str]:
     info = await cluster_discovery.get_cluster(cluster)
     return info.vendor if info else None
@@ -138,8 +134,8 @@ def _build_query(vendor: str, key: str, cluster: str, acc_id: Optional[str] = No
         return None
     extra = ""
     if acc_id is not None:
-        extra = f',{VENDOR_CONFIG[vendor]["id_label"]}="{_esc(acc_id)}"'
-    return template.format(cluster=_esc(cluster), extra=extra)
+        extra = f',{VENDOR_CONFIG[vendor]["id_label"]}="{esc(acc_id)}"'
+    return template.format(cluster=esc(cluster), extra=extra)
 
 
 async def _instant_metric(vendor: str, cluster: str, key: str, acc_id: Optional[str] = None) -> list[dict]:
@@ -242,13 +238,6 @@ def _match_node(metric: dict, node: Optional[str]) -> bool:
     return node in (metric.get("instance"), metric.get("Hostname"), metric.get("hostname"), metric.get("node"))
 
 
-def _get_value(item: dict) -> Optional[float]:
-    try:
-        return float(item["value"][1])
-    except (KeyError, IndexError, ValueError, TypeError):
-        return None
-
-
 async def _collect_accelerators(
     cluster: str, vendor: str, node: Optional[str] = None
 ) -> tuple[dict[str, dict], list[str]]:
@@ -269,7 +258,7 @@ async def _collect_accelerators(
             found = True
             entry = acc_map.setdefault(acc_id, {"labels": {}})
             entry["labels"].update(metric)
-            entry[field] = _get_value(item)
+            entry[field] = sample_value(item)
         return found
 
     if not merge(await _instant_metric(vendor, cluster, "util"), "utilization_percent"):
@@ -384,7 +373,7 @@ async def _extra_metrics(vendor: str, cluster: str, node: Optional[str], acc_id:
         for item in await _instant_metric(vendor, cluster, key, acc_id=acc_id):
             if not _match_node(item.get("metric", {}), node):
                 continue
-            val = _get_value(item)
+            val = sample_value(item)
             if val is not None:
                 extras[key] = val
                 break
@@ -398,7 +387,7 @@ async def _single_metric(
     for item in await _instant_metric(vendor, cluster, key, acc_id=acc_id):
         if not _match_node(item.get("metric", {}), node):
             continue
-        value = _get_value(item)
+        value = sample_value(item)
         return value, [] if value is not None else ["NO_DATA"]
     return None, ["ACCELERATOR_NOT_FOUND"]
 
@@ -509,7 +498,7 @@ async def get_accelerators_topology(
 
     results = await _instant_metric(vendor, cluster, "nvlink_bw")
     links = [
-        TopologyLinkItem(metric_labels=item.get("metric", {}), value=_get_value(item))
+        TopologyLinkItem(metric_labels=item.get("metric", {}), value=sample_value(item))
         for item in results
         if _match_node(item.get("metric", {}), node)
     ]

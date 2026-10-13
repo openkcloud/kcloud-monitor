@@ -22,7 +22,7 @@ from app.schemas.slo import (
     SloThroughput,
     SloTimeseriesResponse,
 )
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import esc, prometheus_client
 
 router = APIRouter()
 
@@ -36,16 +36,12 @@ _TPOT_TARGET = Query(50.0, gt=0, description="TPOT 목표값(ms) (기본 50)")
 _OBJECTIVE = Query(99.0, gt=0, lt=100, description="달성 목표(%) (기본 99)")
 
 
-def _esc(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def _selector(cluster: Optional[str] = None, model: Optional[str] = None) -> str:
     parts = []
     if cluster:
-        parts.append(f'cluster="{_esc(cluster)}"')
+        parts.append(f'cluster="{esc(cluster)}"')
     if model:
-        parts.append(f'model_name="{_esc(model)}"')
+        parts.append(f'model_name="{esc(model)}"')
     return "{" + ",".join(parts) + "}"
 
 

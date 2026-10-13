@@ -7,25 +7,11 @@ csv(stdlib)로 CSV 문자열을 만든다. pandas/openpyxl/pyarrow 등 외부 �
 """
 import csv
 import io
-from datetime import datetime, timezone
-from typing import Optional
 
 from app.services.power import ACCEL_POWER_QUERIES, IPMI_POWER_METRIC
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import parse_float, prometheus_client, ts_iso
 
 CPU_POWER_QUERY = 'kepler_node_cpu_watts{zone="psys"}'
-
-
-def _ts_to_iso(ts) -> str:
-    """Prometheus epoch(초) → ISO 8601 UTC 문자열."""
-    return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
-
-
-def _parse_float(raw) -> Optional[float]:
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict], list[str]]:
@@ -48,7 +34,7 @@ async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict]
             except (IndexError, TypeError):
                 continue
             rows.append(
-                {"timestamp": _ts_to_iso(ts), "node": node, "layer": "server", "watts": _parse_float(raw)}
+                {"timestamp": ts_iso(ts), "node": node, "layer": "server", "watts": parse_float(raw)}
             )
 
     cpu_results = await prometheus_client.range_query(CPU_POWER_QUERY, start, end, step)
@@ -62,7 +48,7 @@ async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict]
             except (IndexError, TypeError):
                 continue
             rows.append(
-                {"timestamp": _ts_to_iso(ts), "node": node, "layer": "cpu", "watts": _parse_float(raw)}
+                {"timestamp": ts_iso(ts), "node": node, "layer": "cpu", "watts": parse_float(raw)}
             )
 
     any_accel = False
@@ -80,10 +66,10 @@ async def power_export_rows(start: str, end: str, step: str) -> tuple[list[dict]
                     continue
                 rows.append(
                     {
-                        "timestamp": _ts_to_iso(ts),
+                        "timestamp": ts_iso(ts),
                         "node": node,
                         "layer": f"accelerator:{vendor}",
-                        "watts": _parse_float(raw),
+                        "watts": parse_float(raw),
                     }
                 )
     if not any_accel:
@@ -109,7 +95,7 @@ async def metric_export_rows(promql: str, start: str, end: str, step: str) -> tu
                 ts, raw = point[0], point[1]
             except (IndexError, TypeError):
                 continue
-            rows.append({"timestamp": _ts_to_iso(ts), "labels": labels, "value": _parse_float(raw)})
+            rows.append({"timestamp": ts_iso(ts), "labels": labels, "value": parse_float(raw)})
 
     return rows, warnings
 
