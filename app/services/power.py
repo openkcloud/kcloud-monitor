@@ -15,11 +15,10 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 각 서비스 함수는 `{"status": str, "data": <dict|list>, "warnings": list[str]}` 형태로 반환한다.
 """
 import asyncio
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import first_finite, parse_finite, prometheus_client
 
 IPMI_POWER_METRIC = "ipmi_dcmi_power_consumption_watts"
 
@@ -50,28 +49,6 @@ KNOWN_TDP_WATTS = {"nvidia": 350.0, "furiosa": 180.0, "rebellions": 85.0}
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 
-def _parse_float(raw) -> Optional[float]:
-    """Prometheus 값 문자열 → float. 파싱 실패/NaN/Inf는 None(JSON 비호환 방어)."""
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(value) or math.isinf(value):
-        return None
-    return value
-
-
-def _first_value(results: list[dict]) -> Optional[float]:
-    """instant 쿼리 결과 목록의 첫 항목 value 파싱."""
-    if not results:
-        return None
-    try:
-        raw = results[0]["value"][1]
-    except (KeyError, IndexError, TypeError):
-        return None
-    return _parse_float(raw)
-
-
 def _sum_values(results: list[dict]) -> Optional[float]:
     """instant 쿼리 결과 각 항목의 value를 합산. 유효 값이 하나도 없으면 None."""
     if not results:
@@ -83,7 +60,7 @@ def _sum_values(results: list[dict]) -> Optional[float]:
             raw = item["value"][1]
         except (KeyError, IndexError, TypeError):
             continue
-        val = _parse_float(raw)
+        val = parse_finite(raw)
         if val is None:
             continue
         total += val
@@ -136,7 +113,7 @@ def _kepler_total_watts(results: list[dict]) -> Optional[float]:
             raw = item["value"][1]
         except (KeyError, IndexError, TypeError):
             continue
-        val = _parse_float(raw)
+        val = parse_finite(raw)
         if val is None:
             continue
         by_node.setdefault(node, {})[zone] = val
@@ -229,7 +206,7 @@ async def power_breakdown(dimension: str) -> dict:
             results = await prometheus_client.instant(query)
             for item in results:
                 cluster = item.get("metric", {}).get("cluster", vendor)
-                val = _first_value([item])
+                val = first_finite([item])
                 if val is None:
                     continue
                 cluster_totals[cluster] = cluster_totals.get(cluster, 0.0) + val
@@ -244,7 +221,7 @@ async def power_breakdown(dimension: str) -> dict:
             warnings.append("NO_DATA_SERVER_POWER")
         for item in ipmi_results:
             node = item.get("metric", {}).get("node", "unknown")
-            val = _first_value([item])
+            val = first_finite([item])
             items.append({"key": node, "watts": val, "layer": "server"})
 
         kepler_results = await prometheus_client.instant("kepler_node_cpu_watts")
@@ -255,7 +232,7 @@ async def power_breakdown(dimension: str) -> dict:
             zone = metric.get("zone")
             if not node or not zone:
                 continue
-            val = _first_value([item])
+            val = first_finite([item])
             if val is None:
                 continue
             by_node.setdefault(node, {})[zone] = val
@@ -275,7 +252,7 @@ async def power_breakdown(dimension: str) -> dict:
                 gpu = metric.get("gpu") or metric.get("device") or ""
                 cluster = metric.get("cluster", vendor)
                 key = f"{instance}/{gpu}/{cluster}" if gpu else f"{instance}/{cluster}"
-                val = _first_value([item])
+                val = first_finite([item])
                 if val is None:
                     continue
                 any_data = True
@@ -340,7 +317,7 @@ async def power_efficiency() -> dict:
         power_watts = _sum_values(power_results)
 
         util_results = await prometheus_client.instant(ACCEL_UTIL_QUERIES[vendor])
-        util_values = [v for v in (_first_value([item]) for item in util_results) if v is not None]
+        util_values = [v for v in (first_finite([item]) for item in util_results) if v is not None]
         utilization_pct = sum(util_values) / len(util_values) if util_values else None
 
         avg_power = power_watts / (len(power_results) or 1) if power_watts is not None else None
@@ -411,8 +388,8 @@ async def power_efficiency_timeseries(start: str, end: str, step: str) -> dict:
     util_results = results[len(vendors):]
 
     for vendor, p_res, u_res in zip(vendors, power_results, util_results):
-        power_by_ts = {ts: _parse_float(raw) for ts, raw in _range_values(p_res)}
-        util_by_ts = {ts: _parse_float(raw) for ts, raw in _range_values(u_res)}
+        power_by_ts = {ts: parse_finite(raw) for ts, raw in _range_values(p_res)}
+        util_by_ts = {ts: parse_finite(raw) for ts, raw in _range_values(u_res)}
         values: list[tuple[str, str]] = []
         for ts in sorted(power_by_ts.keys() & util_by_ts.keys()):
             power = power_by_ts[ts]
@@ -453,7 +430,7 @@ async def accelerator_utilization(
         results = await prometheus_client.instant(query)
         values = []
         for item in results:
-            value = _first_value([item])
+            value = first_finite([item])
             if value is None:
                 continue
             values.append(value)
@@ -517,7 +494,7 @@ async def accelerator_utilization_timeseries(start: str, end: str, step: str, by
                     ts = float(v[0])
                 except (IndexError, TypeError, ValueError):
                     continue
-                value = _parse_float(v[1])
+                value = parse_finite(v[1])
                 if value is None:
                     continue
                 for bucket in (vendor_ts, all_ts, host):

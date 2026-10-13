@@ -389,7 +389,8 @@ def _resource_value(metric: str, entry: dict, vendor: str) -> Optional[float]:
 
 async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
     """가속기별 마지막 샘플 이후 경과 초. instant 쿼리는 5분 지나면 아예 안 보이므로 1일 서브쿼리로 찾는다."""
-    from app.api.v2.accelerators import VENDOR_CONFIG, _esc
+    from app.api.v2.accelerators import VENDOR_CONFIG
+    from app.services.prometheus import esc
     from app.services.prometheus import prometheus_client
 
     cfg = VENDOR_CONFIG[vendor]
@@ -397,7 +398,7 @@ async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
            "rebellions": "RBLN_DEVICE_STATUS:UTILIZATION"}[vendor]
     idl = cfg["id_label"]
     q = (f'time() - max by ({idl}, instance) '
-         f'(max_over_time(timestamp({raw}{{cluster="{_esc(cluster)}"}})[1d:1m]))')
+         f'(max_over_time(timestamp({raw}{{cluster="{esc(cluster)}"}})[1d:1m]))')
     out: dict[str, dict] = {}
     for item in await prometheus_client.instant(q):
         m = item.get("metric", {})

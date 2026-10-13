@@ -14,10 +14,9 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.api.v2.workloads import _esc
 from app.schemas.resource_map import PodCandidate, PodTraceResponse, TraceHop
 from app.services.cluster_discovery import DEFAULT_CLUSTER_NAME, cluster_discovery, cluster_label
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import esc, prometheus_client
 
 router = APIRouter()
 
@@ -32,8 +31,8 @@ _OWNER_METRICS = {
 
 def _sel(cluster: str, **labels: str) -> str:
     """cluster 라벨 + 추가 라벨 셀렉터. mgmt는 cluster="" (라벨 없음과 일치)."""
-    parts = [f'cluster="{_esc(cluster_label(cluster))}"']
-    parts += [f'{k}="{_esc(v)}"' for k, v in labels.items()]
+    parts = [f'cluster="{esc(cluster_label(cluster))}"']
+    parts += [f'{k}="{esc(v)}"' for k, v in labels.items()]
     return ",".join(parts)
 
 
@@ -102,11 +101,11 @@ def _match_vm(servers: list[dict], node: Optional[str], system_uuid: Optional[st
 
 
 async def trace_pod(pod: str, cluster: Optional[str] = None, namespace: Optional[str] = None) -> PodTraceResponse:
-    sel = [f'pod="{_esc(pod)}"']
+    sel = [f'pod="{esc(pod)}"']
     if cluster:
-        sel.append(f'cluster="{_esc(cluster_label(cluster))}"')
+        sel.append(f'cluster="{esc(cluster_label(cluster))}"')
     if namespace:
-        sel.append(f'namespace="{_esc(namespace)}"')
+        sel.append(f'namespace="{esc(namespace)}"')
     found = await prometheus_client.instant(f"kube_pod_info{{{','.join(sel)}}}")
     by_place = {
         (r["metric"].get("cluster") or DEFAULT_CLUSTER_NAME, r["metric"].get("namespace", "")): r["metric"]

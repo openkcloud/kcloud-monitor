@@ -4,7 +4,6 @@ Pod, 컨테이너, 네임스페이스를 클러스터를 지정해서 조회.
 클러스터를 고르지 않고 전체를 보려면 workloads_global.py 의 경로 사용.
 """
 import re
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -32,7 +31,7 @@ from app.schemas.workloads import (
     PodSummaryResponse,
 )
 from app.services.cluster_discovery import cluster_discovery, cluster_label
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import esc, first_value, prometheus_client, ts_iso
 
 router = APIRouter()
 
@@ -42,27 +41,8 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-def _esc(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def _cl(cluster: str) -> str:
-    return _esc(cluster_label(cluster))
-
-
-def _first_value(results: list[dict]) -> Optional[float]:
-    if not results:
-        return None
-    try:
-        return float(results[0]["value"][1])
-    except (KeyError, IndexError, ValueError, TypeError):
-        return None
-
-
-def _ts_to_iso(val: Optional[float]) -> Optional[str]:
-    if val is None:
-        return None
-    return datetime.fromtimestamp(val, tz=timezone.utc).isoformat()
+    return esc(cluster_label(cluster))
 
 
 def _derive_service_name(
@@ -87,7 +67,7 @@ def _scalar_map(results: list[dict]) -> dict[tuple[str, str], float]:
     for item in results:
         m = item.get("metric", {})
         key = (m.get("namespace", ""), m.get("pod", ""))
-        val = _first_value([item])
+        val = first_value([item])
         if val is not None:
             out[key] = val
     return out
@@ -143,7 +123,7 @@ async def fetch_pods(
     for item in created_results:
         m = item.get("metric", {})
         key = (m.get("namespace", ""), m.get("pod", ""))
-        created_map[key] = _ts_to_iso(_first_value([item]))
+        created_map[key] = ts_iso(first_value([item]))
 
     labels_map: dict[tuple[str, str], dict[str, str]] = {}
     for item in label_results:
@@ -220,14 +200,14 @@ async def fetch_pods_summary(cluster: str) -> tuple[PodSummaryData, list[str]]:
     phase_counts: dict[str, int] = {}
     for item in phase_results:
         phase = item.get("metric", {}).get("phase", "Unknown")
-        val = _first_value([item])
+        val = first_value([item])
         if val is not None:
             phase_counts[phase] = int(val)
 
     ns_dist: dict[str, int] = {}
     for item in ns_results:
         ns = item.get("metric", {}).get("namespace", "")
-        val = _first_value([item])
+        val = first_value([item])
         if val is not None:
             ns_dist[ns] = int(val)
 
@@ -249,7 +229,7 @@ async def fetch_pod_detail(
     cluster: str, namespace: str, pod: str,
 ) -> tuple[Optional[PodDetailData], list[str]]:
     c = _cl(cluster)
-    label = f'cluster="{c}",namespace="{_esc(namespace)}",pod="{_esc(pod)}"'
+    label = f'cluster="{c}",namespace="{esc(namespace)}",pod="{esc(pod)}"'
 
     info_results = await prometheus_client.instant(f"kube_pod_info{{{label}}}")
     if not info_results:
@@ -294,8 +274,8 @@ async def fetch_pod_detail(
     labels = label_results[0].get("metric", {}) if label_results else {}
     svc = _derive_service_name(labels, m.get("created_by_name"), pod)
 
-    cnt_val = _first_value(cnt_results)
-    rst_val = _first_value(restart_results)
+    cnt_val = first_value(cnt_results)
+    rst_val = first_value(restart_results)
 
     data = PodDetailData(
         namespace=namespace,
@@ -306,18 +286,18 @@ async def fetch_pod_detail(
         phase=phase,
         pod_ip=m.get("pod_ip"),
         host_ip=m.get("host_ip"),
-        created_at=_ts_to_iso(_first_value(created_results)),
+        created_at=ts_iso(first_value(created_results)),
         workload_type=m.get("created_by_kind"),
         workload_name=m.get("created_by_name"),
         service_name=svc,
         container_count=int(cnt_val) if cnt_val is not None else None,
         restart_count=int(rst_val) if rst_val is not None else None,
-        cpu_usage=_first_value(cpu_results),
-        memory_usage_bytes=_first_value(mem_results),
-        cpu_requests=_first_value(cpu_req),
-        cpu_limits=_first_value(cpu_lim),
-        memory_requests_bytes=_first_value(mem_req),
-        memory_limits_bytes=_first_value(mem_lim),
+        cpu_usage=first_value(cpu_results),
+        memory_usage_bytes=first_value(mem_results),
+        cpu_requests=first_value(cpu_req),
+        cpu_limits=first_value(cpu_lim),
+        memory_requests_bytes=first_value(mem_req),
+        memory_limits_bytes=first_value(mem_lim),
     )
     return data, []
 
@@ -326,7 +306,7 @@ async def fetch_pod_containers(
     cluster: str, namespace: str, pod: str,
 ) -> tuple[list[ContainerItem], list[str]]:
     c = _cl(cluster)
-    label = f'cluster="{c}",namespace="{_esc(namespace)}",pod="{_esc(pod)}"'
+    label = f'cluster="{c}",namespace="{esc(namespace)}",pod="{esc(pod)}"'
 
     info_results = await prometheus_client.instant(f"kube_pod_container_info{{{label}}}")
     if not info_results:
@@ -362,7 +342,7 @@ async def fetch_pod_containers(
         for item in results:
             cn = item.get("metric", {}).get("container", "")
             if cn:
-                out[cn] = _first_value([item])
+                out[cn] = first_value([item])
         return out
 
     running_m = _by_c(running_results)
@@ -377,7 +357,7 @@ async def fetch_pod_containers(
         mi = item.get("metric", {})
         cn = mi.get("container", "")
         res = mi.get("resource", "")
-        val = _first_value([item])
+        val = first_value([item])
         if cn and res and val is not None:
             req_map[(cn, res)] = val
 
@@ -386,7 +366,7 @@ async def fetch_pod_containers(
         mi = item.get("metric", {})
         cn = mi.get("container", "")
         res = mi.get("resource", "")
-        val = _first_value([item])
+        val = first_value([item])
         if cn and res and val is not None:
             lim_map[(cn, res)] = val
 
@@ -432,8 +412,8 @@ async def fetch_container_metrics(
 ) -> tuple[ContainerMetricsData, list[str]]:
     c = _cl(cluster)
     label = (
-        f'cluster="{c}",namespace="{_esc(namespace)}",'
-        f'pod="{_esc(pod)}",container="{_esc(container_name)}"'
+        f'cluster="{c}",namespace="{esc(namespace)}",'
+        f'pod="{esc(pod)}",container="{esc(container_name)}"'
     )
     cpu_results = await prometheus_client.instant(
         f"rate(container_cpu_usage_seconds_total{{{label}}}[5m])"
@@ -443,8 +423,8 @@ async def fetch_container_metrics(
     )
     has_data = bool(cpu_results or mem_results)
     data = ContainerMetricsData(
-        cpu_usage=_first_value(cpu_results),
-        memory_usage_bytes=_first_value(mem_results),
+        cpu_usage=first_value(cpu_results),
+        memory_usage_bytes=first_value(mem_results),
     )
     return data, [] if has_data else ["NO_DATA"]
 
@@ -453,15 +433,15 @@ async def fetch_pod_power(
     cluster: str, namespace: str, pod: str,
 ) -> tuple[Optional[PodPowerData], list[str]]:
     c = _cl(cluster)
-    label = f'cluster="{c}",namespace="{_esc(namespace)}",pod="{_esc(pod)}"'
+    label = f'cluster="{c}",namespace="{esc(namespace)}",pod="{esc(pod)}"'
 
     results = await prometheus_client.instant(
         f"sum(rate(kepler_container_joules_total{{{label}}}[5m]))"
     )
     if not results:
         label_alt = (
-            f'cluster="{c}",pod_namespace="{_esc(namespace)}",'
-            f'pod_name="{_esc(pod)}"'
+            f'cluster="{c}",pod_namespace="{esc(namespace)}",'
+            f'pod_name="{esc(pod)}"'
         )
         results = await prometheus_client.instant(
             f"sum(rate(kepler_container_joules_total{{{label_alt}}}[5m]))"
@@ -470,7 +450,7 @@ async def fetch_pod_power(
     if not results:
         return None, ["NO_POWER_DATA"]
 
-    return PodPowerData(watts=_first_value(results), source="kepler"), []
+    return PodPowerData(watts=first_value(results), source="kepler"), []
 
 
 async def fetch_pod_accelerators(
@@ -482,7 +462,7 @@ async def fetch_pod_accelerators(
 
     c = _cl(cluster)
     results = await prometheus_client.instant(
-        f'DCGM_FI_DEV_GPU_UTIL{{cluster="{c}",exported_pod="{_esc(pod)}"}}'
+        f'DCGM_FI_DEV_GPU_UTIL{{cluster="{c}",exported_pod="{esc(pod)}"}}'
     )
     if not results:
         return [], ["POD_ACCELERATOR_DATA_NOT_AVAILABLE"]
@@ -529,7 +509,7 @@ async def fetch_cluster_containers(
         for item in results:
             mi = item.get("metric", {})
             key = (mi.get("namespace", ""), mi.get("pod", ""), mi.get("container", ""))
-            val = _first_value([item])
+            val = first_value([item])
             if val is not None:
                 out[key] = val
         return out
@@ -631,13 +611,13 @@ async def fetch_namespaces(
         ns = item.get("metric", {}).get("namespace", "")
         if ns:
             ns_names.add(ns)
-            val = _first_value([item])
-            created_map[ns] = _ts_to_iso(val) if val and val > 0 else None
+            val = first_value([item])
+            created_map[ns] = ts_iso(val) if val and val > 0 else None
 
     pod_cnt_map: dict[str, int] = {}
     for item in pod_cnt_results:
         ns = item.get("metric", {}).get("namespace", "")
-        val = _first_value([item])
+        val = first_value([item])
         if ns and val is not None:
             pod_cnt_map[ns] = int(val)
             ns_names.add(ns)
@@ -666,7 +646,7 @@ async def fetch_namespace_summary(
     cluster: str, namespace: str,
 ) -> tuple[NamespaceDetailData, list[str]]:
     c = _cl(cluster)
-    label = f'cluster="{c}",namespace="{_esc(namespace)}"'
+    label = f'cluster="{c}",namespace="{esc(namespace)}"'
 
     pod_cnt = await prometheus_client.instant(f"count(kube_pod_info{{{label}}})")
     container_cnt = await prometheus_client.instant(
@@ -685,18 +665,18 @@ async def fetch_namespace_summary(
         f'sum(kube_pod_container_resource_requests{{{label},resource="memory"}})'
     )
 
-    pc = _first_value(pod_cnt)
-    cc = _first_value(container_cnt)
+    pc = first_value(pod_cnt)
+    cc = first_value(container_cnt)
 
     data = NamespaceDetailData(
         namespace=namespace,
         cluster=cluster,
         pod_count=int(pc) if pc is not None else 0,
         container_count=int(cc) if cc is not None else 0,
-        cpu_usage=_first_value(cpu_results),
-        memory_usage_bytes=_first_value(mem_results),
-        cpu_requests=_first_value(cpu_req),
-        memory_requests_bytes=_first_value(mem_req),
+        cpu_usage=first_value(cpu_results),
+        memory_usage_bytes=first_value(mem_results),
+        cpu_requests=first_value(cpu_req),
+        memory_requests_bytes=first_value(mem_req),
     )
     warnings: list[str] = [] if pc else ["NO_DATA"]
     return data, warnings
