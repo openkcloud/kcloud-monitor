@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 import httpx
 
+from app.api.v2.slo import TPOT, TTFT, _selector
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -56,9 +57,9 @@ LOG_METRICS: dict[str, tuple[str, str]] = {
 _TTFT_P95 = "histogram_quantile(0.95, sum by (le, cluster, model_name) (rate({m}_bucket{{sel}}[{{w}}m]))) * 1000"
 SLO_METRICS: dict[str, tuple[str, str, str]] = {
     "slo_ttft_p95_ms": ("LLM 첫 글자까지 걸린 시간 p95 (TTFT)", "ms",
-                        _TTFT_P95.format(m="vllm:time_to_first_token_seconds")),
+                        _TTFT_P95.format(m=TTFT)),
     "slo_tpot_p95_ms": ("LLM 글자 하나당 걸린 시간 p95 (TPOT)", "ms",
-                        _TTFT_P95.format(m="vllm:request_time_per_output_token_seconds")),
+                        _TTFT_P95.format(m=TPOT)),
     "slo_requests_waiting": ("LLM 대기 요청 수", "건",
                              "sum by (cluster, model_name) (vllm:num_requests_waiting{sel})"),
 }
@@ -457,9 +458,7 @@ async def evaluate_slo(policy: dict) -> tuple[dict[str, dict], list[str]]:
     from app.services.prometheus import prometheus_client
 
     target = policy.get("target") or {}
-    esc = lambda v: v.replace("\\", "\\\\").replace('"', '\\"')
-    labels = {"cluster": target.get("cluster"), "model_name": target.get("model")}
-    sel = "{" + ",".join(f'{k}="{esc(v)}"' for k, v in labels.items() if v) + "}"
+    sel = _selector(target.get("cluster"), target.get("model"))
     q = SLO_METRICS[policy["metric"]][2].format(sel=sel, w=int(policy.get("window_min", 5)))
     results: dict[str, dict] = {}
     for item in await prometheus_client.instant(q):

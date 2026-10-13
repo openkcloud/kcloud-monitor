@@ -36,6 +36,13 @@ def _require_store() -> None:
         raise HTTPException(status_code=503, detail="ALERT_STORE_NOT_CONFIGURED: DATABASE_URL 을 설정하세요")
 
 
+async def _policy_or_404(policy_id: str) -> dict:
+    row = await store.get_policy(policy_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
+    return row
+
+
 _SELECTOR_KEYS = {"resource": {"cluster", "node", "acc_id"}, "log": {"cluster"}, "slo": {"cluster", "model"}}
 # 대상 값은 PromQL, LogQL 셀렉터에 그대로 들어가므로 라벨 값에 쓰이는 문자만 허용 (주입 방지)
 _SELECTOR_VALUE = re.compile(r"^[A-Za-z0-9_.:\-/]+$")
@@ -230,9 +237,7 @@ async def get_policy(policy_id: str):
     * 404: 없는 정책
     """
     _require_store()
-    row = await store.get_policy(policy_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
+    row = await _policy_or_404(policy_id)
     return ItemResponse(data=(await _policies_out([row]))[0])
 
 
@@ -260,9 +265,7 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
     * 404: 없는 정책
     """
     _require_store()
-    cur = await store.get_policy(policy_id)
-    if not cur:
-        raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
+    cur = await _policy_or_404(policy_id)
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     if "metric" in patch and metric_kind(patch["metric"]) != cur["kind"]:
         raise HTTPException(status_code=422, detail="정책 종류(resource | log | slo)는 바꿀 수 없음")
@@ -318,9 +321,7 @@ async def preview_policy(policy_id: str):
     * 임계값을 정할 때 지금 어느 가속기가 걸리는지 확인하는 용도
     """
     _require_store()
-    policy = await store.get_policy(policy_id)
-    if not policy:
-        raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
+    policy = await _policy_or_404(policy_id)
     results, warnings = await alerts.evaluate_policy(policy)
     data = [PreviewItem(**r) for r in results.values()]
     return ListResponse(status="partial" if warnings else "success", data=data, total=len(data), warnings=warnings)

@@ -36,6 +36,11 @@ from app.services.vm_metrics import vm_attributed_power, vm_usage
 router = APIRouter()
 
 
+def _error_code(exc: OpenStackError) -> str:
+    """OpenStackError 메시지를 경고 코드로 변환. 알 수 없는 값은 UPSTREAM_ERROR."""
+    return str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+
+
 async def _collect_vms() -> tuple[list[VMItem], list[str]]:
     """Nova servers + flavors → VMItem 목록. (items, warnings) 반환."""
     if not openstack_client.nova_configured:
@@ -44,7 +49,7 @@ async def _collect_vms() -> tuple[list[VMItem], list[str]]:
         flavor_specs = await openstack_client.flavors()
         servers = await openstack_client.servers()
     except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+        code = _error_code(exc)
         return [], [code]
 
     # Cyborg에서 실제로 바인딩된 장치를 우선 쓰고, 없거나 실패하면 flavor 설정으로 판별한다.
@@ -142,7 +147,7 @@ async def list_openstack_hypervisors(request: Request,params: WorkloadFilterPara
         hvs = await openstack_client.hypervisors()
         servers = await openstack_client.servers()
     except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+        code = _error_code(exc)
         return HypervisorListResponse(status="partial", data=[], warnings=[code])
 
     vm_by_host: dict[str, int] = {}
@@ -264,12 +269,9 @@ async def get_openstack_vm(request: Request,vm_id: str):
     * `UPSTREAM_ERROR`: OpenStack 호출 실패
     * `NOT_FOUND`: 없는 VM, `data` 는 `null`
     """
-    vms, warnings = await _collect_vms()
-    if warnings:
-        return VMDetailResponse(status="partial", data=None, warnings=warnings)
-    match = next((v for v in vms if v.vm_id == vm_id or v.name == vm_id), None)
+    match, warnings = await _resolve_vm(vm_id)
     if match is None:
-        return VMDetailResponse(status="partial", data=None, warnings=["NOT_FOUND"])
+        return VMDetailResponse(status="partial", data=None, warnings=warnings)
     return VMDetailResponse(status="success", data=match, warnings=[])
 
 
@@ -310,7 +312,7 @@ async def list_openstack_projects(request: Request, params: WorkloadFilterParams
     try:
         projects = await openstack_client.keystone_projects()
     except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+        code = _error_code(exc)
         return ProjectListResponse(status="partial", data=[], warnings=[code])
 
     vms, vm_warnings = await _collect_vms()
@@ -362,7 +364,7 @@ async def get_openstack_project(request: Request, project_id: str):
     try:
         projects = await openstack_client.keystone_projects()
     except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+        code = _error_code(exc)
         return ProjectDetailResponse(status="partial", data=None, warnings=[code])
 
     name = projects.get(project_id)
@@ -409,7 +411,7 @@ async def get_openstack_hypervisor(request: Request,host: str):
     try:
         hvs = await openstack_client.hypervisors()
     except OpenStackError as exc:
-        code = str(exc) if str(exc) in ("NOT_CONFIGURED", "UPSTREAM_ERROR") else "UPSTREAM_ERROR"
+        code = _error_code(exc)
         return HypervisorDetailResponse(status="partial", data=None, warnings=[code])
 
     match = next((h for h in hvs if h.get("hypervisor_hostname") == host), None)

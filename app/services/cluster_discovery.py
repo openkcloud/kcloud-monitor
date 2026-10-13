@@ -155,21 +155,9 @@ class ClusterDiscovery:
                 info.vendor = vendor_name
                 info.accelerator_type = profile["accelerator_type"]
                 tpl = {"cluster": info.label_value}
-                info.utilization_query = (
-                    profile["utilization_query"].format(**tpl)
-                    if profile["utilization_query"]
-                    else None
-                )
-                info.temperature_query = (
-                    profile["temperature_query"].format(**tpl)
-                    if profile["temperature_query"]
-                    else None
-                )
-                info.power_query = (
-                    profile["power_query"].format(**tpl)
-                    if profile["power_query"]
-                    else None
-                )
+                info.utilization_query = profile["utilization_query"].format(**tpl)
+                info.temperature_query = profile["temperature_query"].format(**tpl)
+                info.power_query = profile["power_query"].format(**tpl)
                 break
 
     async def _enrich_openstack_projects(self, clusters: dict[str, ClusterInfo]) -> None:
