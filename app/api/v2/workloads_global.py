@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from app.api.v2.deps import WorkloadFilterParams
+from app.api.v2.deps import WorkloadFilterParams, with_links
 from app.api.v2.workloads import (
     fetch_pod_accelerators,
     fetch_pod_containers,
@@ -62,17 +62,15 @@ def _service_links(cluster: str, namespace: str, service_name: str, suffix: str 
 
 
 def _all_params(params: Optional[WorkloadFilterParams] = None, **overrides) -> SimpleNamespace:
-    defaults = dict(
-        limit=100000, offset=0, sort_by=None, sort_order="asc",
-        search=None, namespace=None, service_name=None,
-        workload_type=None, status=None, project=None,
+    """fetch_pods 에 넘길 페이지 없는 파라미터. 필터와 정렬은 params 를 따르고 overrides 가 우선."""
+    filters = dict(
+        sort_by=None, sort_order="asc", search=None, namespace=None,
+        service_name=None, workload_type=None, status=None,
     )
     if params:
-        for k in defaults:
-            if hasattr(params, k) and k not in ("limit", "offset"):
-                defaults[k] = getattr(params, k)
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+        filters = {k: getattr(params, k) for k in filters}
+    filters.update(overrides)
+    return SimpleNamespace(limit=100000, offset=0, **filters)
 
 
 async def _resolve_clusters(cluster_filter: Optional[str]) -> list[str]:
@@ -80,6 +78,14 @@ async def _resolve_clusters(cluster_filter: Optional[str]) -> list[str]:
     if cluster_filter and cluster_filter in clusters:
         return [cluster_filter]
     return list(clusters.keys())
+
+
+async def _all_pods(cluster_filter: Optional[str], params: WorkloadFilterParams) -> list:
+    """대상 클러스터 Pod 를 페이지 없이 모아 한 목록으로."""
+    names = await _resolve_clusters(cluster_filter)
+    inner = _all_params(params)
+    results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
+    return [p for pods, _, _ in results for p in pods]
 
 
 # ---------------------------------------------------------------------------
@@ -128,15 +134,7 @@ async def list_pods_global(
 
     * `NO_DATA`: Pod 가 하나도 없음
     """
-    names = await _resolve_clusters(cluster)
-    inner = _all_params(params)
-
-    results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
-
-    all_pods = []
-    for pods, _, _ in results:
-        all_pods.extend(pods)
-
+    all_pods = await _all_pods(cluster, params)
     total = len(all_pods)
     page = all_pods[params.offset : params.offset + params.limit]
     warnings: list[str] = [] if all_pods else ["NO_DATA"]
@@ -221,7 +219,7 @@ async def get_pod_global(request: Request, cluster: str, namespace: str, pod: st
     data, warnings = await fetch_pod_detail(cluster, namespace, pod)
     status = "success" if data else "partial"
     resp = PodDetailResponse(status=status, data=data, warnings=warnings)
-    return {**resp.model_dump(), "_links": _pod_links(cluster, namespace, pod)}
+    return with_links(resp, _pod_links(cluster, namespace, pod))
 
 
 @router.get(
@@ -260,7 +258,7 @@ async def get_pod_power_global(
     data, warnings = await fetch_pod_power(cluster, namespace, pod)
     status = "success" if data else "partial"
     resp = PodPowerResponse(status=status, data=data, warnings=warnings)
-    return {**resp.model_dump(), "_links": _pod_links(cluster, namespace, pod, "/power")}
+    return with_links(resp, _pod_links(cluster, namespace, pod, "/power"))
 
 
 @router.get(
@@ -302,10 +300,7 @@ async def list_pod_containers_global(
     resp = ContainerListResponse(
         status=status, containers=containers, total=len(containers), warnings=warnings,
     )
-    return {
-        **resp.model_dump(),
-        "_links": _pod_links(cluster, namespace, pod, "/containers"),
-    }
+    return with_links(resp, _pod_links(cluster, namespace, pod, "/containers"))
 
 
 @router.get(
@@ -344,10 +339,7 @@ async def get_pod_accelerators_global(
     items, warnings = await fetch_pod_accelerators(cluster, namespace, pod)
     status = "success" if not warnings else "partial"
     resp = PodAcceleratorResponse(status=status, data=items, warnings=warnings)
-    return {
-        **resp.model_dump(),
-        "_links": _pod_links(cluster, namespace, pod, "/accelerators"),
-    }
+    return with_links(resp, _pod_links(cluster, namespace, pod, "/accelerators"))
 
 
 # ---------------------------------------------------------------------------
@@ -419,15 +411,7 @@ async def list_services_global(
     * 서비스 이름을 알 수 없는 Pod 는 Pod 이름을 서비스 이름으로 사용
     * `namespace`, `status`, `workload_type`, `service_name` 은 묶기 전 Pod 에 적용
     """
-    names = await _resolve_clusters(cluster)
-    inner = _all_params(params)
-    results = await asyncio.gather(*(fetch_pods(n, inner) for n in names))
-
-    all_pods = []
-    for pods, _, _ in results:
-        all_pods.extend(pods)
-
-    groups = _group_by_service(all_pods)
+    groups = _group_by_service(await _all_pods(cluster, params))
     items = [_build_service_item(k, v) for k, v in groups.items()]
 
     cluster_dist: dict[str, int] = {}
@@ -491,21 +475,11 @@ async def get_service_global(
     links = _service_links(cluster, namespace, service_name)
 
     if not pods:
-        resp = ServiceDetailResponse(status="partial", data=None, warnings=["NO_DATA"])
-        return {**resp.model_dump(), "_links": links}
+        return with_links(ServiceDetailResponse(status="partial", data=None, warnings=["NO_DATA"]), links)
 
-    running = sum(1 for p in pods if p.phase == "Running")
-    cpu_vals = [p.cpu_usage for p in pods if p.cpu_usage is not None]
-    mem_vals = [p.memory_usage_bytes for p in pods if p.memory_usage_bytes is not None]
-
-    data = ServiceDetailData(
-        service_name=service_name, namespace=namespace, cluster=cluster,
-        pod_count=len(pods), running_pod_count=running,
-        cpu_usage=sum(cpu_vals) if cpu_vals else None,
-        memory_usage_bytes=sum(mem_vals) if mem_vals else None,
-    )
-    resp = ServiceDetailResponse(status="success", data=data, warnings=[])
-    return {**resp.model_dump(), "_links": links}
+    item = _build_service_item((cluster, namespace, service_name), pods)
+    data = ServiceDetailData(**item.model_dump())
+    return with_links(ServiceDetailResponse(status="success", data=data, warnings=[]), links)
 
 
 @router.get(
@@ -552,10 +526,7 @@ async def list_service_pods_global(
     pods, total, warnings = await fetch_pods(cluster, inner)
     status = "success" if pods else "partial"
     resp = PodListResponse(status=status, pods=pods, total=total, warnings=warnings)
-    return {
-        **resp.model_dump(),
-        "_links": _service_links(cluster, namespace, service_name, "/pods"),
-    }
+    return with_links(resp, _service_links(cluster, namespace, service_name, "/pods"))
 
 
 @router.get(
@@ -596,12 +567,7 @@ async def get_service_power_global(
     pods, _, _ = await fetch_pods(cluster, inner)
     links = _service_links(cluster, namespace, service_name, "/power")
 
-    if not pods:
-        resp = ServicePowerResponse(
-            status="partial", data=None, warnings=["NO_POWER_DATA"],
-        )
-        return {**resp.model_dump(), "_links": links}
-
+    # 소속 Pod 가 없으면 반복 없이 has_power=False 로 끝나 NO_POWER_DATA
     total_watts = 0.0
     has_power = False
     for p in pods:
@@ -611,13 +577,11 @@ async def get_service_power_global(
             has_power = True
 
     if not has_power:
-        resp = ServicePowerResponse(
-            status="partial", data=None, warnings=["NO_POWER_DATA"],
-        )
+        resp = ServicePowerResponse(status="partial", data=None, warnings=["NO_POWER_DATA"])
     else:
         resp = ServicePowerResponse(
             status="success",
             data=ServicePowerData(watts=total_watts, source="kepler"),
             warnings=[],
         )
-    return {**resp.model_dump(), "_links": links}
+    return with_links(resp, links)

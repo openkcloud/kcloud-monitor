@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import Query
+from pydantic import BaseModel
 
 # period 문자열("1h"/"30m"/"7d" …) → timedelta 단위 매핑
 _PERIOD_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
@@ -30,6 +31,11 @@ def parse_period(period: str) -> timedelta:
     except (ValueError, IndexError):
         delta = timedelta(hours=1)
     return min(delta, _MAX_PERIOD)
+
+
+def with_links(resp: BaseModel, links: dict) -> dict:
+    """응답 본문 끝에 `_links`(self, canonical 경로)를 붙인 dict. 별칭·전역 경로 공용."""
+    return {**resp.model_dump(), "_links": links}
 
 
 class PaginationParams:
