@@ -12,9 +12,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.v2.accelerators import count_throttle, throttle_series
+from app.api.v2.accelerators import count_throttle, throttle_series, throttle_starts
 from app.api.v2.deps import TimeseriesParams, parse_period
-from app.schemas.accelerators import ThrottlingSeriesItem, ThrottlingSummary, ThrottlingTimeseriesResponse
+from app.schemas.accelerators import (
+    ThrottlingSeriesItem,
+    ThrottlingSummary,
+    ThrottlingTimelinePoint,
+    ThrottlingTimeseriesResponse,
+)
 from app.schemas.monitoring import (
     METRIC_ALLOWLIST,
     AcceleratorEfficiency,
@@ -754,6 +759,9 @@ async def get_throttling_timeseries(
     node: Optional[str] = Query(None, description="노드 이름 (없으면 전체)"),
     acc_id: Optional[str] = Query(None, description="가속기 ID (없으면 전체)"),
     detail: bool = Query(False, description="true 면 카드별 시계열(series)도 받음 (기본 false, summary 만)"),
+    bucket: Optional[str] = Query(
+        None, pattern="^[1-9][0-9]*[smhd]$", description="timeline 을 묶을 구간 (예: 1h, step 이상, 없으면 step 단위)"
+    ),
     params: TimeseriesParams = Depends(),
 ):
     """가속기가 스스로 속도를 낮춘(쓰로틀링) 시점과 횟수 조회
@@ -762,6 +770,7 @@ async def get_throttling_timeseries(
 
     * `GET /api/v2/monitoring/throttling/timeseries`
     * `GET /api/v2/monitoring/throttling/timeseries?cluster=l40s&detail=true&period=6h`
+    * `GET /api/v2/monitoring/throttling/timeseries?period=24h&step=5m&bucket=1h`
 
     입력 옵션
 
@@ -773,10 +782,12 @@ async def get_throttling_timeseries(
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 지금에서 `period` 만큼 이전)
     * `end`: 종료 시각, ISO 8601 (선택, 없으면 지금)
     * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+    * `bucket`: `timeline` 을 묶을 구간, 예 `1h`, `step` 이상 (선택, 없으면 `step` 단위)
 
     응답
 
     * `summary`: 대상 카드 수, 쓰로틀링 발생 카드 수, 시작 횟수 합계, 지속 시간 합계(분), 판정 간격(초)
+    * `timeline`: 시각별 쓰로틀링 중인 카드 수, 시작 횟수, 지속 시간(분), `detail` 과 무관하게 포함
     * `series`: 카드별 벤더, 클러스터, 노드, 가속기 ID, (시각, `1` | `0`) 목록 (`detail=true` 일 때만)
     * `series` 에는 카드별 시작 횟수, 지속 시간(분)도 포함
 
@@ -785,14 +796,23 @@ async def get_throttling_timeseries(
     * `UNKNOWN_CLUSTER`: 없는 클러스터 이름, `summary` 는 `null`
     * `NO_DATA`: 대상 카드 없음, `summary` 는 `null`
 
+    오류
+
+    * 400: `bucket` 이 `step` 보다 짧음
+
     참고
 
     * 판정 기준: 2분 평균 사용률 90% 이상, 최근 10분 최고 온도 기준 이상, 전력이 15분 최대의 85% 미만
     * 값이 빠진 시각은 점이 없음
-    * `step` 이 길면 짧은 쓰로틀링을 놓칠 수 있음
+    * `step` 이 길면 짧은 쓰로틀링을 놓칠 수 있음, 긴 구간 그래프는 `step` 을 짧게 두고 `bucket` 으로 묶는 편이 정확
+    * `timeline` 의 `events` 합은 `summary.throttle_events` 와 같음
+    * `period=24h&step=5m&bucket=1h` 이면 `timeline` 25점 (시작과 끝 시각 모두 포함)
     """
     start, end, step = time_range(params)
     step_seconds = parse_period(step).total_seconds()
+    bucket_seconds = parse_period(bucket).total_seconds() if bucket else step_seconds
+    if bucket_seconds < step_seconds:
+        raise HTTPException(status_code=400, detail=f"bucket({bucket}) 은 step({step}) 이상이어야 함")
 
     series: list[ThrottlingSeriesItem] = []
     clusters = await cluster_discovery.get_clusters()
@@ -816,7 +836,46 @@ async def get_throttling_timeseries(
         throttled_minutes=sum(s.throttled_minutes for s in series),
         step_seconds=step_seconds,
     )
-    return ThrottlingTimeseriesResponse(status="success", series=series if detail else [], summary=summary)
+    return ThrottlingTimeseriesResponse(
+        status="success",
+        series=series if detail else [],
+        summary=summary,
+        timeline=_throttle_timeline(series, start, end, step_seconds, bucket_seconds),
+    )
+
+
+def _throttle_timeline(
+    series: list[ThrottlingSeriesItem], start: str, end: str, step_seconds: float, bucket_seconds: float
+) -> list[ThrottlingTimelinePoint]:
+    """카드별 0/1 시계열을 시각별로 합산한다. 점이 없는 시각도 0으로 채워 그래프가 끊기지 않게 한다."""
+    t0 = datetime.fromisoformat(start).timestamp()
+    n = int((datetime.fromisoformat(end).timestamp() - t0) // step_seconds) + 1
+    cards, events = [0] * n, [0] * n
+
+    def index(t: float) -> Optional[int]:
+        k = round((t - t0) / step_seconds)
+        return k if 0 <= k < n else None
+
+    for s in series:
+        for iso, v in s.values:
+            if v == "1" and (k := index(datetime.fromisoformat(iso).timestamp())) is not None:
+                cards[k] += 1
+        for t in throttle_starts(s.values, step_seconds):
+            if (k := index(t)) is not None:
+                events[k] += 1
+
+    buckets: dict[int, list[int]] = {}
+    for k in range(n):
+        buckets.setdefault(int(k * step_seconds // bucket_seconds), []).append(k)
+    return [
+        ThrottlingTimelinePoint(
+            time=ts_iso(t0 + b * bucket_seconds),
+            throttled_cards=max(cards[k] for k in ks),
+            events=sum(events[k] for k in ks),
+            throttled_minutes=sum(cards[k] for k in ks) * step_seconds / 60,
+        )
+        for b, ks in buckets.items()
+    ]
 
 
 def _now_iso() -> str:

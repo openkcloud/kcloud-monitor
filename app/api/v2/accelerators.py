@@ -198,17 +198,21 @@ async def throttle_series(
     return out
 
 
-def count_throttle(values: list[tuple[str, str]], step_seconds: float) -> tuple[int, float]:
-    """(쓰로틀링 시작 횟수, 쓰로틀링 시간 분). 1이 시작되는 지점을 센다. 직전 점이 0이거나 비어 있으면 새 시작."""
-    events, ones, prev_t, prev_v = 0, 0, None, None
+def throttle_starts(values: list[tuple[str, str]], step_seconds: float) -> list[float]:
+    """쓰로틀링이 시작된 시각(epoch 초) 목록. 직전 점이 0이거나 비어 있으면 새 시작."""
+    starts, prev_t, prev_v = [], None, None
     for iso, v in values:
         t = datetime.fromisoformat(iso).timestamp()
-        if v == "1":
-            ones += 1
-            if prev_v != "1" or t - prev_t > step_seconds:
-                events += 1
+        if v == "1" and (prev_v != "1" or t - prev_t > step_seconds):
+            starts.append(t)
         prev_t, prev_v = t, v
-    return events, ones * step_seconds / 60
+    return starts
+
+
+def count_throttle(values: list[tuple[str, str]], step_seconds: float) -> tuple[int, float]:
+    """(쓰로틀링 시작 횟수, 쓰로틀링 시간 분)."""
+    ones = sum(1 for _, v in values if v == "1")
+    return len(throttle_starts(values, step_seconds)), ones * step_seconds / 60
 
 
 def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
