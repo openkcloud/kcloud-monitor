@@ -61,9 +61,11 @@ class NodeCounts(BaseModel):
 
     total: int = Field(..., description="전체 노드 수. 물리 노드와 가상 노드의 합")
     physical: int = Field(..., description="물리 노드 수. 관리 클러스터에 등록된 노드 기준")
-    virtual: int = Field(..., description="가상(VM) 노드 수. 서비스 클러스터별 합계")
-    healthy: int = Field(..., description="정상 노드 수. 물리 노드는 Ready 상태 기준, 가상 노드는 전부 정상으로 계산한 근사치")
-    unhealthy: int = Field(..., description="비정상 노드 수. 물리 노드 중 Ready 가 아닌 개수")
+    virtual: int = Field(..., description="가상(VM) 노드 수. 서비스 클러스터의 Kubernetes 노드와 단독 VM 의 합")
+    healthy: int = Field(
+        ..., description="정상 노드 수. Kubernetes 노드는 Ready 조건이 참, 쿠버네티스 없는 단독 VM 은 5분 안에 보고가 온 것"
+    )
+    unhealthy: int = Field(..., description="비정상 노드 수. 전체 노드 수에서 정상 노드 수를 뺀 값")
 
 
 class OverviewData(BaseModel):
