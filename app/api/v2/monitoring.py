@@ -588,7 +588,7 @@ async def query_metrics(
     )
 
 
-HOST_LABELS = ("Hostname", "hostname")  # by 값 중 호스트 묶음으로 처리할 것
+HOST_LABELS = ("Hostname", "hostname")  # by 값 중 호스트 묶음으로 처리할 것. 응답 라벨은 항상 hostname
 
 
 def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -> str:
@@ -602,7 +602,8 @@ def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -
     if by in HOST_LABELS:
         # 벤더마다 호스트 라벨 이름이 달라(NVIDIA Hostname, Rebellions hostname, Furiosa ETRI exporter node) 하나로 합친다.
         # shortcut: 한 시리즈에 두 라벨이 함께 있으면 값이 이어 붙음, 그런 exporter 가 생기면 우선순위 선택으로 교체
-        query = f'label_join({query}, "{by}", "", "Hostname", "node", "hostname")'
+        query = f'label_join({query}, "hostname", "", "Hostname", "node", "hostname")'
+        by = "hostname"
     return f"{aggregation} by ({by}) ({aggregation}_over_time(({query})[{step}:]))"
 
 
@@ -613,8 +614,8 @@ async def get_metrics_timeseries(
     by: Optional[str] = Query(
         None,
         pattern="^(Hostname|hostname|cluster)$",
-        description="묶는 기준 (Hostname | hostname | cluster). Hostname, hostname: 가속기가 꽂힌 컴퓨터별로 묶음, "
-        "둘 다 결과가 같고 응답 라벨 이름만 다름. cluster: 클러스터별로 묶음. 없으면 묶지 않은 순간값",
+        description="묶는 기준 (hostname | cluster). hostname: 가속기가 꽂힌 컴퓨터별로 묶음. "
+        "cluster: 클러스터별로 묶음. 없으면 묶지 않은 순간값",
     ),
     params: TimeseriesParams = Depends(),
 ):
@@ -623,14 +624,14 @@ async def get_metrics_timeseries(
     입력 예시
 
     * `GET /api/v2/monitoring/metrics/timeseries?metric=gpu_temperature`
-    * `GET /api/v2/monitoring/metrics/timeseries?metric=gpu_utilization&by=Hostname&period=6h&aggregation=max`
+    * `GET /api/v2/monitoring/metrics/timeseries?metric=gpu_utilization&by=hostname&period=6h&aggregation=max`
     * `GET /api/v2/monitoring/metrics/timeseries?metric=furiosa_utilization&by=hostname&period=24h&step=1h`
 
     입력 옵션
 
     * `metric`: 조회할 메트릭 이름, 허용 목록에 있는 값만 (필수)
-    * `by`: 묶는 기준 `Hostname` | `hostname` | `cluster` (선택)
-    * `Hostname`, `hostname`: 가속기가 꽂힌 컴퓨터별로 묶음, 둘 다 결과가 같고 응답 라벨 이름만 다름
+    * `by`: 묶는 기준 `hostname` | `cluster` (선택)
+    * `hostname`: 가속기가 꽂힌 컴퓨터별로 묶음
     * `cluster`: 클러스터별로 묶음
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 10일)
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 지금에서 `period` 만큼 이전)
@@ -656,7 +657,7 @@ async def get_metrics_timeseries(
 
     * `by` 지정 시 그 라벨 값이 같은 시리즈를 묶고 각 `step` 구간을 `aggregation` 방식으로 요약
     * `by` 가 없으면 시리즈별 순간값
-    * `by` 가 `Hostname` 또는 `hostname` 이면 벤더별 호스트 라벨(`Hostname`, `hostname`, `node`)을 하나로 합쳐 묶음, 응답 라벨 이름은 요청한 값과 같음
+    * `by=hostname` 은 벤더마다 다른 호스트 라벨(`Hostname`, `hostname`, `node`)을 합쳐 묶고, 응답 라벨은 `hostname`
     """
     _check_metric(metric)
 
