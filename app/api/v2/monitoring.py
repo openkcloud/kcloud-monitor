@@ -28,6 +28,7 @@ from app.schemas.monitoring import (
     AcceleratorUtilizationTimeseriesResponse,
     ClusterCounts,
     MetricSample,
+    MetricSeries,
     MetricsQueryResponse,
     NodeCounts,
     NodeCountSeriesItem,
@@ -612,7 +613,8 @@ async def get_metrics_timeseries(
     by: Optional[str] = Query(
         None,
         pattern="^(Hostname|hostname|cluster)$",
-        description="묶을 라벨 (Hostname | hostname | cluster), 지정하면 같은 값끼리 하나로 묶음. Hostname, hostname 은 벤더별 호스트 라벨을 합쳐 묶음",
+        description="묶는 기준 (Hostname | hostname | cluster). Hostname, hostname: 가속기가 꽂힌 컴퓨터별로 묶음, "
+        "둘 다 결과가 같고 응답 라벨 이름만 다름. cluster: 클러스터별로 묶음. 없으면 묶지 않은 순간값",
     ),
     params: TimeseriesParams = Depends(),
 ):
@@ -627,7 +629,9 @@ async def get_metrics_timeseries(
     입력 옵션
 
     * `metric`: 조회할 메트릭 이름, 허용 목록에 있는 값만 (필수)
-    * `by`: 묶을 라벨 `Hostname` | `hostname` | `cluster` (선택)
+    * `by`: 묶는 기준 `Hostname` | `hostname` | `cluster` (선택)
+    * `Hostname`, `hostname`: 가속기가 꽂힌 컴퓨터별로 묶음, 둘 다 결과가 같고 응답 라벨 이름만 다름
+    * `cluster`: 클러스터별로 묶음
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 10일)
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 지금에서 `period` 만큼 이전)
     * `end`: 종료 시각, ISO 8601 (선택, 없으면 지금)
@@ -673,7 +677,7 @@ async def get_metrics_timeseries(
         )
 
     series = [
-        MetricSample(
+        MetricSeries(
             metric=item.get("metric", {}),
             values=[(ts_iso(v[0]), str(v[1])) for v in item.get("values", [])],
         )

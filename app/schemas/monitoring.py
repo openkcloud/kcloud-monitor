@@ -110,14 +110,20 @@ class NodesTimeseriesResponse(BaseModel):
 
 
 class MetricSample(BaseModel):
-    """메트릭 시리즈 하나의 조회 결과. 현재값 조회는 value, 시계열 조회는 values 사용"""
+    """메트릭 시리즈 하나의 현재값"""
 
     metric: dict[str, str] = Field(..., description="원본 메트릭 라벨 (키: 라벨 이름, 값: 라벨 값)")
-    value: Optional[tuple[float, str]] = Field(
-        None, description="현재값 조회 결과 (Unix 시각(초), 값 문자열). 시각이 ISO 문자열이 아닌 숫자. 시계열 조회에서는 null"
+    value: tuple[float, str] = Field(
+        ..., description="현재값 (Unix 시각(초), 값 문자열). 시각이 ISO 문자열이 아닌 숫자"
     )
-    values: Optional[list[tuple[str, str]]] = Field(
-        None, description="(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC, 값은 숫자 문자열. 현재값 조회에서는 null"
+
+
+class MetricSeries(BaseModel):
+    """메트릭 시리즈 하나의 시계열"""
+
+    metric: dict[str, str] = Field(..., description="원본 메트릭 라벨 (키: 라벨 이름, 값: 라벨 값)")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC, 값은 숫자 문자열"
     )
 
 
@@ -136,7 +142,7 @@ class TimeseriesResponse(BaseModel):
 
     status: str = Field(..., description=DESC_STATUS)
     metric: str = Field(..., description="조회한 메트릭 이름")
-    series: list[MetricSample] = Field(..., description="시리즈별 시계열 목록. 시리즈별 라벨과 (시각, 값) 목록(values)")
+    series: list[MetricSeries] = Field(..., description="시리즈별 시계열 목록. 시리즈별 라벨과 (시각, 값) 목록(values)")
     observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
     warnings: list[str] = Field([], description=DESC_WARNINGS)
 
