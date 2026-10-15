@@ -26,6 +26,7 @@ from app.schemas.alerts import (
     PreviewItem,
 )
 from app.services import alerts
+from app.services.cluster_discovery import cluster_discovery
 from app.services.alerts import LOG_METRICS, RESOURCE_METRICS, SLO_METRICS, metric_kind, store
 
 router = APIRouter(prefix="/alerts")
@@ -107,17 +108,56 @@ async def _policies_out(rows: list[dict]) -> list[Policy]:
     return out
 
 
-async def _to_row(body: dict) -> dict:
-    """화면 입력 → 저장 형식"""
-    kind = metric_kind(body["metric"])
+async def _check(body: dict, cur: Optional[dict] = None) -> dict:
+    """화면 입력 → 저장 형식. 형식 오류와 대상 오타를 칸 이름과 함께 모두 모아 422 한 번으로 반환
+
+    cur 가 있으면 수정: 보낸 항목만 검사하고, 비운 항목은 저장된 값으로 대상 데이터를 확인.
+    """
+    errors: list[dict] = []
+
+    def err(field: str, message: str) -> None:
+        errors.append({"field": field, "message": message})
+
+    metric = body.get("metric") or (cur or {}).get("metric")
+    kind = metric_kind(metric)
     if kind is None:
-        raise HTTPException(status_code=422, detail=f"지표는 GET /alerts/metrics 목록 중 하나: {body['metric']!r}")
-    return {
-        "name": body["name"], "description": body["description"], "kind": kind, "metric": body["metric"],
-        "op": body["op"], "threshold": body["threshold"], "severity": body["severity"], "enabled": body["enabled"],
-        "for_min": _minutes(body["duration"]), "window_min": body["window_min"],
-        "target": _target(body["selector"], kind), "channel_ids": await _channel_ids(body["channels"]),
-    }
+        err("metric", f"지표는 GET /alerts/metrics 목록 중 하나: {metric!r}")
+    elif cur and kind != cur["kind"]:
+        err("metric", "정책 종류(resource | log | slo)는 바꿀 수 없음")
+    out = {k: v for k, v in body.items() if k not in ("duration", "selector", "channels")}
+    target = {k: v for k, v in ((cur or {}).get("target") or {}).items() if v}
+    if "duration" in body:
+        try:
+            out["for_min"] = _minutes(body["duration"])
+        except HTTPException as e:
+            err("duration", e.detail)
+    if "selector" in body and kind:
+        try:
+            target = out["target"] = _target(body["selector"], kind)
+        except HTTPException as e:
+            err("selector", e.detail)
+    if "channels" in body:
+        try:
+            out["channel_ids"] = await _channel_ids(body["channels"])
+        except HTTPException as e:
+            err("channels", e.detail)
+
+    # 지표와 대상 형식이 맞으면 다른 칸 오류와 함께 대상 오타도 확인
+    # 로그 지표는 0건이면 데이터가 비어 오타와 구별할 수 없어 클러스터만 봄
+    target_ok = not any(e["field"] in ("metric", "selector") for e in errors)
+    if target_ok and ("metric" in body or "selector" in body):
+        cluster = target.get("cluster")
+        if cluster and cluster not in await cluster_discovery.get_clusters():
+            err("selector", f"수집 중인 클러스터가 아님: {cluster!r}")
+        elif kind != "log":
+            merged = {**(cur or {}), **out, "id": "check", "kind": kind, "metric": metric, "target": target}
+            if not (await alerts.evaluate_policy(merged))[0]:
+                err("selector", "이 대상과 맞는 데이터가 지금 없음. 클러스터, 노드, 가속기, 모델 이름 확인")
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+    if not cur:
+        out["kind"] = kind
+    return out
 
 
 def _timing(row: dict, for_min: int) -> dict:
@@ -207,12 +247,16 @@ async def create_policy(body: PolicyCreate):
 
     오류
 
-    * 422: 목록에 없는 지표, `duration` 형식 오류, 쓸 수 없는 대상 키, 등록되지 않은 채널 종류
+    * 422: 저장하지 않고 잘못된 칸을 모두 한 번에 반환
+    * 응답 형식: `{"detail": {"errors": [{"field": "duration", "message": "..."}]}}`
+    * `field` 는 입력 칸 이름 (`metric` | `duration` | `selector` | `channels`)
+    * 형식 오류: 목록에 없는 지표, `duration` 형식, 그 종류에서 못 쓰는 대상 키, 등록되지 않은 채널 종류
+    * 대상 오타: 수집 중이 아닌 클러스터, 지금 데이터가 없는 노드, 가속기, 모델
     * `log` 지표의 `selector` 는 `cluster` 만 가능
     * `slo` 지표의 `selector` 는 `cluster`, `model` 만 가능
     """
     _require_store()
-    row = await store.create_policy(await _to_row(body.model_dump()))
+    row = await store.create_policy(await _check(body.model_dump()))
     return ItemResponse(data=(await _policies_out([row]))[0])
 
 
@@ -261,21 +305,14 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
 
     오류
 
-    * 422: 종류(`resource` | `log` | `slo`)가 다른 지표로 변경
+    * 422: 정책 생성과 같은 검사, 보낸 칸만 검사하고 잘못된 칸을 모두 한 번에 반환
+    * 422: 종류(`resource` | `log` | `slo`)가 다른 지표로 변경 (`field`: `metric`)
     * 404: 없는 정책
     """
     _require_store()
     cur = await _policy_or_404(policy_id)
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
-    if "metric" in patch and metric_kind(patch["metric"]) != cur["kind"]:
-        raise HTTPException(status_code=422, detail="정책 종류(resource | log | slo)는 바꿀 수 없음")
-    if "duration" in patch:
-        patch["for_min"] = _minutes(patch.pop("duration"))
-    if "selector" in patch:
-        patch["target"] = _target(patch.pop("selector"), cur["kind"])
-    if "channels" in patch:
-        patch["channel_ids"] = await _channel_ids(patch.pop("channels"))
-    row = await store.update_policy(policy_id, patch)
+    row = await store.update_policy(policy_id, await _check(patch, cur))
     return ItemResponse(data=(await _policies_out([row]))[0])
 
 
