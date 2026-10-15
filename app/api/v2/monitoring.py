@@ -25,6 +25,8 @@ from app.schemas.monitoring import (
     MetricSample,
     MetricsQueryResponse,
     NodeCounts,
+    NodeCountSeriesItem,
+    NodesTimeseriesResponse,
     OverviewData,
     OverviewResponse,
     PowerBreakdownItem,
@@ -194,6 +196,51 @@ async def get_overview(request: Request):
     )
 
     return OverviewResponse(status=status, data=data, warnings=warnings)
+
+
+@router.get("/monitoring/nodes/timeseries", summary="노드 수 시계열", response_model=NodesTimeseriesResponse)
+async def get_nodes_timeseries(request: Request, params: TimeseriesParams = Depends()):
+    """전체 노드 수와 정상 노드 수의 변화 추이 조회
+
+    입력 예시
+
+    * `GET /api/v2/monitoring/nodes/timeseries`
+    * `GET /api/v2/monitoring/nodes/timeseries?period=24h&step=1h`
+
+    입력 옵션
+
+    * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 10일)
+    * `start`: 시작 시각, ISO 8601 (선택, 없으면 지금에서 `period` 만큼 이전)
+    * `end`: 종료 시각, ISO 8601 (선택, 없으면 지금)
+    * `step`: 데이터 점 간격, 예 `1m`, `5m`, `1h` (기본 `5m`)
+
+    응답
+
+    * `series`: 노드 수 종류(`metric`: `total` | `healthy`)별 (시각, 값) 쌍 목록(`values`)
+    * 시각은 ISO 8601 UTC
+
+    경고
+
+    * `NO_DATA`: 결과 없음
+
+    참고
+
+    * 집계 기준은 `GET /api/v2/monitoring/overview` 의 `nodes.total`, `nodes.healthy` 와 같음
+    * `aggregation` 은 쓰지 않음, 각 시각의 순간값
+    """
+    start, end, step = time_range(params)
+    total, healthy = await asyncio.gather(
+        prometheus_client.range_query(NODE_TOTAL_QUERY, start, end, step),
+        prometheus_client.range_query(NODE_HEALTHY_QUERY, start, end, step),
+    )
+    series = [
+        NodeCountSeriesItem(metric=name, values=[(ts_iso(t), v) for t, v in results[0].get("values", [])])
+        for name, results in (("total", total), ("healthy", healthy))
+        if results
+    ]
+    if not series:
+        return NodesTimeseriesResponse(status="partial", series=[], warnings=["NO_DATA"])
+    return NodesTimeseriesResponse(status="success", series=series)
 
 
 @router.get("/monitoring/power/summary", summary="전력 요약", response_model=PowerSummaryResponse)
