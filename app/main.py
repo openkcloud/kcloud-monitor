@@ -61,7 +61,6 @@ API_DESCRIPTION = """
 
 ## 인증
 - `POST /api/v2/auth/login` 에 아이디와 비밀번호(JSON)를 보내 JWT 발급. 응답의 `access_token` 을 `Authorization: Bearer <토큰>` 헤더로 전달
-- HTTP Basic 인증 헤더를 쓰는 클라이언트는 `POST /api/v2/auth/token` 으로 발급
 - 토큰 유효 시간 : 응답의 `expires_in`(초). 기본 3600초
 - 서버 간 호출 : 서버에 API 키가 설정된 경우 `X-API-Key` 헤더 사용 가능
 - 인증 없이 접근 가능한 경로 : `/api/v2/auth/*`, `/api/v2/system/*`

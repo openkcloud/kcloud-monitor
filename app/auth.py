@@ -2,40 +2,21 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.deps import get_settings
 
 # Security schemes
-security_basic = HTTPBasic()
 security_bearer = HTTPBearer()
 security_bearer_optional = HTTPBearer(auto_error=False)
 
-class Token(BaseModel):
-    """로그인 토큰 응답"""
-
-    access_token: str = Field(..., description="JWT 액세스 토큰. 이후 요청의 Authorization: Bearer 헤더에 사용")
-    token_type: str = Field(..., description="토큰 종류 (bearer)")
-    expires_in: int = Field(..., description="토큰 유효 시간 (초)")
-
-def verify_credentials(
-    credentials: HTTPBasicCredentials = Depends(security_basic), 
-    settings: Settings = Depends(get_settings)
-) -> str:
-    """Verifies basic authentication credentials."""
-    correct_username = secrets.compare_digest(credentials.username, settings.API_AUTH_USERNAME)
-    correct_password = secrets.compare_digest(credentials.password, settings.API_AUTH_PASSWORD)
-    
-    if not (correct_username and correct_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
+def check_password(username: str, password: str, settings: Settings) -> bool:
+    """Compare login credentials in constant time."""
+    correct_username = secrets.compare_digest(username, settings.API_AUTH_USERNAME)
+    correct_password = secrets.compare_digest(password, settings.API_AUTH_PASSWORD)
+    return correct_username and correct_password
 
 def create_access_token(data: dict, expires_delta: timedelta, settings: Settings) -> str:
     """Create JWT access token."""
