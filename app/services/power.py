@@ -33,7 +33,8 @@ ACCEL_POWER_QUERIES = {
 }
 
 ACCEL_UTIL_QUERIES = {  # 효율·사용률용, %. 카드 1장당 시계열 1개
-    "nvidia": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster=~"l40s|"} * 100',
+    # 공통 지표 표(가속기 목록 API)와 같은 GPU_UTIL. compute6 카드(cluster 라벨 없음)도 포함
+    "nvidia": 'DCGM_FI_DEV_GPU_UTIL{cluster=~"l40s|"}',
     # 코어(8개)별 시계열이라 카드 단위로 평균
     "furiosa": 'avg by (cluster,device,uuid,instance,hostname) (furiosa_npu_core_utilization{cluster=~"furiosa.*"})',
     "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
