@@ -91,6 +91,24 @@ class OverviewResponse(BaseModel):
     warnings: list[str] = Field([], description=DESC_WARNINGS)
 
 
+class NodeCountSeriesItem(BaseModel):
+    """노드 수 한 종류의 시계열"""
+
+    metric: str = Field(..., description="노드 수 종류 (total | healthy). total: 전체 노드 수, healthy: 정상 노드 수")
+    values: list[tuple[str, str]] = Field(
+        ..., description="(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC, 값은 노드 수 숫자 문자열"
+    )
+
+
+class NodesTimeseriesResponse(BaseModel):
+    """노드 수 시계열 응답"""
+
+    status: str = Field(..., description=DESC_STATUS)
+    series: list[NodeCountSeriesItem] = Field(..., description="노드 수 종류별 시계열 목록")
+    observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
+    warnings: list[str] = Field([], description=DESC_WARNINGS)
+
+
 class MetricSample(BaseModel):
     """메트릭 시리즈 하나의 조회 결과. 현재값 조회는 value, 시계열 조회는 values 사용"""
 
