@@ -587,6 +587,9 @@ async def query_metrics(
     )
 
 
+HOST_LABELS = ("Hostname", "hostname")  # by 값 중 호스트 묶음으로 처리할 것
+
+
 def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -> str:
     """by 라벨이 있으면 라벨별로 묶고 step 구간을 aggregation으로 요약하는 PromQL로 감싼다.
 
@@ -595,6 +598,10 @@ def _grouped_query(query: str, by: Optional[str], aggregation: str, step: str) -
     """
     if not by:
         return query
+    if by in HOST_LABELS:
+        # 벤더마다 호스트 라벨 이름이 달라(NVIDIA Hostname, Rebellions hostname, Furiosa ETRI exporter node) 하나로 합친다.
+        # shortcut: 한 시리즈에 두 라벨이 함께 있으면 값이 이어 붙음, 그런 exporter 가 생기면 우선순위 선택으로 교체
+        query = f'label_join({query}, "{by}", "", "Hostname", "node", "hostname")'
     return f"{aggregation} by ({by}) ({aggregation}_over_time(({query})[{step}:]))"
 
 
@@ -605,7 +612,7 @@ async def get_metrics_timeseries(
     by: Optional[str] = Query(
         None,
         pattern="^(Hostname|hostname|cluster)$",
-        description="묶을 라벨 (Hostname | hostname | cluster), 지정하면 같은 값끼리 하나로 묶음",
+        description="묶을 라벨 (Hostname | hostname | cluster), 지정하면 같은 값끼리 하나로 묶음. Hostname, hostname 은 벤더별 호스트 라벨을 합쳐 묶음",
     ),
     params: TimeseriesParams = Depends(),
 ):
@@ -615,6 +622,7 @@ async def get_metrics_timeseries(
 
     * `GET /api/v2/monitoring/metrics/timeseries?metric=gpu_temperature`
     * `GET /api/v2/monitoring/metrics/timeseries?metric=gpu_utilization&by=Hostname&period=6h&aggregation=max`
+    * `GET /api/v2/monitoring/metrics/timeseries?metric=furiosa_utilization&by=hostname&period=24h&step=1h`
 
     입력 옵션
 
@@ -644,6 +652,7 @@ async def get_metrics_timeseries(
 
     * `by` 지정 시 그 라벨 값이 같은 시리즈를 묶고 각 `step` 구간을 `aggregation` 방식으로 요약
     * `by` 가 없으면 시리즈별 순간값
+    * `by` 가 `Hostname` 또는 `hostname` 이면 벤더별 호스트 라벨(`Hostname`, `hostname`, `node`)을 하나로 합쳐 묶음, 응답 라벨 이름은 요청한 값과 같음
     """
     _check_metric(metric)
 
