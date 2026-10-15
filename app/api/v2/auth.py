@@ -8,7 +8,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.auth import Token, create_access_token, verify_credentials, verify_token
+from app.auth import check_password, create_access_token, verify_token
 from app.config import Settings
 from app.deps import get_settings
 
@@ -56,10 +56,7 @@ async def login(login_data: LoginRequest, settings: Settings = Depends(get_setti
 
     * 401: 아이디 또는 비밀번호 불일치
     """
-    if (
-        login_data.username != settings.API_AUTH_USERNAME
-        or login_data.password != settings.API_AUTH_PASSWORD
-    ):
+    if not check_password(login_data.username, login_data.password, settings):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -74,41 +71,6 @@ async def login(login_data: LoginRequest, settings: Settings = Depends(get_setti
         token_type="bearer",
         expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         username=login_data.username,
-    )
-
-
-@router.post("/auth/token", response_model=Token, summary="로그인(HTTP Basic)")
-async def login_basic(
-    username: str = Depends(verify_credentials),
-    settings: Settings = Depends(get_settings),
-):
-    """HTTP Basic 인증 헤더로 JWT 발급
-
-    입력 예시
-
-    * `POST /api/v2/auth/token`
-    * 요청 헤더에 `Authorization: Basic <계정:비밀번호를 base64로 인코딩한 값>` 포함
-
-    응답
-
-    * `access_token`: 이후 요청의 `Authorization: Bearer` 헤더에 넣는 값
-    * `token_type`: 항상 `bearer`
-    * `expires_in`: 토큰 유효 시간(초)
-
-    오류
-
-    * 401: 인증 실패
-
-    참고
-
-    * JSON 본문 대신 Basic 인증 헤더를 쓰는 클라이언트용
-    """
-    expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    token = create_access_token(data={"sub": username}, expires_delta=expires, settings=settings)
-    return Token(
-        access_token=token,
-        token_type="bearer",
-        expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 
