@@ -314,6 +314,15 @@ class ThrottlingSummary(BaseModel):
     step_seconds: float = Field(..., description="판정 간격(초). 이보다 짧게 끝난 쓰로틀링은 놓칠 수 있음")
 
 
+class ThrottlingTimelinePoint(BaseModel):
+    """한 시각(또는 bucket 구간)의 전체 카드 쓰로틀링 합계."""
+
+    time: str = Field(..., description="시각, ISO 8601 UTC. bucket 지정 시 구간 시작 시각")
+    throttled_cards: int = Field(..., description="쓰로틀링 중인 카드 수. bucket 지정 시 구간 안 최대값")
+    events: int = Field(..., description="이 시각(구간)에 쓰로틀링이 시작된 횟수")
+    throttled_minutes: float = Field(..., description="이 시각(구간)에 쓰로틀링 상태였던 시간(분). 카드별 시간의 합")
+
+
 class ThrottlingTimeseriesResponse(BaseModel):
     """쓰로틀링 시계열 응답."""
 
@@ -323,6 +332,9 @@ class ThrottlingTimeseriesResponse(BaseModel):
     )
     summary: Optional[ThrottlingSummary] = Field(
         None, description="조회 대상 카드 전체의 쓰로틀링 합계. 판정 값이 없으면 null"
+    )
+    timeline: list[ThrottlingTimelinePoint] = Field(
+        default_factory=list, description="시각별 전체 카드 쓰로틀링 합계. 판정 값이 없으면 빈 목록"
     )
     observed_at: str = Field(default_factory=_now, description=DESC_OBSERVED_AT)
     warnings: list[str] = Field([], description=DESC_WARNINGS)
