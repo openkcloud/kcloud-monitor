@@ -60,7 +60,8 @@ CLOCK_REASON_BITS = {
     0x40: "hw_thermal",
     0x80: "hw_power_brake",
 }
-POWER_CAP_REASONS = {"sw_power_cap", "hw_power_brake"}
+# NVIDIA 클럭 사유 비트 이름과 Furiosa throttling_events_count 의 label 값 중 전력 상한 때문인 것
+POWER_CAP_REASONS = {"sw_power_cap", "hw_power_brake", "app_power_cap", "hw_power_cap"}
 
 VENDOR_CONFIG: dict[str, dict] = {
     "nvidia": {
@@ -106,6 +107,9 @@ VENDOR_CONFIG: dict[str, dict] = {
         "mem_used": 'furiosa_npu_dram_usage{{cluster="{cluster}"{extra}}}',
         "mem_total": 'furiosa_npu_dram_total{{cluster="{cluster}"{extra}}}',
         "alive": 'furiosa_npu_alive{{cluster="{cluster}"{extra}}}',
+        # 사유(label)별로 최근 300초 안에 제한 상태가 바뀐 횟수(gauge). idle 은 쉬는 중 클럭 하강이라 제외
+        "throttle_events": 'furiosa_npu_throttling_events_count{{label!="idle",cluster="{cluster}"{extra}}}',
+        "governor": 'furiosa_npu_governor{{cluster="{cluster}"{extra}}}',  # mode 라벨이 전력 모드, 값 1
         "health_key": "alive",
         "healthy_value": 1.0,
         "throttle_temp": 85,  # 초기값. RNGD 쓰로틀링 진입 온도 미공개
@@ -167,6 +171,9 @@ def _throttle_query(vendor: str, cluster: str, acc_id: Optional[str] = None) -> 
     세 조건을 bool 비교 결과(0/1)로 곱하므로 원시값이 하나라도 비면 점 자체가 없다(판정 불가).
     값이 바뀌는 순간만 잡는 delta 대신 구간 집계를 써서 쓰로틀링이 이어지는 동안 계속 1이 된다.
     """
+    if vendor == "furiosa":
+        # 사유를 직접 관측. shortcut: 300초 안에 상태 변화가 없으면 0 이라 5분 넘게 이어지는 제한은 시작과 끝만 잡힘
+        return f'max by (device, instance) ({_build_query(vendor, "throttle_events", cluster, acc_id=acc_id)}) > bool 0'
     util, temp, power = (_build_query(vendor, k, cluster, acc_id=acc_id) for k in ("util", "temp", "power"))
     on = f'on({VENDOR_CONFIG[vendor]["id_label"]}, instance)'
     return (
@@ -219,7 +226,7 @@ def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
     """수집 중간값(_power_limit, _clock_reasons, _inferred)으로 전력 캡 상태와 쓰로틀링 여부를 채운다."""
     raw_reasons = entry.pop("_clock_reasons", None)
     reasons = (
-        None if raw_reasons is None
+        entry.pop("_reasons", None) if raw_reasons is None  # Furiosa: 사유 이름 목록을 바로 받음
         else [name for bit, name in CLOCK_REASON_BITS.items() if int(raw_reasons) & bit]
     )
 
@@ -307,6 +314,19 @@ async def _collect_accelerators(
             pstate = entry.pop("_pstate", None)
             # 32는 DCGM의 "알 수 없음" 값이라 0~15만 단계로 인정
             entry["power_state"] = f"P{int(pstate)}" if pstate is not None and 0 <= pstate <= 15 else None
+    if vendor == "furiosa":
+        for entry in acc_map.values():
+            entry["_reasons"] = []
+        for key in ("throttle_events", "governor"):
+            for item in await _instant_metric(vendor, cluster, key):
+                metric = item.get("metric", {})
+                entry = acc_map.get(metric.get(id_label))
+                if entry is None or not _match_node(metric, node):
+                    continue
+                if key == "governor":
+                    entry["power_state"] = metric.get("mode")
+                elif (sample_value(item) or 0) > 0:
+                    entry["_reasons"].append(metric.get("label"))
     merge(await prometheus_client.instant(_throttle_query(vendor, cluster)), "_inferred")
     for entry in acc_map.values():
         _apply_power_cap_and_throttle(entry, vendor)

@@ -37,15 +37,16 @@ _DESC_POWER_CAPPED = (
 )
 _DESC_THROTTLED = "쓰로틀링 여부. 판정에 필요한 값이 비면 null"
 _DESC_THROTTLE_SOURCE = (
-    "쓰로틀링 판정 근거 (clock_reason | inferred). clock_reason: GPU 클럭 제한 사유 직접 관측, "
+    "쓰로틀링 판정 근거 (clock_reason | inferred). clock_reason: 클럭 제한 사유 직접 관측(NVIDIA, Furiosa), "
     "inferred: 사용률 90% 이상 유지, 최근 10분 고온, 전력 하락으로 간접 판정. 판정 불가 시 null"
 )
 _DESC_POWER_STATE = (
-    "성능 단계 (P0 | P1 | ... | P15). P0 이 최고 성능, 숫자가 클수록 절전. 쉬는 중이면 보통 P8. "
-    "NVIDIA 만 제공, 그 외 벤더나 미수집 시 null"
+    "전력 모드. NVIDIA 는 성능 단계 (P0 | P1 | ... | P15), P0 이 최고 성능, 숫자가 클수록 절전, 쉬는 중이면 보통 P8. "
+    "Furiosa 는 governor 모드 이름 (예: performance). Rebellions 나 미수집 시 null"
 )
 _DESC_THROTTLE_REASONS = (
-    "클럭 제한 사유 목록 (sw_power_cap | hw_slowdown | sw_thermal | hw_thermal | hw_power_brake). "
+    "클럭 제한 사유 목록. NVIDIA (sw_power_cap | hw_slowdown | sw_thermal | hw_thermal | hw_power_brake), "
+    "Furiosa 최근 5분 (thermal_slowdown | app_power_cap | app_clock_cap | hw_clock_cap | hw_bus_limit | hw_power_cap | other_reason). "
     "판정 근거가 clock_reason 일 때만 채움"
 )
 _DESC_SERIES_VALUES = "(시각, 값) 쌍 목록. 시각은 ISO 8601 UTC, 값은 전력(W) 숫자 문자열"
