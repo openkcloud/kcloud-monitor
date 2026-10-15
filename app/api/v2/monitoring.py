@@ -812,6 +812,7 @@ async def get_throttling_timeseries(
     참고
 
     * 판정 기준: 2분 평균 사용률 90% 이상, 최근 10분 최고 온도 기준 이상, 전력이 15분 최대의 85% 미만
+    * NVIDIA 는 클럭 제한 사유가 수집되면 그 값으로, Furiosa 는 장치가 보고하는 제한 사유로 직접 판정
     * 값이 빠진 시각은 점이 없음
     * `step` 이 길면 짧은 쓰로틀링을 놓칠 수 있음, 긴 구간 그래프는 `step` 을 짧게 두고 `bucket` 으로 묶는 편이 정확
     * `timeline` 의 `events` 합은 `summary.throttle_events` 와 같음
