@@ -4,7 +4,8 @@ KCloud Monitor v2 — 알람 서비스.
 네 부품으로 구성된다.
   1. AlertStore   : PostgreSQL(asyncpg) 저장소. policies / channels / alerts / events 4개 테이블.
   2. 평가기        : kind=resource 는 가속기 메트릭(Prometheus), kind=log 는 로그 단어 건수(Loki),
-                     kind=slo 는 vLLM 서빙 지연(TTFT, TPOT p95)과 대기 요청 수(Prometheus).
+                     kind=slo 는 vLLM 서빙 지연(TTFT, TPOT p95)과 대기 요청 수(Prometheus),
+                     kind=composite 는 조건 2개 이상을 같은 클러스터에서 모두 만족할 때(그리고).
   3. 상태머신      : pending -> firing -> resolved. plan_transition() 은 순수 함수라 DB 없이 테스트한다.
   4. 발송기        : webhook(httpx), email(smtplib).
 
@@ -50,6 +51,7 @@ LOG_METRICS: dict[str, tuple[str, str]] = {
     "log_disk_error": ("디스크 오류 건수", r"(?i)(I/O error|EXT4-fs error|read-only file system)"),
     "log_crash_loop": ("비정상 종료 반복 건수", r"(?i)(segfault|Failed to start|Back-off restarting)"),
     "log_hw_error": ("커널 하드웨어 오류 건수", r"(Hardware Error|mce:)"),
+    "log_total_count": ("전체 로그 건수", ""),  # 정규식 없음. 작업 로그가 멈췄는지(0건) 볼 때 씀
 }
 
 
@@ -63,6 +65,17 @@ SLO_METRICS: dict[str, tuple[str, str, str]] = {
     "slo_requests_waiting": ("LLM 대기 요청 수", "건",
                              "sum by (cluster, model_name) (vllm:num_requests_waiting{sel})"),
 }
+
+
+def metric_info(key: str) -> tuple[str, str]:
+    """지표 키 → (화면 이름, 단위). 로그 지표는 건"""
+    if key in RESOURCE_METRICS:
+        return RESOURCE_METRICS[key]
+    if key in SLO_METRICS:
+        return SLO_METRICS[key][:2]
+    if key in LOG_METRICS:
+        return LOG_METRICS[key][0], "건"
+    return key, ""
 
 
 def metric_kind(key: str) -> Optional[str]:
@@ -90,7 +103,7 @@ CREATE TABLE IF NOT EXISTS alert_policies (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
-    kind          TEXT NOT NULL CHECK (kind IN ('resource','log','slo')),
+    kind          TEXT NOT NULL CHECK (kind IN ('resource','log','slo','composite')),
     metric        TEXT NOT NULL,
     op            TEXT NOT NULL DEFAULT '>=',
     threshold     DOUBLE PRECISION NOT NULL,
@@ -140,49 +153,48 @@ CREATE TABLE IF NOT EXISTS alert_events (
     message       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS alert_events_ts_idx ON alert_events(ts DESC);
--- slo 종류 추가 전에 만든 테이블의 CHECK 제약 갱신
+-- slo, composite 종류 추가 전에 만든 테이블의 CHECK 제약 갱신
 ALTER TABLE alert_policies DROP CONSTRAINT IF EXISTS alert_policies_kind_check;
-ALTER TABLE alert_policies ADD CONSTRAINT alert_policies_kind_check CHECK (kind IN ('resource','log','slo'));
+ALTER TABLE alert_policies ADD CONSTRAINT alert_policies_kind_check CHECK (kind IN ('resource','log','slo','composite'));
+-- 조건 목록(metric, op, threshold, window_min 의 배열). 첫 조건은 기존 열에도 같이 써서 옛 화면과 호환
+ALTER TABLE alert_policies ADD COLUMN IF NOT EXISTS conditions JSONB NOT NULL DEFAULT '[]'::jsonb;
 """
 
 # 첫 기동 시 시드. 포탈에서 숫자만 바꿔 쓰는 것을 전제로 한다.
-# ponytail: 쓰로틀링(res-006)·ROW_REMAP(res-007)·PCIe(res-008)·로그 끊김(log-007)은 원천 지표나
-# 쿼리가 더 필요해 시드에서 뺐다. dcgm 카운터 추가 후 resource 지표 키를 늘리면 된다.
+# 시험장에서 확실히 재현되는 것만 둔다. 지표 키는 모두 남아 있어 필요하면 화면에서 만들면 된다.
+# - 실제 고장이 나야 울려 뺌: 하드웨어 오류(res-005), GPU XID(log-002), 디스크 오류(log-004), 커널 하드웨어 오류(log-006)
+# - 부하로 닿는다는 보장이 없어 뺌: 온도 80°C(res-003, 실측 최고 58°C), TDP 90%(res-004, 실측 최고 80%),
+#   비정상 종료 반복(log-005), 작업 로그 멈춤 조합(VM 도커 로그 미수집)
+# ponytail: 쓰로틀링(res-006)·ROW_REMAP(res-007)·PCIe(res-008)는 원천 지표가 더 필요해 뺐다.
 SEED_POLICIES: list[dict] = [
     dict(id="res-001", name="가속기 사용률 포화", kind="resource", metric="utilization_percent", op=">=",
          threshold=90, for_min=10, severity="warning", description="가속기가 꽉 차서 더 못 받는 상태"),
     dict(id="res-002", name="가속기 메모리 포화", kind="resource", metric="memory_used_percent", op=">=",
          threshold=90, for_min=10, severity="warning", description="메모리 부족으로 작업 실패 직전"),
-    dict(id="res-003", name="가속기 온도 임계", kind="resource", metric="temperature_celsius", op=">=",
-         threshold=80, for_min=5, severity="warning", description="과열. 성능 저하 전조"),
-    dict(id="res-004", name="가속기 전력 과다", kind="resource", metric="power_tdp_percent", op=">=",
-         threshold=90, for_min=10, severity="warning", description="설계 한계 전력(TDP)에 근접"),
-    dict(id="res-005", name="가속기 하드웨어 오류", kind="resource", metric="unhealthy", op="==",
-         threshold=1, for_min=1, severity="critical",
-         description="L40S XID 변화, Rebellions HEALTH≠0, Furiosa alive=0"),
     dict(id="res-009", name="가속기 수집 중단", kind="resource", metric="stale_seconds", op=">=",
          threshold=300, for_min=0, severity="critical", description="exporter나 VM이 죽어 메트릭이 안 들어옴"),
     dict(id="log-001", name="오류 로그 급증", kind="log", metric="log_error_count", op=">=",
          threshold=20, window_min=5, for_min=0, severity="warning", description="5분 동안 오류 단어 20건 이상"),
-    dict(id="log-002", name="GPU XID 오류", kind="log", metric="log_gpu_xid", op=">=",
-         threshold=1, window_min=5, for_min=0, severity="critical", target={"cluster": "l40s"},
-         description="드라이버가 보고하는 GPU 고장. 코드별 심각도는 로그 상세에서 확인"),
     dict(id="log-003", name="메모리 부족 종료", kind="log", metric="log_oom",
          op=">=", threshold=1, window_min=5, for_min=0, severity="warning",
          description="프로세스가 메모리 부족으로 강제 종료됨"),
-    dict(id="log-004", name="디스크 오류", kind="log", metric="log_disk_error",
-         op=">=", threshold=1, window_min=5, for_min=0, severity="critical", description="디스크 고장 전조"),
-    dict(id="log-005", name="서비스 비정상 종료 반복", kind="log",
-         metric="log_crash_loop", op=">=", threshold=3, window_min=10,
-         for_min=0, severity="warning", description="프로그램이 죽고 재시작을 반복"),
-    dict(id="log-006", name="커널 하드웨어 오류", kind="log", metric="log_hw_error", op=">=",
-         threshold=1, window_min=5, for_min=0, severity="critical", description="CPU·메모리 하드웨어 오류"),
     dict(id="slo-001", name="LLM 첫 응답 지연", kind="slo", metric="slo_ttft_p95_ms", op=">=",
          threshold=500, window_min=5, for_min=2, severity="warning",
          description="최근 5분 TTFT p95 가 목표 500ms 이상. 대기 줄이나 KV 캐시 부족 의심"),
     dict(id="slo-002", name="LLM 생성 속도 저하", kind="slo", metric="slo_tpot_p95_ms", op=">=",
          threshold=50, window_min=5, for_min=2, severity="warning",
          description="최근 5분 TPOT p95 가 목표 50ms 이상. 동시 처리 과다나 GPU 쓰로틀링 의심"),
+    # 조합: 사용률 100% 자체는 정상 학습일 수 있어, 로그나 응답 속도를 같이 봐야 진짜 문제만 잡힘
+    dict(id="pol-001", name="GPU 점유 중 오류 반복", kind="composite",
+         conditions=[dict(metric="utilization_percent", op=">=", threshold=95, window_min=5),
+                     dict(metric="log_error_count", op=">=", threshold=20, window_min=5)],
+         for_min=3, severity="critical", target={"cluster": "l40s"},
+         description="가속기는 꽉 찼는데 같은 클러스터에서 5분 동안 오류 로그 20건 이상. 결과 없이 자원만 쓰는 상태 의심"),
+    dict(id="pol-002", name="GPU 과부하로 서비스 지연", kind="composite",
+         conditions=[dict(metric="utilization_percent", op=">=", threshold=95, window_min=5),
+                     dict(metric="slo_ttft_p95_ms", op=">=", threshold=500, window_min=5)],
+         for_min=3, severity="critical", target={"cluster": "l40s"},
+         description="가속기가 꽉 찬 상태에서 LLM 첫 응답까지 5분 p95 가 500ms 이상. 요청이 처리 능력을 넘은 상태"),
 ]
 
 
@@ -194,12 +206,21 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
 
 
+def _conditions_of(p: dict) -> list[dict]:
+    """정책의 조건 목록. conditions 가 비어 있으면(옛 행, 시드) 단일 조건 열에서 만든다."""
+    conds = p.get("conditions") or [p]
+    return [{"metric": c["metric"], "op": c.get("op", ">="), "threshold": float(c["threshold"]),
+             "window_min": int(c.get("window_min", 5))} for c in conds]
+
+
 def _row(r: Any) -> dict:
     """asyncpg Record -> dict. JSONB 는 문자열로 오므로 복원."""
     d = dict(r)
-    for k in ("target", "channel_ids", "config"):
+    for k in ("target", "channel_ids", "config", "conditions"):
         if isinstance(d.get(k), str):
             d[k] = json.loads(d[k])
+    if "metric" in d:
+        d["conditions"] = _conditions_of(d)
     return d
 
 
@@ -222,7 +243,7 @@ class AlertStore:
         async with self.pool.acquire() as con:
             await con.execute(SCHEMA_SQL)
             # 종류별로 정책이 하나도 없을 때만 시드. 사용자가 지운 시드가 재기동 때 되살아나지 않게 함
-            for kind in ("resource", "log", "slo"):
+            for kind in ("resource", "log", "slo", "composite"):
                 if await con.fetchval("SELECT count(*) FROM alert_policies WHERE kind=$1", kind) == 0:
                     seeds = [p for p in SEED_POLICIES if p["kind"] == kind]
                     for p in seeds:
@@ -246,14 +267,18 @@ class AlertStore:
     async def create_policy(self, p: dict) -> dict:
         p = {**p}
         p.setdefault("id", _new_id("pol"))
+        conds = _conditions_of(p)
+        first = conds[0]
+        kind = p.get("kind") or ("composite" if len(conds) > 1 else metric_kind(first["metric"]))
         await self.pool.execute(
             """INSERT INTO alert_policies
-               (id,name,description,kind,metric,op,threshold,window_min,for_min,severity,target,channel_ids,enabled)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13)""",
-            p["id"], p["name"], p.get("description", ""), p["kind"], p["metric"], p.get("op", ">="),
-            float(p["threshold"]), int(p.get("window_min", 5)), int(p.get("for_min", 0)),
+               (id,name,description,kind,metric,op,threshold,window_min,for_min,severity,target,channel_ids,enabled,
+                conditions)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14::jsonb)""",
+            p["id"], p["name"], p.get("description", ""), kind, first["metric"], first["op"],
+            first["threshold"], first["window_min"], int(p.get("for_min", 0)),
             p.get("severity", "warning"), json.dumps(p.get("target") or {}),
-            json.dumps(p.get("channel_ids") or []), bool(p.get("enabled", True)),
+            json.dumps(p.get("channel_ids") or []), bool(p.get("enabled", True)), json.dumps(conds),
         )
         return await self.get_policy(p["id"])
 
@@ -262,18 +287,26 @@ class AlertStore:
         if not cur:
             return None
         merged = {**cur, **{k: v for k, v in patch.items() if v is not None}}
+        conds = _conditions_of(merged)
+        first = conds[0]
         await self.pool.execute(
-            """UPDATE alert_policies SET name=$2,description=$3,metric=$4,op=$5,threshold=$6,window_min=$7,
-               for_min=$8,severity=$9,target=$10::jsonb,channel_ids=$11::jsonb,enabled=$12,updated_at=now()
+            """UPDATE alert_policies SET name=$2,description=$3,kind=$4,metric=$5,op=$6,threshold=$7,window_min=$8,
+               for_min=$9,severity=$10,target=$11::jsonb,channel_ids=$12::jsonb,enabled=$13,conditions=$14::jsonb,
+               updated_at=now()
                WHERE id=$1""",
-            pid, merged["name"], merged["description"], merged["metric"], merged["op"],
-            float(merged["threshold"]), int(merged["window_min"]), int(merged["for_min"]), merged["severity"],
+            pid, merged["name"], merged["description"], merged["kind"], first["metric"], first["op"],
+            first["threshold"], first["window_min"], int(merged["for_min"]), merged["severity"],
             json.dumps(merged["target"]), json.dumps(merged["channel_ids"]), bool(merged["enabled"]),
+            json.dumps(conds),
         )
         return await self.get_policy(pid)
 
     async def delete_policy(self, pid: str) -> bool:
         return (await self.pool.execute("DELETE FROM alert_policies WHERE id=$1", pid)).endswith("1")
+
+    async def clear_active(self, pid: str) -> None:
+        """정책 종류가 바뀌어 대상 단위가 달라지면 옛 알람은 영영 안 풀리므로 지운다."""
+        await self.pool.execute("DELETE FROM alert_active WHERE policy_id=$1", pid)
 
     # ── channels ──
     async def list_channels(self) -> list[dict]:
@@ -446,11 +479,12 @@ async def evaluate_resource(policy: dict) -> tuple[dict[str, dict], list[str]]:
 def _logql(policy: dict) -> str:
     target = policy.get("target") or {}
     # Loki 는 자기가 실행한 쿼리를 로그로 남기므로 우리 정규식이 그 줄에 다시 걸림. Loki 컨테이너 로그는 제외
-    cluster = f'cluster="{target["cluster"]}"' if target.get("cluster") else 'cluster=~".+"'
-    sel = f'{{{cluster}, container!="loki"}}'
+    sel = [f'cluster="{target["cluster"]}"' if target.get("cluster") else 'cluster=~".+"', 'container!="loki"']
+    # 작업 단위로 좁힐 때: VM 은 systemd unit, 파드와 도커 컨테이너는 container 라벨
+    sel += [f'{k}="{target[k]}"' for k in ("unit", "container") if target.get(k)]
     regex = LOG_METRICS[policy["metric"]][1]
-    pattern = regex.replace("\\", "\\\\").replace('"', '\\"')
-    return f'sum by (cluster) (count_over_time({sel} |~ "{pattern}" [{int(policy.get("window_min", 5))}m]))'
+    line = ' |~ "' + regex.replace("\\", "\\\\").replace('"', '\\"') + '"' if regex else ""
+    return f'sum by (cluster) (count_over_time({{{", ".join(sel)}}}{line} [{int(policy.get("window_min", 5))}m]))'
 
 
 async def evaluate_slo(policy: dict) -> tuple[dict[str, dict], list[str]]:
@@ -497,6 +531,53 @@ async def evaluate_log(policy: dict) -> tuple[dict[str, dict], list[str]]:
     return results, []
 
 
+async def evaluate_composite(policy: dict) -> tuple[dict[str, dict], list[str]]:
+    """조건마다 따로 평가한 뒤 클러스터 단위로 모아 모두 만족하는지 본다.
+
+    리소스, SLO 값은 클러스터 안에서 가장 나쁜 값(>= 면 최대, <= 면 최소)으로 대표한다.
+    로그 조건은 Loki 가 0건 스트림을 안 주므로 다른 조건에 있는 클러스터는 0건으로 채운다.
+    한 조건이라도 값이 없는 클러스터는 결과에서 빼서(결측) 상태를 유지한다.
+    """
+    target = policy.get("target") or {}
+    conds = policy["conditions"]
+    per_cond: list[dict[str, float]] = []
+    zero_ok: list[bool] = []  # 로그 조건이고 Loki 응답이 있었으면 결과에 없는 클러스터는 0건
+    warnings: list[str] = []
+    for c in conds:
+        kind = metric_kind(c["metric"])
+        sub_target = {"cluster": target.get("cluster")}
+        if kind == "log":
+            sub_target.update({k: target.get(k) for k in ("unit", "container")})
+        sub = {**policy, **c, "kind": kind, "target": sub_target}
+        res, w = await evaluate_policy(sub)
+        warnings += w
+        zero_ok.append(kind == "log" and "LOKI_UNAVAILABLE" not in w)
+        worst_is_max = c["op"] in (">=", ">", "==", "!=")
+        by: dict[str, float] = {}
+        for r in res.values():
+            cl, v = r["target"].get("cluster", "*"), r["value"]
+            if cl not in by or (v > by[cl] if worst_is_max else v < by[cl]):
+                by[cl] = v
+        per_cond.append(by)
+
+    results: dict[str, dict] = {}
+    for cl in sorted(set().union(*per_cond)):
+        values = []
+        for c, by, fill_zero in zip(conds, per_cond, zero_ok):
+            if cl in by:
+                v = by[cl]
+            elif fill_zero:
+                v = 0.0
+            else:
+                break
+            values.append({"metric": c["metric"], "value": v, "cond": OPS[c["op"]](v, c["threshold"])})
+        else:
+            t = {"cluster": cl}
+            results[_fp(policy["id"], t)] = {"target": t, "value": values[0]["value"],
+                                              "cond": all(x["cond"] for x in values), "values": values}
+    return results, warnings
+
+
 # ---------------------------------------------------------------------------
 # 3. 상태머신 (순수 함수)
 # ---------------------------------------------------------------------------
@@ -522,11 +603,21 @@ def plan_transition(existing: Optional[dict], cond: bool, for_min: int, repeat_m
     return "none", None  # pending 중 거짓이 되면 행만 지움. 알림 없음
 
 
-def _message(policy: dict, target: dict, value: float, state: str) -> str:
-    unit = {"resource": RESOURCE_METRICS, "slo": SLO_METRICS}.get(policy["kind"], {}).get(policy["metric"], ("", "건"))[1]
+def _cond_text(c: dict, value: float, with_label: bool) -> str:
+    label, unit = metric_info(c["metric"])
+    head = f"{label} " if with_label else ""
+    return f"{head}{value:g}{unit} ({c['op']} {c['threshold']:g})"
+
+
+def _message(policy: dict, target: dict, value: float, state: str, values: Optional[list[dict]] = None) -> str:
     where = " ".join(str(target[k]) for k in ("cluster", "node", "acc_id", "model") if target.get(k))
     head = "[해제] " if state == RESOLVED else f"[{policy['severity']}] "
-    return f"{head}{policy['name']} - {where}: {value:g}{unit} ({policy['op']} {policy['threshold']:g})"
+    conds = policy.get("conditions") or [policy]
+    if values and len(values) > 1:
+        body = " 그리고 ".join(_cond_text(c, v["value"], True) for c, v in zip(conds, values))
+    else:
+        body = _cond_text(conds[0], value, False)
+    return f"{head}{policy['name']} - {where}: {body}"
 
 
 async def _apply(policy: dict, results: dict[str, dict], now: datetime) -> None:
@@ -541,7 +632,7 @@ async def _apply(policy: dict, results: dict[str, dict], now: datetime) -> None:
         row = {**(cur or {}), "fingerprint": fp, "policy_id": policy["id"], "state": state,
                "severity": policy["severity"], "target": r["target"], "value": r["value"],
                "started_at": (cur or {}).get("started_at") or now}
-        row["message"] = _message(policy, r["target"], r["value"], state)
+        row["message"] = _message(policy, r["target"], r["value"], state, r.get("values"))
         if action == "fire":
             row["fired_at"] = now
         if action == "resolve":
@@ -556,7 +647,7 @@ async def _apply(policy: dict, results: dict[str, dict], now: datetime) -> None:
 
 
 async def evaluate_policy(policy: dict) -> tuple[dict[str, dict], list[str]]:
-    evaluate = {"log": evaluate_log, "slo": evaluate_slo}.get(policy["kind"], evaluate_resource)
+    evaluate = {"log": evaluate_log, "slo": evaluate_slo, "composite": evaluate_composite}.get(policy["kind"], evaluate_resource)
     return await evaluate(policy)
 
 
