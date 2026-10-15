@@ -17,6 +17,7 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 import asyncio
 from typing import Optional
 
+from app.services.cluster_discovery import DEFAULT_CLUSTER_NAME
 from app.services.prometheus import first_finite, parse_finite, prometheus_client, ts_iso
 
 IPMI_POWER_METRIC = "ipmi_dcmi_power_consumption_watts"
@@ -203,7 +204,8 @@ async def power_breakdown(dimension: str) -> dict:
         for vendor, query in ACCEL_POWER_QUERIES.items():
             results = await prometheus_client.instant(query)
             for item in results:
-                cluster = item.get("metric", {}).get("cluster", vendor)
+                # cluster 라벨이 없는 카드는 관리 클러스터 장비(예: compute6 L40S)
+                cluster = item.get("metric", {}).get("cluster") or DEFAULT_CLUSTER_NAME
                 val = first_finite([item])
                 if val is None:
                     continue
@@ -234,10 +236,9 @@ async def power_breakdown(dimension: str) -> dict:
             results = await prometheus_client.instant(query)
             for item in results:
                 metric = item.get("metric", {})
-                instance = metric.get("instance", "unknown")
-                gpu = metric.get("gpu") or metric.get("device") or ""
-                cluster = metric.get("cluster", vendor)
-                key = f"{instance}/{gpu}/{cluster}" if gpu else f"{instance}/{cluster}"
+                gpu = metric.get("gpu") or metric.get("device") or metric.get("name") or ""
+                cluster = metric.get("cluster") or DEFAULT_CLUSTER_NAME
+                key = "/".join(p for p in (_card_host(metric), gpu, cluster) if p)
                 val = first_finite([item])
                 if val is None:
                     continue
