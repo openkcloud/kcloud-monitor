@@ -44,7 +44,13 @@ async def _policy_or_404(policy_id: str) -> dict:
     return row
 
 
-_SELECTOR_KEYS = {"resource": {"cluster", "node", "acc_id"}, "log": {"cluster"}, "slo": {"cluster", "model"}}
+_SELECTOR_KEYS = {
+    "resource": {"cluster", "node", "acc_id"},
+    "log": {"cluster", "unit", "container"},
+    "slo": {"cluster", "model"},
+    "composite": {"cluster", "unit", "container"},  # 로그가 클러스터 단위라 조합도 클러스터로 묶음
+}
+_LEGACY = ("metric", "op", "threshold", "window_min")  # 조건 1개를 적는 짧은 형식
 # 대상 값은 PromQL, LogQL 셀렉터에 그대로 들어가므로 라벨 값에 쓰이는 문자만 허용 (주입 방지)
 _SELECTOR_VALUE = re.compile(r"^[A-Za-z0-9_.:\-/]+$")
 _DURATION = re.compile(r"^(\d+)m$")
@@ -111,29 +117,57 @@ async def _policies_out(rows: list[dict]) -> list[Policy]:
 async def _check(body: dict, cur: Optional[dict] = None) -> dict:
     """화면 입력 → 저장 형식. 형식 오류와 대상 오타를 칸 이름과 함께 모두 모아 422 한 번으로 반환
 
-    cur 가 있으면 수정: 보낸 항목만 검사하고, 비운 항목은 저장된 값으로 대상 데이터를 확인.
+    조건은 conditions 목록으로 받고, 없으면 metric, op, threshold, window_min 으로 첫 조건을 만든다(생성)
+    또는 고친다(수정). cur 가 있으면 수정: 보낸 항목만 검사하고, 비운 항목은 저장된 값을 쓴다.
     """
     errors: list[dict] = []
 
     def err(field: str, message: str) -> None:
         errors.append({"field": field, "message": message})
 
-    metric = body.get("metric") or (cur or {}).get("metric")
-    kind = metric_kind(metric)
-    if kind is None:
-        err("metric", f"지표는 GET /alerts/metrics 목록 중 하나: {metric!r}")
-    elif cur and kind != cur["kind"]:
-        err("metric", "정책 종류(resource | log | slo)는 바꿀 수 없음")
-    out = {k: v for k, v in body.items() if k not in ("duration", "selector", "channels")}
-    target = {k: v for k, v in ((cur or {}).get("target") or {}).items() if v}
+    # 1) 조건 목록
+    if body.get("conditions"):
+        conds = [dict(c) for c in body["conditions"]]
+        field = lambda i, k: f"conditions[{i}].{k}"
+    else:
+        first = dict(cur["conditions"][0]) if cur else {"op": ">=", "window_min": 5}
+        first.update({k: body[k] for k in _LEGACY if body.get(k) is not None})
+        conds = [first, *(cur["conditions"][1:] if cur else [])]
+        field = lambda i, k: k
+    touched = bool(body.get("conditions")) or any(body.get(k) is not None for k in _LEGACY)
+    kinds = []
+    for i, c in enumerate(conds):
+        # 수정 요청은 보낸 항목만 오므로(exclude_unset) 빠진 칸은 기본값으로 채움
+        c.setdefault("op", ">=")
+        c.setdefault("window_min", 5)
+        if not c.get("metric"):
+            err(field(i, "metric"), "지표는 GET /alerts/metrics 목록 중 하나를 지정")
+        elif metric_kind(c["metric"]) is None:
+            err(field(i, "metric"), f"지표는 GET /alerts/metrics 목록 중 하나: {c['metric']!r}")
+        if c.get("threshold") is None:
+            err(field(i, "threshold"), "임계값 숫자 필요")
+        kinds.append(metric_kind(c.get("metric") or ""))
+    kind = "composite" if len(conds) > 1 else kinds[0]
+    kind_changed = bool(cur) and kind != cur["kind"]
+
+    out = {k: v for k, v in body.items() if k not in ("duration", "selector", "channels", "conditions", *_LEGACY)}
+    if touched or not cur:
+        out["conditions"] = conds
+        out.update({k: conds[0].get(k) for k in _LEGACY})
+        out["kind"] = kind
+
+    # 2) 지속 시간, 대상, 채널
     if "duration" in body:
         try:
             out["for_min"] = _minutes(body["duration"])
         except HTTPException as e:
             err("duration", e.detail)
-    if "selector" in body and kind:
+    target = {k: v for k, v in ((cur or {}).get("target") or {}).items() if v}
+    if ("selector" in body or kind_changed) and kind:
+        # 종류가 바뀌면 저장된 대상 키가 새 종류에 안 맞을 수 있어 다시 검사
+        selector = body["selector"] if "selector" in body else ",".join(f"{k}={v}" for k, v in target.items())
         try:
-            target = out["target"] = _target(body["selector"], kind)
+            target = out["target"] = _target(selector, kind)
         except HTTPException as e:
             err("selector", e.detail)
     if "channels" in body:
@@ -142,21 +176,22 @@ async def _check(body: dict, cur: Optional[dict] = None) -> dict:
         except HTTPException as e:
             err("channels", e.detail)
 
-    # 지표와 대상 형식이 맞으면 다른 칸 오류와 함께 대상 오타도 확인
-    # 로그 지표는 0건이면 데이터가 비어 오타와 구별할 수 없어 클러스터만 봄
-    target_ok = not any(e["field"] in ("metric", "selector") for e in errors)
-    if target_ok and ("metric" in body or "selector" in body):
+    # 3) 지표와 대상 형식이 맞으면 다른 칸 오류와 함께 대상 오타도 확인
+    # 로그만으로 된 정책은 0건이면 데이터가 비어 오타와 구별할 수 없어 클러스터만 봄
+    target_ok = kind and not any(e["field"].endswith(("metric", "threshold")) or e["field"] == "selector" for e in errors)
+    if target_ok and (touched or "selector" in body):
         cluster = target.get("cluster")
         if cluster and cluster not in await cluster_discovery.get_clusters():
             err("selector", f"수집 중인 클러스터가 아님: {cluster!r}")
-        elif kind != "log":
-            merged = {**(cur or {}), **out, "id": "check", "kind": kind, "metric": metric, "target": target}
-            if not (await alerts.evaluate_policy(merged))[0]:
+        elif not all(k == "log" for k in kinds):
+            merged = {**(cur or {}), **out, "id": "check", "kind": kind, "conditions": conds, "target": target}
+            merged.update({k: conds[0].get(k) for k in _LEGACY})
+            results, warns = await alerts.evaluate_policy(merged)
+            # Loki 가 죽어 있으면 로그 조건 때문에 결과가 비는 것이라 오타로 보지 않음
+            if not results and "LOKI_UNAVAILABLE" not in warns:
                 err("selector", "이 대상과 맞는 데이터가 지금 없음. 클러스터, 노드, 가속기, 모델 이름 확인")
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
-    if not cur:
-        out["kind"] = kind
     return out
 
 
@@ -186,6 +221,7 @@ async def list_metrics():
     * `resource`: 가속기 값 (온도, 사용률 등)
     * `log`: 정해진 시간 동안 특정 로그가 나온 건수
     * `slo`: vLLM 서빙의 최근 `window_min` 분 TTFT, TPOT p95(ms)와 지금 대기 요청 수
+    * `log_total_count`: 단어 구분 없이 전체 로그 건수, 작업 로그가 멈췄는지(`<= 0`) 볼 때 사용
     """
     data = [MetricItem(key=k, kind="resource", label=v[0], unit=v[1]) for k, v in RESOURCE_METRICS.items()]
     data += [MetricItem(key=k, kind="log", label=v[0], unit="건") for k, v in LOG_METRICS.items()]
@@ -205,8 +241,10 @@ async def list_policies():
 
     응답
 
-    * 정책별 ID, 이름, 종류(`resource` | `log` | `slo`), 지표
-    * 조건(연산자, 임계값), 지속 시간(분)
+    * 정책별 ID, 이름, 종류(`resource` | `log` | `slo` | `composite`)
+    * `conditions`: 조건 목록 (지표, 연산자, 임계값, 집계 기간), 2개 이상이면 모두 만족할 때 발생
+    * `metric`, `op`, `threshold`, `window_min`: 첫 번째 조건과 같은 값 (옛 화면 호환용)
+    * 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부
     * `selector`: 감시 대상을 입력 형식으로 (예: `cluster=l40s`), 빈 값이면 전체
     * `duration`: 지속 시간을 입력 형식으로 (예: `5m`)
@@ -225,34 +263,45 @@ async def create_policy(body: PolicyCreate):
 
     입력 예시
 
-    * `{"name": "L40S 온도", "metric": "temperature_celsius", "op": ">=", "threshold": 80, "duration": "5m", "selector": "cluster=l40s", "severity": "warning", "channels": ["email"]}`
+    * 조건 1개: `{"name": "L40S 온도", "metric": "temperature_celsius", "op": ">=", "threshold": 80, "duration": "5m", "selector": "cluster=l40s", "severity": "warning", "channels": ["email"]}`
+    * 조건 2개(조합): `{"name": "GPU 점유 중 오류 반복", "conditions": [{"metric": "utilization_percent", "op": ">=", "threshold": 95}, {"metric": "log_error_count", "op": ">=", "threshold": 20, "window_min": 5}], "duration": "3m", "selector": "cluster=l40s", "severity": "critical", "channels": ["email"]}`
 
     입력 옵션
 
     * `name`: 정책 이름 (필수)
-    * `metric`: 지표 키, `GET /alerts/metrics` 의 `key` 중 하나 (필수)
+    * `conditions`: 조건 목록, 조건마다 `metric`, `op`, `threshold`, `window_min` (조건 2개 이상이면 필수)
+    * `metric`: 지표 키, `GET /alerts/metrics` 의 `key` 중 하나 (조건 1개일 때, `conditions` 대신 사용)
     * `op`: `>=` | `>` | `<=` | `<` | `==` | `!=` (기본 `>=`)
-    * `threshold`: 임계값 숫자 (필수)
-    * `duration`: 이 시간 동안 계속되면 발생, `5m` 처럼 숫자 + `m` (기본 `0m`, 즉시)
+    * `threshold`: 임계값 숫자 (조건 1개일 때 필수)
     * `window_min`: `log`, `slo` 지표만, 건수를 세거나 p95 를 계산하는 기간(분) (기본 `5`)
+    * `duration`: 이 시간 동안 계속되면 발생, `5m` 처럼 숫자 + `m` (기본 `0m`, 즉시)
     * `selector`: 감시 대상, `cluster=l40s,node=innogrid-l40s` (기본 전체)
+    * `log` 지표의 `selector` 예: `cluster=l40s,container=vllm-slo` (`unit` 은 systemd 유닛)
     * `slo` 지표의 `selector` 예: `cluster=l40s,model=qwen2.5-3b`
+    * 조건 2개 이상이면 `selector` 는 `cluster`, `unit`, `container` 만 가능
     * `severity`: `info` | `warning` | `critical` (기본 `warning`)
     * `channels`: `email` | `slack` | `webhook` 중 여러 개 (기본 없음)
 
+    조합 정책 동작
+
+    * 조건마다 따로 평가한 뒤 같은 클러스터에서 모두 만족하면 발생 (그리고)
+    * 가속기, SLO 값은 클러스터 안에서 가장 나쁜 값으로 대표 (`>=` 면 최대, `<=` 면 최소)
+    * 로그 조건은 해당 로그가 없으면 0건으로 계산
+
     응답
 
-    * 저장된 정책 (ID, 종류, 지표, 조건, 지속 시간, 심각도, 대상, 채널 ID 목록)
+    * 저장된 정책 (ID, 종류, 조건 목록, 지속 시간, 심각도, 대상, 채널 ID 목록)
+    * `kind`: 조건 1개면 지표 종류, 2개 이상이면 `composite`
     * `channels`: 연결된 채널을 종류별로 묶은 것, 채널마다 이름과 켜짐 여부
 
     오류
 
     * 422: 저장하지 않고 잘못된 칸을 모두 한 번에 반환
     * 응답 형식: `{"detail": {"errors": [{"field": "duration", "message": "..."}]}}`
-    * `field` 는 입력 칸 이름 (`metric` | `duration` | `selector` | `channels`)
+    * `field` 는 입력 칸 이름 (`metric` | `threshold` | `duration` | `selector` | `channels`), 조건 목록이면 `conditions[0].metric` 처럼 번호 포함
     * 형식 오류: 목록에 없는 지표, `duration` 형식, 그 종류에서 못 쓰는 대상 키, 등록되지 않은 채널 종류
     * 대상 오타: 수집 중이 아닌 클러스터, 지금 데이터가 없는 노드, 가속기, 모델
-    * `log` 지표의 `selector` 는 `cluster` 만 가능
+    * `log` 지표의 `selector` 는 `cluster`, `unit`, `container` 만 가능
     * `slo` 지표의 `selector` 는 `cluster`, `model` 만 가능
     """
     _require_store()
@@ -270,8 +319,9 @@ async def get_policy(policy_id: str):
 
     응답
 
-    * ID, 이름, 종류(`resource` | `log` | `slo`), 지표
-    * 조건(연산자, 임계값), 지속 시간(분)
+    * ID, 이름, 종류(`resource` | `log` | `slo` | `composite`)
+    * `conditions`: 조건 목록 (지표, 연산자, 임계값, 집계 기간)
+    * 지속 시간(분)
     * 심각도, 감시 대상, 채널 ID 목록, 사용 여부, 생성·수정 시각
     * `selector`, `duration`: 대상과 지속 시간을 입력 형식으로
     * `channels`: 연결된 채널을 종류(`email` | `slack` | `webhook`)별로 묶은 것, 채널마다 이름과 켜짐 여부
@@ -293,26 +343,35 @@ async def patch_policy(policy_id: str, body: PolicyPatch):
 
     * `PATCH /api/v2/alerts/policies/res-003`
     * `{"threshold": 85, "duration": "10m"}`
+    * 조건 추가: `{"conditions": [{"metric": "utilization_percent", "op": ">=", "threshold": 95}, {"metric": "log_error_count", "op": ">=", "threshold": 20}], "selector": "cluster=l40s"}`
 
     입력 옵션
 
     * 정책 생성과 같은 항목 중 바꿀 것만 보냄
+    * `metric`, `op`, `threshold`, `window_min`: 첫 번째 조건만 고침
+    * `conditions`: 조건 목록을 통째로 교체, 1개로 줄이면 단일 정책, 2개 이상이면 조합 정책
     * `enabled`: `false` 면 정책 끄기
 
     응답
 
     * 수정된 정책
 
+    참고
+
+    * 종류(`kind`)가 바뀌면 대상 단위가 달라지므로 이 정책으로 걸려 있던 알람은 지움
+    * 종류가 바뀌는데 `selector` 를 안 보내면 저장된 대상을 새 종류 기준으로 다시 검사
+
     오류
 
     * 422: 정책 생성과 같은 검사, 보낸 칸만 검사하고 잘못된 칸을 모두 한 번에 반환
-    * 422: 종류(`resource` | `log` | `slo`)가 다른 지표로 변경 (`field`: `metric`)
     * 404: 없는 정책
     """
     _require_store()
     cur = await _policy_or_404(policy_id)
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     row = await store.update_policy(policy_id, await _check(patch, cur))
+    if row["kind"] != cur["kind"]:
+        await store.clear_active(policy_id)
     return ItemResponse(data=(await _policies_out([row]))[0])
 
 
@@ -350,6 +409,7 @@ async def preview_policy(policy_id: str):
     응답
 
     * 대상별 현재 값, 조건 충족 여부(`cond`)
+    * 조합 정책은 `values` 에 조건별 지표 키, 현재 값, 충족 여부, `cond` 는 모두 충족 여부
     * `total`: 평가한 대상 개수
 
     참고
