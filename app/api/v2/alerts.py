@@ -120,6 +120,13 @@ async def _to_row(body: dict) -> dict:
     }
 
 
+async def _preview(policy: dict) -> ListResponse:
+    """정책 1개를 지금 값으로 평가만 함. 알림 발송, 이력 기록 없음"""
+    results, warnings = await alerts.evaluate_policy(policy)
+    data = [PreviewItem(**r) for r in results.values()]
+    return ListResponse(status="partial" if warnings else "success", data=data, total=len(data), warnings=warnings)
+
+
 def _timing(row: dict, for_min: int) -> dict:
     end = row.get("resolved_at") or datetime.now(timezone.utc)
     return {"duration_seconds": int((end - row["started_at"]).total_seconds()), "for_seconds": for_min * 60}
@@ -302,6 +309,38 @@ async def delete_policy(policy_id: str):
         raise HTTPException(status_code=404, detail="POLICY_NOT_FOUND")
 
 
+@router.post("/policies/preview", summary="저장 전 알람 정책 미리보기", response_model=ListResponse)
+async def preview_draft_policy(body: PolicyCreate):
+    """정책을 저장하지 않고 입력한 조건으로 지금 값을 평가
+
+    입력 예시
+
+    * `{"name": "L40S LLM 응답 지연", "metric": "slo_ttft_p95_ms", "op": ">=", "threshold": 500, "duration": "2m", "window_min": 5, "selector": "cluster=l40s,model=qwen2.5-3b", "severity": "warning", "channels": ["email"]}`
+
+    입력 옵션
+
+    * 정책 생성과 같은 본문
+    * `channels` 는 등록 여부만 검사하고 발송하지 않음
+
+    응답
+
+    * 대상별 현재 값, 조건 충족 여부(`cond`)
+    * `total`: 평가한 대상 개수
+
+    오류
+
+    * 422: 정책 생성과 같은 입력 오류 (목록에 없는 지표, `duration` 형식 오류, 쓸 수 없는 대상 키, 등록되지 않은 채널 종류)
+
+    참고
+
+    * 정책 저장, 알림 발송, 이력 기록 없음
+    * 기준값을 정하기 전에 지금 몇 개 대상이 걸리는지 확인하는 용도
+    """
+    _require_store()
+    policy = {**await _to_row(body.model_dump()), "id": "preview"}
+    return await _preview(policy)
+
+
 @router.post("/policies/{policy_id}/preview", summary="알람 정책 미리 평가", response_model=ListResponse)
 async def preview_policy(policy_id: str):
     """알람 정책을 지금 값으로 미리 평가
@@ -322,9 +361,7 @@ async def preview_policy(policy_id: str):
     """
     _require_store()
     policy = await _policy_or_404(policy_id)
-    results, warnings = await alerts.evaluate_policy(policy)
-    data = [PreviewItem(**r) for r in results.values()]
-    return ListResponse(status="partial" if warnings else "success", data=data, total=len(data), warnings=warnings)
+    return await _preview(policy)
 
 
 # ── 채널 ──────────────────────────────────────────────────────────────────
