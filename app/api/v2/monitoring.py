@@ -174,7 +174,7 @@ async def get_overview(request: Request):
 
     # 4. Furiosa 평균 온도
     furiosa_avg_temp = first_value(await prometheus_client.instant(
-        'avg(kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"})'
+        'avg(furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"})'
     ))
 
     # 5. Rebellions 평균 온도 — exporter가 실측의 1/1000로 표출하므로 ×1000 보정
@@ -729,7 +729,7 @@ async def get_temperature_timeseries(request: Request, params: TimeseriesParams 
     # (벤더, 클러스터, 쿼리). 클러스터가 None 이면 퓨리오사처럼 라벨값을 씀
     for vendor, cluster, query in (
         ("nvidia", "l40s", 'DCGM_FI_DEV_GPU_TEMP{cluster="l40s"}'),
-        ("furiosa", None, 'kcloud_furiosa_temperature_celsius{sensor="soc_peak",cluster=~"furiosa.*"}'),
+        ("furiosa", None, 'furiosa_npu_hw_temperature{label="peak",cluster=~"furiosa.*"}'),
         # Rebellions NPU 온도 — exporter가 실측의 1/1000로 표출하므로 ×1000 보정
         # (rbln-stat 대조 확정, 2026-08-24)
         ("rebellions", "rebellions", '({__name__="RBLN_DEVICE_STATUS:TEMPERATURE",cluster="rebellions"}) * 1000'),

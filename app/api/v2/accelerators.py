@@ -2,7 +2,7 @@
 
 벤더별 exporter 3종을 하나의 응답 모델로 통일:
 - NVIDIA GPU: DCGM
-- Furiosa NPU: kcloud_furiosa_* (2026-10 ETRI kcloud exporter. 이전 furiosa_npu_*)
+- Furiosa NPU: furiosa_npu_* (공식 furiosa-metrics-exporter. 2026-10-02~10-15 는 ETRI kcloud_furiosa_*)
 - Rebellions NPU: RBLN_*
 
 벤더는 cluster 경로 파라미터로 판별: l40s -> nvidia, furiosa* -> furiosa, rebellions -> rebellions
@@ -93,19 +93,19 @@ VENDOR_CONFIG: dict[str, dict] = {
             "sm_clock", "mem_clock", "mem_copy_util", "dec_util", "enc_util", "pcie_replay",
         ],
     },
-    # kcloud exporter 라벨: device(npu0), node/instance(워커명), pci, core(사용률만), sensor(온도만).
-    # uuid·모델 라벨이 없어 device를 카드 ID로 쓰고 모델은 고정값. 클럭·쓰로틀 메트릭은 제공되지 않는다.
+    # 공식 furiosa-metrics-exporter 라벨: device(npu0), uuid, hostname/instance(워커명), core, label(온도, 전력, 사유 구분).
+    # 카드 ID 는 ETRI exporter 기간과 같게 device 를 유지한다. 모델 라벨은 arch(rngd) 뿐이라 고정값 사용.
     # ponytail: device는 노드 안에서만 유일. 한 클러스터에 워커가 여럿이면 클러스터 단위 조회에서 겹친다.
     "furiosa": {
         "id_label": "device",
         "model_label": "model",
         "model_default": "RNGD",
-        "util": 'avg(kcloud_furiosa_core_utilization{{cluster="{cluster}"{extra}}}) by (device,instance,node)',
-        "temp": 'kcloud_furiosa_temperature_celsius{{sensor="soc_peak",cluster="{cluster}"{extra}}}',
-        "power": 'kcloud_furiosa_power_watts{{cluster="{cluster}"{extra}}}',
-        "mem_used": 'kcloud_furiosa_memory_used_bytes{{cluster="{cluster}"{extra}}}',
-        "mem_total": 'kcloud_furiosa_memory_total_bytes{{cluster="{cluster}"{extra}}}',
-        "alive": 'kcloud_furiosa_device_alive{{cluster="{cluster}"{extra}}}',
+        "util": 'avg(furiosa_npu_core_utilization{{cluster="{cluster}"{extra}}}) by (device,uuid,instance,hostname)',
+        "temp": 'furiosa_npu_hw_temperature{{label="peak",cluster="{cluster}"{extra}}}',
+        "power": 'furiosa_npu_hw_power{{cluster="{cluster}"{extra}}}',
+        "mem_used": 'furiosa_npu_dram_usage{{cluster="{cluster}"{extra}}}',
+        "mem_total": 'furiosa_npu_dram_total{{cluster="{cluster}"{extra}}}',
+        "alive": 'furiosa_npu_alive{{cluster="{cluster}"{extra}}}',
         "health_key": "alive",
         "healthy_value": 1.0,
         "throttle_temp": 85,  # 초기값. RNGD 쓰로틀링 진입 온도 미공개
@@ -245,7 +245,7 @@ def _apply_power_cap_and_throttle(entry: dict, vendor: str) -> None:
 def _match_node(metric: dict, node: Optional[str]) -> bool:
     if node is None:
         return True
-    # 호스트 라벨이 벤더마다 다름: NVIDIA Hostname, 리벨리온 hostname, 퓨리오사 node
+    # 호스트 라벨이 벤더마다 다름: NVIDIA Hostname, 리벨리온과 퓨리오사 hostname
     return node in (metric.get("instance"), metric.get("Hostname"), metric.get("hostname"), metric.get("node"))
 
 

@@ -395,7 +395,7 @@ async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
     from app.services.prometheus import prometheus_client
 
     cfg = VENDOR_CONFIG[vendor]
-    raw = {"nvidia": "DCGM_FI_DEV_GPU_UTIL", "furiosa": "kcloud_furiosa_core_utilization",
+    raw = {"nvidia": "DCGM_FI_DEV_GPU_UTIL", "furiosa": "furiosa_npu_core_utilization",
            "rebellions": "RBLN_DEVICE_STATUS:UTILIZATION"}[vendor]
     idl = cfg["id_label"]
     q = (f'time() - max by ({idl}, instance) '
