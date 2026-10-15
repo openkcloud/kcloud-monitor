@@ -175,12 +175,19 @@ def _throttle_query(vendor: str, cluster: str, acc_id: Optional[str] = None) -> 
         # 사유를 직접 관측. shortcut: 300초 안에 상태 변화가 없으면 0 이라 5분 넘게 이어지는 제한은 시작과 끝만 잡힘
         return f'max by (device, instance) ({_build_query(vendor, "throttle_events", cluster, acc_id=acc_id)}) > bool 0'
     util, temp, power = (_build_query(vendor, k, cluster, acc_id=acc_id) for k in ("util", "temp", "power"))
-    on = f'on({VENDOR_CONFIG[vendor]["id_label"]}, instance)'
-    return (
+    id_label = VENDOR_CONFIG[vendor]["id_label"]
+    on = f"on({id_label}, instance)"
+    inferred = (
         f"(avg_over_time(({util})[2m:15s]) >= bool {THROTTLE_UTIL_MIN})"
         f" * {on} (max_over_time(({temp})[10m:15s]) >= bool {VENDOR_CONFIG[vendor]['throttle_temp']})"
         f" * {on} (({power}) < bool {THROTTLE_POWER_DROP} * max_over_time(({power})[15m:15s]))"
     )
+    if vendor != "nvidia":
+        return inferred
+    # 클럭 제한 사유가 수집되는 카드는 직접 판정, 없는 카드는 간접 판정. PromQL 에 비트 연산이 없어 비트마다 floor(x / bit) % 2
+    reasons = _build_query(vendor, "clock_reasons", cluster, acc_id=acc_id)
+    hits = " + ".join(f"floor(({reasons}) / {bit}) % 2" for bit in CLOCK_REASON_BITS)
+    return f"(max by ({id_label}, instance) ({hits}) > bool 0) or ({inferred})"
 
 
 async def throttle_series(
