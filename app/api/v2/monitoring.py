@@ -61,6 +61,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# 노드 집계. Kubernetes 노드는 kube_node_info, 쿠버네티스 없는 단독 VM 은 node_uname_info 로 센다.
+# 같은 클러스터가 둘 다 있으면(서비스 k8s 클러스터) kube_node_info 만 써서 중복을 막는다.
+# kube_node_status_condition 은 노드마다 true/false/unknown 시계열이 늘 있어 == 1 로 걸러야 Ready 수가 된다.
+# 단독 VM 은 push 경로라 꺼지면 5분 뒤 전체 수에서도 빠짐(비정상이 아니라 총수 감소로 보임).
+_VM_NODES = 'count(node_uname_info{cluster!=""} unless on(cluster) kube_node_info)'
+NODE_TOTAL_QUERY = f"count(kube_node_info) + {_VM_NODES}"
+NODE_HEALTHY_QUERY = f'count(kube_node_status_condition{{condition="Ready",status="true"}} == 1) + {_VM_NODES}'
+NODE_PHYSICAL_QUERY = 'count(kube_node_info{cluster=""})'
+
 
 def time_range(params: TimeseriesParams) -> tuple[str, str, str]:
     """시계열 조회 구간 (start, end, step). 시작과 끝을 같은 now 기준으로 계산."""
@@ -93,7 +102,7 @@ async def get_overview(request: Request):
     응답
 
     * `clusters`: 전체, 관리, 서비스 클러스터 수
-    * `nodes`: 전체, 물리, 가상, 정상, 비정상 노드 수
+    * `nodes`: 전체, 물리(관리 클러스터), 가상(서비스 클러스터), 정상, 비정상 노드 수
     * `accelerator_count`: 가속기 클러스터의 메트릭 수집 대상 수
     * `healthy_count`: 그중 응답 중인(`up`) 수집 대상 수
     * `avg_temperature`: 클러스터별(`l40s` | `furiosa` | `rebellions`) 평균 가속기 온도(°C), 미수집 시 `null`
@@ -105,6 +114,7 @@ async def get_overview(request: Request):
     참고
 
     * `accelerator_count` 는 카드 수와 다를 수 있음
+    * 쿠버네티스 없는 단독 VM 은 보고가 끊기면 5분 뒤 `nodes` 전체 수에서 빠짐
     """
     warnings: list[str] = []
 
@@ -135,28 +145,19 @@ async def get_overview(request: Request):
         service=sum(1 for c in clusters_info.values() if c.type == "service"),
     )
 
-    # 노드 집계: 물리(관리 클러스터 kube_node_info) + 가상(서비스 클러스터 node_uname_info 합)
     # count() 값은 정수라 NaN/Inf 가 없음. 미수집이면 0
-    physical_total = int(first_finite(await prometheus_client.instant("count(kube_node_info)")) or 0)
-    physical_ready = int(first_finite(await prometheus_client.instant(
-        'count(kube_node_status_condition{condition="Ready",status="true"})'
-    )) or 0)
-
-    virtual_total = 0
-    for c in clusters_info.values():
-        if c.type != "service":
-            continue
-        virtual_total += int(first_finite(await prometheus_client.instant(
-            f'count(node_uname_info{{cluster="{c.label_value}"}})'
-        )) or 0)
-
+    total, healthy, physical = (
+        int(first_finite(r) or 0)
+        for r in await asyncio.gather(*(prometheus_client.instant(q) for q in (
+            NODE_TOTAL_QUERY, NODE_HEALTHY_QUERY, NODE_PHYSICAL_QUERY,
+        )))
+    )
     node_counts = NodeCounts(
-        total=physical_total + virtual_total,
-        physical=physical_total,
-        virtual=virtual_total,
-        # 서비스 클러스터 VM은 개별 헬스 관측이 아직 없어 healthy로 근사한다 (§4.7).
-        healthy=physical_ready + virtual_total,
-        unhealthy=physical_total - physical_ready,
+        total=total,
+        physical=physical,
+        virtual=total - physical,
+        healthy=healthy,
+        unhealthy=max(0, total - healthy),
     )
 
     # 3. L40S 평균 온도
