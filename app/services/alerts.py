@@ -439,7 +439,9 @@ async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
         acc = m.get(idl)
         if acc:
             try:
-                out[acc] = {"labels": m, "stale_seconds": float(item["value"][1])}
+                # 장치 ID(npu0 등)는 노드 안에서만 유일. 노드가 재생성되면 옛 노드와 겹치므로 instance 까지 키로 쓴다
+                out[f"{acc}@{m.get('instance', '')}"] = {"acc_id": acc, "labels": m,
+                                                        "stale_seconds": float(item["value"][1])}
             except (KeyError, ValueError, TypeError):
                 pass
     return out
@@ -462,7 +464,8 @@ async def evaluate_resource(policy: dict) -> tuple[dict[str, dict], list[str]]:
         else:
             acc_map, w = await _collect_accelerators(name, info.vendor, node=target.get("node"))
             warnings += [f"{name}:{x}" for x in w if x == "NO_DATA"]
-        for acc_id, entry in acc_map.items():
+        for key, entry in acc_map.items():
+            acc_id = entry.get("acc_id", key)
             if target.get("acc_id") and target["acc_id"] != acc_id:
                 continue
             value = entry.get("stale_seconds") if metric == "stale_seconds" else _resource_value(metric, entry, info.vendor)
@@ -644,6 +647,24 @@ async def _apply(policy: dict, results: dict[str, dict], now: datetime) -> None:
             await notify(policy, row, resolved=(action == "resolve"))
         await store.upsert_active(row)
     # 결과에 없는 대상(데이터 결측)은 상태를 유지한다. 결측을 해제로 오판하지 않기 위함.
+    # 단 ALERT_TARGET_GONE_MIN 넘게 계속 없으면 대상이 사라진 것(삭제된 클러스터, 재생성 전 노드)으로 보고 해제.
+    # updated_at 은 결과에 나타날 때마다 upsert 로 갱신되므로 '마지막으로 보인 시각'이다.
+    # 결과가 통째로 비면 Prometheus·Loki 장애일 수 있어 건드리지 않는다(조회 오류도 빈 결과로 온다).
+    if not results:
+        return
+    gone_after = timedelta(minutes=settings.ALERT_TARGET_GONE_MIN)
+    for fp, cur in existing.items():
+        if fp in results or not cur.get("updated_at") or now - cur["updated_at"] < gone_after:
+            continue
+        if cur["state"] != FIRING:
+            await store.delete_active(fp)
+            continue
+        row = {**cur, "state": RESOLVED, "resolved_at": now, "last_notified_at": now}
+        row["message"] = _message(policy, cur["target"], cur.get("value") or 0.0, RESOLVED) + " (대상 소멸)"
+        await store.add_event(policy["id"], fp, "resolve", policy["severity"], cur["target"],
+                              cur.get("value"), row["message"])
+        await notify(policy, row, resolved=True)
+        await store.upsert_active(row)
 
 
 async def evaluate_policy(policy: dict) -> tuple[dict[str, dict], list[str]]:

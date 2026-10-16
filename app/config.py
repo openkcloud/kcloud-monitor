@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # ── 알람 ──────────────────────────────────────────────────────────────
     ALERT_EVAL_INTERVAL_SEC: int = Field(30, ge=5, description="알람 정책 평가 주기(초)")
     ALERT_REPEAT_INTERVAL_MIN: int = Field(240, ge=1, description="firing 유지 중 재알림 간격(분)")
+    ALERT_TARGET_GONE_MIN: int = Field(
+        60, ge=5, description="평가 결과에서 이 시간(분) 넘게 안 보인 대상의 알람은 대상 소멸로 보고 해제"
+    )
     SMTP_HOST: Optional[str] = Field(None, description="알람 메일 SMTP 호스트")
     SMTP_PORT: int = Field(587, description="SMTP 포트")
     SMTP_USER: Optional[str] = Field(None, description="SMTP 계정")
