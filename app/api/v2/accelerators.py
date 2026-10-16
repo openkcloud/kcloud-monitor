@@ -72,6 +72,8 @@ VENDOR_CONFIG: dict[str, dict] = {
         "power": 'DCGM_FI_DEV_POWER_USAGE{{cluster="{cluster}"{extra}}}',
         "mem_used": 'DCGM_FI_DEV_FB_USED{{cluster="{cluster}"{extra}}}',
         "mem_free": 'DCGM_FI_DEV_FB_FREE{{cluster="{cluster}"{extra}}}',
+        # 드라이버 예약분. nvidia-smi memory.total = USED + FREE + RESERVED (FB_TOTAL 은 exporter 에 없음)
+        "mem_reserved": 'DCGM_FI_DEV_FB_RESERVED{{cluster="{cluster}"{extra}}}',
         "xid_errors": 'changes(DCGM_FI_DEV_XID_ERRORS{{cluster="{cluster}"{extra}}}[10m])',
         "sm_clock": 'DCGM_FI_DEV_SM_CLOCK{{cluster="{cluster}"{extra}}}',
         "mem_clock": 'DCGM_FI_DEV_MEM_CLOCK{{cluster="{cluster}"{extra}}}',
@@ -297,12 +299,14 @@ async def _collect_accelerators(
     if vendor == "nvidia":
         merge(await _instant_metric(vendor, cluster, "mem_used"), "_mem_used_mib")
         merge(await _instant_metric(vendor, cluster, "mem_free"), "_mem_free_mib")
+        merge(await _instant_metric(vendor, cluster, "mem_reserved"), "_mem_reserved_mib")
         for entry in acc_map.values():
             used = entry.pop("_mem_used_mib", None)
             free = entry.pop("_mem_free_mib", None)
+            reserved = entry.pop("_mem_reserved_mib", None) or 0.0  # 없으면 USED + FREE 만 (예전 산식)
             entry["memory_used_bytes"] = used * MIB_TO_BYTES if used is not None else None
             entry["memory_total_bytes"] = (
-                (used + free) * MIB_TO_BYTES if used is not None and free is not None else None
+                (used + free + reserved) * MIB_TO_BYTES if used is not None and free is not None else None
             )
     else:
         merge(await _instant_metric(vendor, cluster, "mem_used"), "memory_used_bytes")
