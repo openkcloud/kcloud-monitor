@@ -54,6 +54,12 @@ LOG_METRICS: dict[str, tuple[str, str]] = {
     "log_total_count": ("전체 로그 건수", ""),  # 정규식 없음. 작업 로그가 멈췄는지(0건) 볼 때 씀
 }
 
+# 로그 지표별 제외 정규식. 단어는 걸리지만 오류가 아닌 줄을 뺀다.
+# 빈 오류 필드("error":"", err=<nil>)가 있는 접속 기록과 스스로 info, debug 라고 밝힌 줄 (2026-10-21 mgmt 실측 5분 213 -> 148건)
+LOG_EXCLUDE: dict[str, str] = {
+    "log_error_count": r'(?i)("err(or)?"\s*:\s*(""|null)|\berr(or)?=(""|<nil>)|\blevel=(info|debug)\b|"level"\s*:\s*"(info|debug)")',
+}
+
 
 # SLO 지표 키. 값은 (설명, 단위, PromQL). {sel} 은 대상 셀렉터, {w} 는 window_min 분. 대상은 (cluster, model_name).
 _TTFT_P95 = "histogram_quantile(0.95, sum by (le, cluster, model_name) (rate({m}_bucket{{sel}}[{{w}}m]))) * 1000"
@@ -485,8 +491,9 @@ def _logql(policy: dict) -> str:
     sel = [f'cluster="{target["cluster"]}"' if target.get("cluster") else 'cluster=~".+"', 'container!="loki"']
     # 작업 단위로 좁힐 때: VM 은 systemd unit, 파드와 도커 컨테이너는 container 라벨
     sel += [f'{k}="{target[k]}"' for k in ("unit", "container") if target.get(k)]
-    regex = LOG_METRICS[policy["metric"]][1]
-    line = ' |~ "' + regex.replace("\\", "\\\\").replace('"', '\\"') + '"' if regex else ""
+    esc = lambda r: r.replace("\\", "\\\\").replace('"', '\\"')
+    regex, exclude = LOG_METRICS[policy["metric"]][1], LOG_EXCLUDE.get(policy["metric"])
+    line = (' |~ "' + esc(regex) + '"' if regex else "") + (' !~ "' + esc(exclude) + '"' if exclude else "")
     return f'sum by (cluster) (count_over_time({{{", ".join(sel)}}}{line} [{int(policy.get("window_min", 5))}m]))'
 
 
