@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from app.config import npu_util
 from app.services.openstack import OpenStackError, openstack_client
 from app.services.prometheus import prometheus_client
 
@@ -30,14 +31,14 @@ VENDOR_PROFILES: dict[str, dict[str, Optional[str]]] = {
         "accelerator_type": "NPU",
         # 공식 furiosa-metrics-exporter (2026-10-15 복귀). 사용률은 코어별(8개)이라 카드 단위로 평균
         "detect_metric": "furiosa_npu_core_utilization",
-        "utilization_query": 'avg by (cluster,device,uuid,instance,hostname) (furiosa_npu_core_utilization{{cluster="{cluster}"}})', # 단위: %
+        "utilization_query": npu_util('avg by (cluster,device,uuid,instance,hostname) (furiosa_npu_core_utilization{{cluster="{cluster}"}})', "furiosa"), # 단위: %
         "temperature_query": 'furiosa_npu_hw_temperature{{label="peak",cluster="{cluster}"}}', # 단위: °C
         "power_query": 'furiosa_npu_hw_power{{cluster="{cluster}"}}', # 단위: W
     },
     "rebellions": {
         "accelerator_type": "NPU",
         "detect_metric": "RBLN_DEVICE_STATUS:UTILIZATION", # 단위: %
-        "utilization_query": 'RBLN_DEVICE_STATUS:UTILIZATION{{cluster="{cluster}"}}', 
+        "utilization_query": npu_util('RBLN_DEVICE_STATUS:UTILIZATION{{cluster="{cluster}"}}', "rebellions"),
         # colon(:) 메트릭은 집계함수(_avg 등)로 감싸일 때 파서가 원형을 거부할 수 있어
         # __name__ 매처 형식으로 지정한다 (power.py 참고).
         # temp·power ×1000: exporter가 실측의 1/1000로 표출 (rbln-stat 대조 확정, 2026-08-24)
@@ -119,10 +120,17 @@ class ClusterDiscovery:
                 openstack_project=None,
             )
 
+        prev = self._cache
         for info in clusters.values():
             if info.name == DEFAULT_CLUSTER_NAME:
                 continue
             await self._detect_vendor(info)
+            # 가속기 exporter 가 잠깐 멈추면 탐지 메트릭이 비어 벤더가 사라지고, 캐시(5분) 동안 알람 평가에서 빠져
+            # 수집 중단 알람이 해제되지 않았다 (2026-10-22). 클러스터가 살아 있는 동안은 직전 벤더를 이어 쓴다
+            old = prev.get(info.name)
+            if not info.vendor and old and old.vendor:
+                for k in ("vendor", "accelerator_type", "utilization_query", "temperature_query", "power_query"):
+                    setattr(info, k, getattr(old, k))
             # 기본 휴리스틱: 이름이 "k8s-"로 시작하면 진짜 K8s 클러스터로 간주(터널 없이도 동작).
             # Magnum 조회가 되면 아래 _enrich에서 권위 있게 덮어쓴다.
             info.is_kubernetes = info.name.startswith("k8s-")
