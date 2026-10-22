@@ -428,7 +428,11 @@ def _resource_value(metric: str, entry: dict, vendor: str) -> Optional[float]:
 
 
 async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
-    """가속기별 마지막 샘플 이후 경과 초. instant 쿼리는 5분 지나면 아예 안 보이므로 1일 서브쿼리로 찾는다."""
+    """가속기별 마지막 샘플 이후 경과 초.
+
+    5분 안에 샘플이 있으면 timestamp() 로 정확히 재고, 5분 넘게 끊긴 카드만 1일 서브쿼리로 찾는다.
+    서브쿼리만 쓰면 1분 단위로 반올림돼 정상 카드도 40~70초로 보여 기준 60초에서 오탐이 났다 (2026-10-22).
+    """
     from app.api.v2.accelerators import VENDOR_CONFIG
     from app.services.prometheus import esc
     from app.services.prometheus import prometheus_client
@@ -437,8 +441,9 @@ async def _stale_seconds(vendor: str, cluster: str) -> dict[str, dict]:
     raw = {"nvidia": "DCGM_FI_DEV_GPU_UTIL", "furiosa": "furiosa_npu_core_utilization",
            "rebellions": "RBLN_DEVICE_STATUS:UTILIZATION"}[vendor]
     idl = cfg["id_label"]
-    q = (f'time() - max by ({idl}, instance) '
-         f'(max_over_time(timestamp({raw}{{cluster="{esc(cluster)}"}})[1d:1m]))')
+    sel = f'{raw}{{cluster="{esc(cluster)}"}}'
+    q = (f'(time() - max by ({idl}, instance) (timestamp({sel}))) '
+         f'or (time() - max by ({idl}, instance) (max_over_time(timestamp({sel})[1d:1m])))')
     out: dict[str, dict] = {}
     for item in await prometheus_client.instant(q):
         m = item.get("metric", {})
