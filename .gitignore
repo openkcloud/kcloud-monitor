@@ -95,6 +95,7 @@ Thumbs.db
 .gemini/
 .openai/
 .omc/
+.agents/
 
 # Model-Specific Adapter Files (개인 세팅)
 CLAUDE.md
@@ -165,6 +166,11 @@ tests/**/*.bak
 *.xlsx
 *.parquet
 *.pdf
+# 보고서, 발표 자료 산출물
+*.pptx
+*.docx
+*.hwp
+*.hwpx
 # !data/samples/*.csv  # 샘플 데이터는 추적할 경우 주석 해제
 
 # ============================================
