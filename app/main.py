@@ -15,6 +15,7 @@ from app.api.v2 import (
     clusters,
     export,
     logs,
+    metering,
     monitoring,
     nodes,
     openstack,
@@ -30,6 +31,7 @@ from app.config import settings
 from app.logging_config import configure_logging
 
 from app.services import alerts as alert_service
+from app.services import metering as metering_service
 from app.middleware import MetricsMiddleware, RateLimitMiddleware, RequestIDMiddleware
 
 APP_VERSION = "0.2.0"
@@ -40,19 +42,26 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.LOG_LEVEL)
     print("KCloud Monitor API v2 - Starting up")
     print(f"Version: {APP_VERSION} | Docs: /docs | Metrics: /api/v2/system/metrics")
-    loop_task = None
+    loop_task = meter_task = None
     if settings.DATABASE_URL:
         try:
             await alert_service.store.connect()
             loop_task = asyncio.create_task(alert_service.run_loop())
         except Exception as exc:  # DB 가 아직 안 떠도 조회 API 는 살아야 함
             print(f"alert store unavailable: {exc}")
+        try:
+            await metering_service.store.connect()
+            meter_task = asyncio.create_task(metering_service.run_loop())
+        except Exception as exc:
+            print(f"metering store unavailable: {exc}")
     else:
-        print("DATABASE_URL 미설정: 알람 기능 비활성")
+        print("DATABASE_URL 미설정: 알람, 미터링 계측, 단가 정책, 예산 기능 비활성")
     yield
-    if loop_task:
-        loop_task.cancel()
+    for task in (loop_task, meter_task):
+        if task:
+            task.cancel()
     await alert_service.store.close()
+    await metering_service.store.close()
     print("Application shutdown")
 
 
@@ -112,6 +121,15 @@ API_DESCRIPTION = """
 - `REBELLIONS_SCALE_CORRECTED_X1000` : Rebellions 온도 원본 값을 1000배로 보정
 - `NODE_CPU_TOTAL_ZERO` : 같은 서버 VM 전체 CPU 사용량이 0이라 비율 계산 불가
 
+미터링, 비용 예측
+- `PRICE_NOT_DEFINED` : 단가 정책이 없는 가속기. 그 비용은 합계에서 빠짐
+- `PARTIAL_HISTORY` : 조회 구간 일부를 계측하지 못함. 예측에서는 일평균으로 채움
+- `INSUFFICIENT_HISTORY` : 완결된 날이 없어 예측 불가
+- `TREND_FALLBACK_MOVING_AVERAGE` : 추세 계산에 쓸 날이 부족해 이동 평균으로 계산
+- `NO_PROJECT_MAPPING` : 클러스터와 OpenStack 프로젝트 매핑 없음
+- `NO_BUDGET` : 적용되는 예산 없음
+- `METERING_STORE_UNAVAILABLE` : 예산 조회나 예측 이력 저장 실패
+
 입력과 대상
 - `UNKNOWN_CLUSTER` : 없는 클러스터 이름
 - `ACCELERATOR_NOT_FOUND` : 없는 가속기
@@ -137,6 +155,13 @@ API_DESCRIPTION = """
 ## 알람
 - `/alerts` 경로는 서버에 알람 저장소(DB) 설정이 없으면 모두 503, `detail` 에 ALERT_STORE_NOT_CONFIGURED
 
+## 미터링
+- 서버가 매시 가속기 카드별 점유, 사용, 가중 시간과 전력량을 계측해 사용량 레코드로 쌓음. 레코드는 적재 후 바뀌지 않음
+- 비용 = 사용량 x 그날 유효 단가. 단가는 덮어쓰지 않고 새 버전을 추가하며 소급 적용 불가(409)
+- 금액은 원(`_krw`), 과금 월과 일의 경계는 한국 시간(KST). 지금은 가속기 비용만 포함
+- `/metering/usage/*`, `/metering/policies`(자원 유형 목록 제외), `/metering/budgets`, `/metering/predictions/budget-status` 는
+  저장소(DB) 설정이 없으면 503, `detail` 에 METERING_STORE_NOT_CONFIGURED
+
 ## 태그 구성
 - Authentication : 토큰 발급과 검증
 - System : 서비스 헬스, 버전, 서버 자체 메트릭
@@ -153,6 +178,7 @@ API_DESCRIPTION = """
 - Resource Map : Pod 하나가 올라간 노드, VM, 물리 서버 추적
 - Alerts : 알람 정책, 알림 채널, 활성 알람, 이력
 - SLO : LLM 서빙 응답 속도(TTFT, TPOT) 목표 달성률, 오류 예산, 시계열
+- Metering : 사용량(점유, 사용, 가중 시간, 전력량, 비용), 단가 정책, 월말 비용 예측, 예산 대비 현황, 가상 시나리오, 예산
 """
 
 app = FastAPI(
@@ -224,6 +250,7 @@ app.include_router(export.router, prefix=V2, tags=["Export"], dependencies=PROTE
 app.include_router(resource_map.router, prefix=V2, tags=["Resource Map"], dependencies=PROTECTED)
 app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTECTED)
 app.include_router(slo.router, prefix=V2, tags=["SLO"], dependencies=PROTECTED)
+app.include_router(metering.router, prefix=V2, tags=["Metering"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
@@ -260,6 +287,7 @@ def read_root():
             "logs": "GET /api/v2/logs/search - 로그 검색",
             "export": "GET /api/v2/export/power - 데이터 내보내기",
             "resource_map": "GET /api/v2/resource-map/pods/{pod} - Pod에서 물리서버까지 자원 추적",
+            "metering": "GET /api/v2/metering/usage/summary - 사용량과 비용, /metering/predictions/monthly - 월말 비용 예측",
             "system": "GET /api/v2/system/health - 서비스 헬스체크",
         },
     }
