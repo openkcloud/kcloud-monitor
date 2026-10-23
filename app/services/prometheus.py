@@ -57,11 +57,13 @@ class PrometheusClient:
         start: str,
         end: str,
         step: str = "60s",
+        raise_errors: bool = False,
     ) -> list[dict]:
         """범위 쿼리(range query).
 
         GET {base_url}/api/v1/query_range?query={query}&start={start}&end={end}&step={step}
         성공 시 data.result 목록 반환, 오류 시 빈 리스트 반환.
+        raise_errors=True 면 오류를 그대로 올림 (빈 결과와 조회 실패를 구분해야 하는 미터링 계측용).
         """
         url = f"{self.base_url}/api/v1/query_range"
         params = {"query": query, "start": start, "end": end, "step": step}
@@ -71,6 +73,8 @@ class PrometheusClient:
                 r.raise_for_status()
                 return r.json()["data"]["result"]
         except httpx.HTTPError as exc:
+            if raise_errors:
+                raise
             logger.warning(
                 "Prometheus range query error: %s — query=%r start=%s end=%s",
                 exc, query, start, end,
