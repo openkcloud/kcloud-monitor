@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 
 from app.api.v2.deps import PaginationParams, TimeseriesParams, with_links
+from app.config import npu_util
 from app.schemas.accelerators import (
     AcceleratorDetailResponse,
     AcceleratorInfo,
@@ -103,7 +104,7 @@ VENDOR_CONFIG: dict[str, dict] = {
         "id_label": "device",
         "model_label": "model",
         "model_default": "RNGD",
-        "util": 'avg(furiosa_npu_core_utilization{{cluster="{cluster}"{extra}}}) by (device,uuid,instance,hostname)',
+        "util": npu_util('avg(furiosa_npu_core_utilization{{cluster="{cluster}"{extra}}}) by (device,uuid,instance,hostname)', "furiosa"),
         "temp": 'furiosa_npu_hw_temperature{{label="peak",cluster="{cluster}"{extra}}}',
         "power": 'furiosa_npu_hw_power{{cluster="{cluster}"{extra}}}',
         "mem_used": 'furiosa_npu_dram_usage{{cluster="{cluster}"{extra}}}',
@@ -120,7 +121,7 @@ VENDOR_CONFIG: dict[str, dict] = {
     "rebellions": {
         "id_label": "uuid",
         "model_label": "card",
-        "util": 'RBLN_DEVICE_STATUS:UTILIZATION{{cluster="{cluster}"{extra}}}',
+        "util": npu_util('RBLN_DEVICE_STATUS:UTILIZATION{{cluster="{cluster}"{extra}}}', "rebellions"),
         # temp·power ×1000: exporter가 실측의 1/1000로 표출 (rbln-stat 대조 확정, 2026-08-24)
         "temp": '(RBLN_DEVICE_STATUS:TEMPERATURE{{cluster="{cluster}"{extra}}}) * 1000',
         "power": '(RBLN_DEVICE_STATUS:CARD_POWER{{cluster="{cluster}"{extra}}}) * 1000',

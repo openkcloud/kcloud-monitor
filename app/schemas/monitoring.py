@@ -10,6 +10,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.config import npu_util
 from app.schemas._common import DESC_OBSERVED_AT, DESC_STATUS, DESC_WARNINGS, _now
 
 # ---------------------------------------------------------------------------
@@ -30,8 +31,8 @@ METRIC_ALLOWLIST: dict[str, str] = {
     # 사용률 (Utilization)
     "gpu_utilization": 'DCGM_FI_DEV_GPU_UTIL{cluster="l40s"}',
     "gpu_utilization_prof": 'DCGM_FI_PROF_GR_ENGINE_ACTIVE{cluster="l40s"} * 100',
-    "furiosa_utilization": 'furiosa_npu_core_utilization{cluster=~"furiosa.*"}',
-    "rebellions_utilization": 'RBLN_DEVICE_STATUS:UTILIZATION{cluster="rebellions"}',
+    "furiosa_utilization": npu_util('furiosa_npu_core_utilization{cluster=~"furiosa.*"}', "furiosa"),
+    "rebellions_utilization": npu_util('RBLN_DEVICE_STATUS:UTILIZATION{cluster="rebellions"}', "rebellions"),
     # 메모리 (Memory). 단위 주의: L40S=MiB, NPU=bytes
     "gpu_memory_used_mib": 'DCGM_FI_DEV_FB_USED{cluster="l40s"}',
     "gpu_memory_free_mib": 'DCGM_FI_DEV_FB_FREE{cluster="l40s"}',

@@ -17,6 +17,7 @@ rebellions 콜론 메트릭 주의: PromQL 파서가 `RBLN_DEVICE_STATUS:CARD_PO
 import asyncio
 from typing import Optional
 
+from app.config import npu_util
 from app.services.cluster_discovery import DEFAULT_CLUSTER_NAME
 from app.services.prometheus import first_finite, parse_finite, prometheus_client, ts_iso
 
@@ -37,8 +38,8 @@ ACCEL_UTIL_QUERIES = {  # 효율·사용률용, %. 카드 1장당 시계열 1개
     # 공통 지표 표(가속기 목록 API)와 같은 GPU_UTIL. compute6 카드(cluster 라벨 없음)도 포함
     "nvidia": 'DCGM_FI_DEV_GPU_UTIL{cluster=~"l40s|"}',
     # 코어(8개)별 시계열이라 카드 단위로 평균
-    "furiosa": 'avg by (cluster,device,uuid,instance,hostname) (furiosa_npu_core_utilization{cluster=~"furiosa.*"})',
-    "rebellions": '{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}',
+    "furiosa": npu_util('avg by (cluster,device,uuid,instance,hostname) (furiosa_npu_core_utilization{cluster=~"furiosa.*"})', "furiosa"),
+    "rebellions": npu_util('{__name__="RBLN_DEVICE_STATUS:UTILIZATION",cluster="rebellions"}', "rebellions"),
 }
 
 # per-card 공식 스펙: L40S 350W / Furiosa RNGD 180W / Rebellions ATOM+ RBLN-CA22 85W

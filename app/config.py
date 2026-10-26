@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     ALERT_TARGET_GONE_MIN: int = Field(
         60, ge=5, description="평가 결과에서 이 시간(분) 넘게 안 보인 대상의 알람은 대상 소멸로 보고 해제"
     )
+    # 0~1 비율로 내보내는 exporter 면 100. 리허설 부하에서 furiosa-smi·rbln-stat 의 % 와 대조해 정함
+    NPU_UTIL_SCALE_FURIOSA: float = Field(1.0, gt=0, description="Furiosa 사용률 원시값에 곱할 배율")
+    NPU_UTIL_SCALE_REBELLIONS: float = Field(1.0, gt=0, description="Rebellions 사용률 원시값에 곱할 배율")
     SMTP_HOST: Optional[str] = Field(None, description="알람 메일 SMTP 호스트")
     SMTP_PORT: int = Field(587, description="SMTP 포트")
     SMTP_USER: Optional[str] = Field(None, description="SMTP 계정")
@@ -59,3 +62,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def npu_util(query: str, vendor: str) -> str:
+    """NPU 사용률 쿼리에 배율을 붙인다. 배율 1 이면 그대로."""
+    scale = {"furiosa": settings.NPU_UTIL_SCALE_FURIOSA, "rebellions": settings.NPU_UTIL_SCALE_REBELLIONS}.get(vendor, 1.0)
+    return query if scale == 1.0 else f"({query}) * {scale:g}"
