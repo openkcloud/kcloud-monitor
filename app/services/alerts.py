@@ -503,7 +503,11 @@ def _logql(policy: dict) -> str:
 
 
 async def evaluate_slo(policy: dict) -> tuple[dict[str, dict], list[str]]:
-    """vLLM 서빙(cluster, model_name)별 값. 기간 안에 요청이 없어 p95 가 NaN 이면 건너뜀(결측은 상태 유지)."""
+    """vLLM 서빙(cluster, model_name)별 값. 기간 안에 요청이 없어 p95 가 NaN 이면 지연 없음(0)으로 본다.
+
+    NaN 은 vLLM 지표는 들어오는데 요청만 0건인 상태라 결측이 아니다. 건너뛰면 부하가 끝난 뒤
+    요청이 끊겼을 때 걸려 있던 지연 알람이 해제되지 않는다. vLLM 이 내려가 지표 자체가 없으면 결과가 비어 결측으로 처리된다.
+    """
     from app.services.prometheus import prometheus_client
 
     target = policy.get("target") or {}
@@ -516,8 +520,8 @@ async def evaluate_slo(policy: dict) -> tuple[dict[str, dict], list[str]]:
             value = float(item["value"][1])
         except (KeyError, ValueError, TypeError):
             continue
-        if value != value:  # NaN
-            continue
+        if value != value:  # NaN: 요청 0건
+            value = 0.0
         t = {"cluster": m.get("cluster", "*"), "model": m.get("model_name", "*")}
         results[_fp(policy["id"], t)] = {"target": t, "value": round(value, 2),
                                           "cond": OPS[policy["op"]](value, policy["threshold"])}
