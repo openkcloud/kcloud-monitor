@@ -20,6 +20,7 @@ from app.api.v2 import (
     monitoring,
     nodes,
     openstack,
+    recovery,
     recovery_policies,
     resource_map,
     slo,
@@ -189,6 +190,7 @@ API_DESCRIPTION = """
 - Metering : 사용량(점유, 사용, 가중 시간, 전력량, 비용), 단가 정책, 월말 비용 예측, 예산 대비 현황, 가상 시나리오, 예산
 - Faults : 진행 중 장애, 장애 이력, 장애별 증거(메트릭, 로그, 영향 자원)와 원인 분석
 - Recovery Policies : 장애 유형별 후속 조치 정책(조치 절차) 설정과 관리. 권고 전용, 자동 실행 없음
+- Recovery : 진행 중 장애별 복구 정보 생성 (조치 절차, 추정 원인, 영향 범위, 확인 방법)
 """
 
 app = FastAPI(
@@ -263,6 +265,7 @@ app.include_router(slo.router, prefix=V2, tags=["SLO"], dependencies=PROTECTED)
 app.include_router(metering.router, prefix=V2, tags=["Metering"], dependencies=PROTECTED)
 app.include_router(faults.router, prefix=V2, tags=["Faults"], dependencies=PROTECTED)
 app.include_router(recovery_policies.router, prefix=V2, tags=["Recovery Policies"], dependencies=PROTECTED)
+app.include_router(recovery.router, prefix=V2, tags=["Recovery"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
@@ -301,6 +304,7 @@ def read_root():
             "resource_map": "GET /api/v2/resource-map/pods/{pod} - Pod에서 물리서버까지 자원 추적",
             "metering": "GET /api/v2/metering/usage/summary - 사용량과 비용, /metering/predictions/monthly - 월말 비용 예측",
             "faults": "GET /api/v2/faults/active - 진행 중 장애, /faults/{fault_id} - 증거와 원인 분석",
+            "recovery": "GET /api/v2/recovery/recommendations - 장애별 복구 정보, /recovery/policies - 후속 조치 정책",
             "system": "GET /api/v2/system/health - 서비스 헬스체크",
         },
     }
