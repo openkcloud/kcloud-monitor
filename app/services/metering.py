@@ -582,6 +582,24 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
     seen_days 는 사용량을 하루 통째로 가진 지난 날 집합(없으면 Prometheus 보관 기간 기준). 이번 달 지난 날 중
     여기 없는 날(missing_days)은 일부 기록도 누적에서 빼고 예측에서 일평균으로 채운다(일부와 일평균을 함께
     넣으면 이중 계산). 오늘은 진행 중이라 지금까지 기록을 누적에 넣는다.
+
+    >>> now = datetime(2026, 10, 10, 15, tzinfo=timezone.utc)  # KST 10/11 0시. 10일 지남, 21일 남음
+    >>> days = [date(2026, 10, d) for d in range(1, 11)]
+    >>> rows = [UsageRow(d, "l40s", "p1", "nvidia", "NVIDIA L40S", 24.0) for d in days]
+    >>> pol = [PricePolicy("a", "", "accelerator", "nvidia", "L40S", 100, date(2026, 1, 1))]
+    >>> data, w = build_prediction(rows, now, pol, seen_days=set(days))
+    >>> (data["current"]["accumulated_cost_krw"], data["predicted"]["month_end_cost_krw"],
+    ...  data["current"]["days_remaining"], data["breakdown"][0]["projected_cost_krw"], w)
+    (24000, 74400, 21.0, 74400, [])
+    >>> data, w = build_prediction(rows, now, pol, seen_days=set(days[3:]))  # 앞 3일은 못 본 날: 일평균으로 채움
+    >>> (data["current"]["accumulated_cost_krw"], data["current"]["missing_days"],
+    ...  data["predicted"]["month_end_cost_krw"], w)
+    (16800, 3, 74400, ['PARTIAL_HISTORY'])
+    >>> data, w = build_prediction(rows, now, [], seen_days=set(days))  # 단가 없음: 금액은 null
+    >>> (data["current"]["accumulated_cost_krw"], data["predicted"], w)
+    (None, None, ['PRICE_NOT_DEFINED'])
+    >>> build_prediction(rows, now, pol, seen_days=set(days), project="p2")[1]
+    ['NO_DATA']
     """
     local = now.astimezone(KST)
     today = local.date()
