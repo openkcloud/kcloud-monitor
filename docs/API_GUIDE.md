@@ -255,6 +255,21 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 - 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`.
 - `DATABASE_URL` 이 없으면 `/faults/active` 는 고정 신호만 보고(`ALERT_STORE_NOT_CONFIGURED` 경고), `/faults/history` 는 503. 고정 신호 장애는 신호가 사라지면 이력에 남지 않는다.
 
+### Recovery Policies — 후속 조치 정책 (5)
+
+장애 유형별로 어떤 절차를 권고할지 적어 둔 정책을 관리한다. 정책은 권고 전용(`mode` 는 항상 `recommendation-only`)이고 이 API 는 조치를 실행하지 않는다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `GET·POST /recovery/policies` (`fault_type`, `enabled`) | 정책 목록, 생성 |
+| `GET·PUT·DELETE /recovery/policies/{policy_id}` | 정책 상세, 전체 교체, 삭제 |
+
+- 정책은 적용 조건(`fault_type`, `vendor_scope`, `error_codes`)과 조치 절차(`steps`)로 이뤄진다. 한 장애에 여러 정책이 맞으면 XID 코드를 지정한 정책, 벤더를 지정한 정책 순으로 우선한다.
+- 절차 단계는 `manual_review`(확인), `manual_action`(관리자가 직접 실행, `risk_level` 필수), `record_feedback`(결과 기록) 세 종류다.
+- `steps[].reference_queries` 에는 `{fault_id}`, `{cluster}`, `{node}`, `{namespace}`, `{pod}`, `{container}`, `{accelerator_id}`, `{vm_id}` 자리를 쓸 수 있고, 복구 정보를 만들 때 장애 대상 값으로 채워진다.
+- 첫 기동 때 초기 정책 7건(GPU 오류, NPU 오류, 메모리 부족 종료, 재시작 반복, 노드 NotReady, VM 비정상, 서버 하드웨어 오류)이 들어간다. `DATABASE_URL` 이 없으면 초기 정책을 읽기 전용으로 돌려주고(`RECOVERY_STORE_NOT_CONFIGURED` 경고) 생성, 수정, 삭제는 503.
+- 규칙 위반은 422, `detail.errors` 에 `RISK_LEVEL_REQUIRED`, `UNKNOWN_PLACEHOLDER` 등.
+
 ### 별칭 — 단축 경로 (4)
 
 UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
