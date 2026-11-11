@@ -239,6 +239,22 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 - 결측은 0 으로 채우지 않는다. 계측되지 않은 구간은 `PARTIAL_HISTORY`, 프로젝트 매핑이 없으면 `NO_PROJECT_MAPPING`(`project` null), 단가가 없으면 `PRICE_NOT_DEFINED`(`unpriced_hours`) 경고가 붙는다.
 - NPU(RNGD, ATOM) 초기 단가는 공개 단가가 없어 비교 대상 GPU 의 시장 중앙값을 넣은 임시값이다. 정책의 `source` 에 근거가 적혀 있다.
 
+### Faults — 장애 정보 분석 (3)
+
+알람 평가기의 firing 알람과 고정 PromQL 신호를 장애로 분류하고, 장애마다 증거와 원인 분석을 돌려준다. 조회 전용이다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/faults/active` (`cluster`, `fault_type`, `severity`) | 진행 중 장애. critical 먼저 |
+| `/faults/history` (`start`, `status`, `limit`) | 장애 이력. 알람 이력의 발생, 해제 기록으로 만든다 (기본 7일) |
+| `/faults/{fault_id}` | 장애 상세: 증거(`evidence`)와 원인 분석(`analysis`) |
+
+- 탐지 경로는 두 가지다. `alert` 는 알람 정책 중 장애로 보는 지표(가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그, 재시작 반복 로그, 하드웨어와 디스크 오류 로그)이고, `signal` 은 정책 없이도 보는 고정 신호(`xid`, `oom_killed`, `restart_loop`, `node_not_ready`, `vm_error`)다. 사용률, 메모리 포화, SLO 알람은 장애로 보지 않는다.
+- 장애 유형은 `accelerator_error`, `npu_fault`, `workload_oom`, `workload_crash_loop`, `node_not_ready`, `vm_down`, `hardware_fault`.
+- 증거는 발생 30분 전부터 10분 뒤까지의 메트릭, 관련 로그 최대 20줄(XID 코드, OOM 프로세스 같은 추출 필드 포함), 대상에서 물리서버까지의 경로와 영향 Pod 다. 종류별 수집 결과는 `evidence.collection_status` 에 있고, 일부가 빠지면 `EVIDENCE_PARTIAL` 경고가 붙는다.
+- 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`.
+- `DATABASE_URL` 이 없으면 `/faults/active` 는 고정 신호만 보고(`ALERT_STORE_NOT_CONFIGURED` 경고), `/faults/history` 는 503. 고정 신호 장애는 신호가 사라지면 이력에 남지 않는다.
+
 ### 별칭 — 단축 경로 (4)
 
 UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
