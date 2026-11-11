@@ -6,7 +6,7 @@ KCloud Monitor v2 — Ceph 분산 스토리지 메트릭 조회.
 Ceph 본체는 K8s 밖의 외부 클러스터라 kube API로는 조회할 수 없고 이 메트릭이 유일한 창구다.
 
 설계 주의
-  - **mgr이 2대(192.168.90.161, .163) 모두 스크레이프 대상이다.** Ceph는 active mgr만
+  - **mgr이 2대(active, standby) 모두 스크레이프 대상이다.** Ceph는 active mgr만
     실제 값을 내고 standby는 빈 값이나 0을 낸다. 같은 시리즈가 인스턴스만 다르게 두 번
     들어오므로 파싱 단계에서 합치지 않으면 값이 0으로 덮인다(_merge).
   - **ceph_health_status는 0=OK, 1=WARN, 2=ERR로 값이 클수록 나쁘다.** 사용률 같은

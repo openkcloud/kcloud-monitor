@@ -452,7 +452,7 @@ async def create_channel(body: ChannelCreate):
 
     입력 예시
 
-    * 메일: `{"name": "운영팀 메일", "type": "email", "config": {"to": ["ops@innogrid.com"]}}`
+    * 메일: `{"name": "운영팀 메일", "type": "email", "config": {"to": ["ops@example.com"]}}`
     * Slack: `{"name": "개발 Slack", "type": "webhook", "config": {"url": "https://hooks.slack.com/services/...", "format": "slack"}}`
 
     입력 옵션

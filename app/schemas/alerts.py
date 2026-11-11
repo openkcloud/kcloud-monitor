@@ -132,7 +132,7 @@ _CHANNEL_CONFIG_DESC = (
     "webhook: url(받을 주소), format(generic | slack), headers(선택)"
 )
 _CHANNEL_CONFIG_EXAMPLES = [
-    {"to": ["ops@innogrid.com"]},
+    {"to": ["ops@example.com"]},
     {"url": "https://hooks.slack.com/services/T000/B000/XXXX", "format": "slack"},
     {"url": "https://portal.example.com/alerts", "headers": {"X-Token": "..."}},
 ]
@@ -142,7 +142,7 @@ class ChannelCreate(BaseModel):
     """알림 채널 생성 요청"""
 
     model_config = {"json_schema_extra": {"examples": [
-        {"name": "운영팀 메일", "type": "email", "config": {"to": ["ops@innogrid.com"]}},
+        {"name": "운영팀 메일", "type": "email", "config": {"to": ["ops@example.com"]}},
     ]}}
 
     name: str = Field(..., description="채널 이름")
