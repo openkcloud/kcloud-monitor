@@ -137,8 +137,19 @@ async def trace_pod(pod: str, cluster: Optional[str] = None, namespace: Optional
     )]
     path.append(await _workload_hop(cluster, namespace, m.get("created_by_kind"), m.get("created_by_name")))
     path += await _accelerator_hops(cluster, namespace, pod)
+    path += await trace_node(cluster, node)
+
+    warnings = [f"{h.layer.upper()}_NOT_AVAILABLE" for h in path if h.status == "unavailable"]
+    return PodTraceResponse(
+        status="partial" if warnings else "success",
+        pod=pod, cluster=cluster, namespace=namespace, path=path, warnings=warnings,
+    )
+
+
+async def trace_node(cluster: str, node: Optional[str]) -> list[TraceHop]:
+    """K8s 노드에서 VM, 물리서버까지의 단계. Pod 추적의 뒷부분이고 장애 영향 범위 조회에도 쓴다."""
     node_hop, system_uuid = await _node_hop(cluster, node)
-    path.append(node_hop)
+    path = [node_hop]
 
     servers = [r.get("metric", {}) for r in await prometheus_client.instant("openstack_nova_server_status")]
     vm, via = _match_vm(servers, node, system_uuid)
@@ -165,12 +176,7 @@ async def trace_pod(pod: str, cluster: Optional[str] = None, namespace: Optional
     else:
         path.append(TraceHop(layer="vm", status="unavailable", via="노드와 일치하는 nova VM 없음"))
         path.append(TraceHop(layer="physical_server", status="unavailable"))
-
-    warnings = [f"{h.layer.upper()}_NOT_AVAILABLE" for h in path if h.status == "unavailable"]
-    return PodTraceResponse(
-        status="partial" if warnings else "success",
-        pod=pod, cluster=cluster, namespace=namespace, path=path, warnings=warnings,
-    )
+    return path
 
 
 @router.get("/resource-map/pods/{pod}", summary="Pod 자원 추적", response_model=PodTraceResponse)
