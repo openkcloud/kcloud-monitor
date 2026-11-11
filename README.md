@@ -230,21 +230,45 @@ API_AUTH_PASSWORD=changeme
 
 버그 리포트나 기능 제안은 이슈를 통해 제출해 주세요.
 
-### 개발 환경 설정
+### 브랜치 전략
+
+- `main`: 릴리즈 브랜치 (릴리즈 버전을 올릴 때만 `develop`에서 통합)
+- `develop`: 통합 브랜치 (모든 PR의 대상)
+- 작업 브랜치: `develop`에서 분기하며 접두어로 용도를 구분합니다.
+  - `feat/<이름>`: 기능 추가
+  - `fix/<이름>`: 버그 수정
+  - `docs/<이름>`: 문서 수정
+
+### 기여 절차
 
 ```bash
-# 1. 포크 및 클론
-git clone https://github.com/openkcloud/kcloud-monitor.git
+# 1. GitHub에서 저장소를 포크한 뒤, 본인 포크를 클론
+git clone https://github.com/<your-id>/kcloud-monitor.git
+cd kcloud-monitor
+git remote add upstream https://github.com/openkcloud/kcloud-monitor.git
 
-# 2. 브랜치 생성
-git checkout -b feature/your-feature
+# 2. 최신 develop에서 작업 브랜치 생성
+git fetch upstream
+git checkout -b feat/your-feature upstream/develop
 
-# 3. 변경사항 커밋
-git commit -m "Add your feature"
+# 3. 변경사항 커밋 (아래 커밋 메시지 규칙 참고)
+git commit -m "✨ 추가(scope): 변경 내용 요약"
 
-# 4. 푸시 및 PR 생성
-git push origin feature/your-feature
+# 4. 본인 포크에 푸시한 뒤, openkcloud/kcloud-monitor의 develop으로 PR 생성
+git push origin feat/your-feature
 ```
+
+### 커밋 메시지 규칙
+
+`<이모지> <유형>(<범위>): <요약>` 형식을 사용합니다.
+
+| 이모지 | 유형 | 용도 |
+|--------|------|------|
+| ✨ | 추가 | 기능·테스트 추가 |
+| 🔧 | 수정 | 기존 동작 수정, 설정 변경 |
+| 🔧 | docs | 문서 수정 |
+
+예시: `✨ 추가(crud): get_npu_summary 정의`, `🔧 docs(readme): 문서 링크 정리`
 
 ## 라이선스
 
