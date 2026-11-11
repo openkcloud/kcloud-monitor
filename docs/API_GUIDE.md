@@ -270,6 +270,21 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 - 첫 기동 때 초기 정책 7건(GPU 오류, NPU 오류, 메모리 부족 종료, 재시작 반복, 노드 NotReady, VM 비정상, 서버 하드웨어 오류)이 들어간다. `DATABASE_URL` 이 없으면 초기 정책을 읽기 전용으로 돌려주고(`RECOVERY_STORE_NOT_CONFIGURED` 경고) 생성, 수정, 삭제는 503.
 - 규칙 위반은 422, `detail.errors` 에 `RISK_LEVEL_REQUIRED`, `UNKNOWN_PLACEHOLDER` 등.
 
+### Recovery — 복구 정보 (2)
+
+진행 중 장애에 후속 조치 정책을 대입해 복구 절차와 관련 정보를 만든다. 저장하지 않고 조회할 때마다 만들며, 조치를 실행하지 않는다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/recovery/recommendations` (`cluster`, `fault_type`, `priority`) | 장애별 복구 정보 요약. `urgent` 먼저 |
+| `/recovery/recommendations/{recommendation_id}` | 복구 정보 상세 |
+
+- 상세는 추정 원인(`probable_cause`, `confidence`), 조치 절차(`recommended_actions`, 참고 경로가 그 장애의 대상 값으로 채워짐), 영향 범위(`affected_scope`: 가속기, Pod, 워크로드, 물리서버까지의 경로), 조치 뒤 확인 방법(`verification`)을 담는다.
+- 우선순위는 장애 심각도에서 나온다. `critical` 은 `urgent`, `warning` 은 `normal`.
+- 영향 범위를 정하지 못하면 `affected_scope.status` 가 `unknown` 이고 수치는 null 이다 (0 과 구분).
+- 맞는 정책이 없는 장애는 목록에서 빠지고 `NO_POLICY_MATCHED` 경고가 붙는다. 상세는 404.
+- 검토 상태(수락, 거절)와 조치 결과는 저장하지 않는다.
+
 ### 별칭 — 단축 경로 (4)
 
 UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
