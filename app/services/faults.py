@@ -448,8 +448,10 @@ async def _related(fault: dict) -> tuple[dict, str]:
             if trace.status == "ambiguous":
                 return empty, "unknown"
             path = [h.model_dump(exclude_none=True) for h in trace.path]
+            workload = next((h.name for h in trace.path if h.layer == "workload" and h.status == "ok"), None)
             return {"scope": "pod", "path": path, "affected_pod_count": 1,
-                    "affected_pods": [{"namespace": trace.namespace, "pod": trace.pod, "via": "장애 대상"}]}, "ok"
+                    "affected_pods": [{"namespace": trace.namespace, "pod": trace.pod, "workload": workload,
+                                       "via": "장애 대상"}]}, "ok"
         node = t.get("node") or t.get("vm")  # VM 은 K8s 노드 이름과 같을 때만 Pod 를 찾을 수 있음
         if not node:
             return empty, "unknown"
