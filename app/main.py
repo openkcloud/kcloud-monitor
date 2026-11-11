@@ -14,6 +14,7 @@ from app.api.v2 import (
     auth,
     clusters,
     export,
+    faults,
     logs,
     metering,
     monitoring,
@@ -179,6 +180,7 @@ API_DESCRIPTION = """
 - Alerts : 알람 정책, 알림 채널, 활성 알람, 이력
 - SLO : LLM 서빙 응답 속도(TTFT, TPOT) 목표 달성률, 오류 예산, 시계열
 - Metering : 사용량(점유, 사용, 가중 시간, 전력량, 비용), 단가 정책, 월말 비용 예측, 예산 대비 현황, 가상 시나리오, 예산
+- Faults : 진행 중 장애, 장애 이력, 장애별 증거(메트릭, 로그, 영향 자원)와 원인 분석
 """
 
 app = FastAPI(
@@ -251,6 +253,7 @@ app.include_router(resource_map.router, prefix=V2, tags=["Resource Map"], depend
 app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTECTED)
 app.include_router(slo.router, prefix=V2, tags=["SLO"], dependencies=PROTECTED)
 app.include_router(metering.router, prefix=V2, tags=["Metering"], dependencies=PROTECTED)
+app.include_router(faults.router, prefix=V2, tags=["Faults"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
@@ -288,6 +291,7 @@ def read_root():
             "export": "GET /api/v2/export/power - 데이터 내보내기",
             "resource_map": "GET /api/v2/resource-map/pods/{pod} - Pod에서 물리서버까지 자원 추적",
             "metering": "GET /api/v2/metering/usage/summary - 사용량과 비용, /metering/predictions/monthly - 월말 비용 예측",
+            "faults": "GET /api/v2/faults/active - 진행 중 장애, /faults/{fault_id} - 증거와 원인 분석",
             "system": "GET /api/v2/system/health - 서비스 헬스체크",
         },
     }
