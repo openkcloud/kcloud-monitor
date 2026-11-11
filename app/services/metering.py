@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional
 
-from app.config import settings
+from app.config import npu_util, settings
 from app.services.cluster_discovery import DEFAULT_CLUSTER_NAME, cluster_discovery
 from app.services.prometheus import parse_finite, prometheus_client
 
@@ -196,10 +196,16 @@ CHUNK = timedelta(hours=24)  # 밀린 구간을 한 번에 조회하는 최대 �
 
 
 def card_util_expr(vendor: str) -> str:
-    """카드 1장당 시계열 1개인 사용률(%) 식."""
+    """카드 1장당 시계열 1개인 사용률(%) 식. NPU 는 모니터링 API 와 같은 배율(NPU_UTIL_SCALE_*)을 적용.
+
+    >>> card_util_expr("furiosa")
+    'avg by (cluster, uuid, hostname) (furiosa_npu_core_utilization)'
+    >>> card_util_expr("nvidia").count("avg by (cluster, UUID, Hostname, modelName)")
+    2
+    """
     src = METER_SOURCES[vendor]
     by = ", ".join(["cluster", src["id"], src["host"]] + ([src["model"]] if src["model"] else []))
-    expr = f"avg by ({by}) ({src['util']})"
+    expr = npu_util(f"avg by ({by}) ({src['util']})", vendor)
     if src.get("util_fallback"):
         expr = f"({expr}) or (avg by ({by}) ({src['util_fallback']}))"
     return expr
@@ -242,8 +248,31 @@ async def meter_range(start: datetime, end: datetime) -> tuple[list[dict], set[d
         prometheus_client.range_query(q, s, e, "1h", raise_errors=True) for _, _, q in jobs))
     covered = {datetime.fromtimestamp(float(ts), timezone.utc) - timedelta(hours=1)
                for series in results[-1] for ts, raw in series.get("values", []) if parse_finite(raw)}
+    fields = [(vendor, field, result) for (vendor, field, _), result in zip(jobs[:-1], results)]
+    return build_records(fields, projects), covered
+
+
+def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str, Optional[str]]) -> list[dict]:
+    """(벤더, 필드, 범위 조회 결과) 목록을 카드 x 1시간 사용량 레코드로 조립. 벤더마다 allocated_hours 가 먼저 와야 한다.
+
+    표본 시각은 구간 끝이라 레코드 ts 는 1시간 앞. 점유는 1.0 을 넘지 않게 자르고, 전력이 없으면 NO_POWER_DATA.
+
+    >>> def s(v, uuid="GPU-1"):
+    ...     return [{"metric": {"cluster": "l40s", "UUID": uuid, "Hostname": "n1", "modelName": "NVIDIA L40S"},
+    ...              "values": [[1794366000, v]]}]
+    >>> recs = build_records([("nvidia", "allocated_hours", s("1.0167") + s("0.5", "GPU-2")),
+    ...                       ("nvidia", "weighted_hours", s("0.25")),
+    ...                       ("nvidia", "power_kwh", s("0.1234567", "GPU-2") + s("0.1", "GPU-9"))], {"l40s": "p1"})
+    >>> [(r["resource_id"], r["allocated_hours"], r["usage_hours"], r["weighted_hours"], r["power_kwh"],
+    ...   r["power_estimation"], r["warnings"]) for r in recs]
+    [('GPU-1', 1.0, 0.0, 0.25, None, None, ['NO_POWER_DATA']), ('GPU-2', 0.5, 0.0, None, 0.123457, 'direct', [])]
+    >>> recs[0]["ts"].isoformat(), recs[0]["project"]
+    ('2026-11-11T02:00:00+00:00', 'p1')
+    >>> build_records([("nvidia", "allocated_hours", s("1"))], {})[0]["warnings"]
+    ['NO_PROJECT_MAPPING', 'NO_POWER_DATA']
+    """
     recs: dict[tuple, dict] = {}
-    for (vendor, field, _), result in zip(jobs[:-1], results):  # 벤더마다 allocated_hours 가 먼저 옴
+    for vendor, field, result in fields:
         src = METER_SOURCES[vendor]
         for series in result:
             m = series.get("metric", {})
@@ -277,7 +306,7 @@ async def meter_range(start: datetime, end: datetime) -> tuple[list[dict], set[d
     for r in recs.values():
         if r["power_kwh"] is None:
             r["warnings"].append("NO_POWER_DATA")
-    return list(recs.values()), covered
+    return list(recs.values())
 
 
 async def meter_pending(now: Optional[datetime] = None) -> int:
