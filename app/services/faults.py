@@ -34,7 +34,7 @@ HISTORY_DAYS = 30  # 장애 ID 로 찾을 때 거슬러 올라가는 기간
 
 FAULT_TYPES: dict[str, str] = {
     "accelerator_error": "GPU 오류 (XID, 상태 이상, 과열, 수집 중단)",
-    "npu_fault": "NPU 오류 (상태 이상, 과열, 수집 중단)",
+    "npu_fault": "NPU 오류 (응답 없음, 상태 이상, 과열, 수집 중단)",
     "workload_oom": "워크로드 메모리 부족 종료",
     "workload_crash_loop": "워크로드 재시작 반복",
     "node_not_ready": "노드 NotReady",
@@ -69,6 +69,13 @@ SIGNALS: dict[str, dict] = {
                    "target": _POD},
     "restart_loop": {"fault_type": "workload_crash_loop", "severity": "warning", "value": "restarts_1h",
                      "query": "increase(kube_pod_container_status_restarts_total[1h]) >= 3", "target": _POD},
+    # NPU 는 XID 가 없어 벤더 exporter 의 상태 지표로 본다. 가속기 API 의 정상 판정(alive 1, HEALTH 0)과 같은 기준
+    "npu_dead": {"fault_type": "npu_fault", "severity": "critical", "value": "", "vendor": "furiosa",
+                 "query": "furiosa_npu_alive == 0",
+                 "target": {"node": "hostname", "accelerator_id": "device"}},
+    "npu_unhealthy": {"fault_type": "npu_fault", "severity": "critical", "value": "health_code", "vendor": "rebellions",
+                      "query": "RBLN_DEVICE_STATUS:HEALTH != 0",
+                      "target": {"node": "hostname", "accelerator_id": "uuid", "model": "card"}},
     "node_not_ready": {"fault_type": "node_not_ready", "severity": "critical", "value": "",
                        "query": 'kube_node_status_condition{condition="Ready",status="true"} == 0',
                        "target": {"node": "node"}},
@@ -134,6 +141,13 @@ def signal_fault(key: str, item: dict) -> dict:
     ...                                 "value": [0, "1794366000"]})
     >>> (f["target"]["cluster"], f["detected_at"], f["summary"])
     ('mgmt', '2026-11-11T03:00:00+00:00', 'ml/train-0 컨테이너 main 메모리 부족 종료 (OOMKilled)')
+    >>> f = signal_fault("npu_dead", {"metric": {"cluster": "furiosa", "hostname": "npu-node-1", "device": "npu0"},
+    ...                               "value": [0, "0"]})
+    >>> (f["fault_type"], f["target"]["vendor"], f["target"]["node"], f["summary"])
+    ('npu_fault', 'furiosa', 'npu-node-1', 'NPU npu0 응답 없음 (alive 0)')
+    >>> f = signal_fault("npu_unhealthy", {"metric": {"hostname": "npu-node-2", "uuid": "U-1"}, "value": [0, "2"]})
+    >>> (f["target"]["accelerator_id"], f["value"], f["summary"])
+    ('U-1', 2.0, 'NPU U-1 상태 이상 (HEALTH 2)')
     """
     from app.api.v2.logs import _CRITICAL_XID_CODES
 
@@ -156,6 +170,10 @@ def signal_fault(key: str, item: dict) -> dict:
         summary = f"{where} 컨테이너 {target.get('container', '?')} 메모리 부족 종료 (OOMKilled)"
     elif key == "restart_loop":
         summary = f"{where} 컨테이너 {target.get('container', '?')} 최근 1시간 재시작 {value or 0:.0f}회"
+    elif key == "npu_dead":
+        summary = f"NPU {target.get('accelerator_id', '?')} 응답 없음 (alive 0)"
+    elif key == "npu_unhealthy":
+        summary = f"NPU {target.get('accelerator_id', '?')} 상태 이상 (HEALTH {value or 0:g})"
     elif key == "node_not_ready":
         summary = f"노드 {target.get('node', '?')} NotReady"
     else:
@@ -324,6 +342,10 @@ def evidence_queries(fault: dict) -> dict[str, str]:
     >>> evidence_queries({"fault_type": "accelerator_error", "target": {
     ...     "cluster": "l40s", "vendor": "nvidia", "accelerator_id": "GPU-1"}})["temperature_celsius"]
     'DCGM_FI_DEV_GPU_TEMP{cluster="l40s",UUID="GPU-1"}'
+    >>> q = evidence_queries({"fault_type": "npu_fault", "target": {
+    ...     "cluster": "furiosa", "vendor": "furiosa", "accelerator_id": "npu0"}})
+    >>> q["throttle_events"]  # 쓰로틀 이력은 지표가 있는 벤더만
+    'furiosa_npu_throttling_events_count{label!="idle",cluster="furiosa",device="npu0"}'
     """
     from app.api.v2.accelerators import VENDOR_CONFIG
 
@@ -337,7 +359,8 @@ def evidence_queries(fault: dict) -> dict[str, str]:
         cluster = esc(cluster_label(t.get("cluster", DEFAULT_CLUSTER_NAME)))
         return {name: cfg[key].format(cluster=cluster, extra=extra)
                 for name, key in (("utilization_percent", "util"), ("temperature_celsius", "temp"),
-                                  ("power_watts", "power"), ("memory_used", "mem_used")) if key in cfg}
+                                  ("power_watts", "power"), ("memory_used", "mem_used"),
+                                  ("throttle_events", "throttle_events")) if key in cfg}
     if kind in ("workload_oom", "workload_crash_loop"):
         if not t.get("pod"):
             return {}
@@ -486,7 +509,7 @@ async def collect_evidence(fault: dict, now: Optional[datetime] = None) -> dict:
 # 4. 분석
 # ---------------------------------------------------------------------------
 
-THROTTLE_TEMP_C = 85  # 가속기 API 의 쓰로틀 진입 온도 초기값과 같음
+THROTTLE_TEMP_C = 85  # 벤더를 모를 때 쓰는 값. 알면 가속기 API 의 벤더별 쓰로틀 진입 온도를 쓴다
 
 
 def _peak(evidence: dict, metric: str) -> Optional[float]:
@@ -517,6 +540,11 @@ def analyze(fault: dict, evidence: dict) -> dict:
     >>> a = analyze({"fault_type": "accelerator_error", "trigger": "stale_seconds"}, ev)
     >>> (a["probable_cause"], a["confidence"])
     ('메트릭 수집이 끊김. exporter, 노드, VM 중 하나가 멈춘 상태로 추정', 'low')
+    >>> ev = {"metrics_snapshot": [{"metric": "temperature_celsius", "max": 87.0}, {"metric": "throttle_events", "max": 2.0}],
+    ...       "logs_snapshot": [], "collection_status": {"metrics": "ok", "logs": "empty", "resource_map": "ok"}}
+    >>> a = analyze({"fault_type": "npu_fault", "trigger": "npu_unhealthy", "target": {"vendor": "rebellions"}}, ev)
+    >>> (a["confidence"], a["contributing_factors"], a["evidence_basis"])  # 리벨리온 쓰로틀 기준은 90°C 라 온도는 빠짐
+    ('medium', ['장애 구간에 쓰로틀(클럭 제한) 발생'], ['metrics', 'signal'])
     """
     kind, trigger = fault["fault_type"], fault.get("trigger")
     fields = [e["detected_fields"] for e in evidence["logs_snapshot"] if e.get("detected_fields")]
@@ -538,9 +566,21 @@ def analyze(fault: dict, evidence: dict) -> dict:
             cause = "가속기 온도가 정책 임계값을 넘음"
         elif trigger == "unhealthy":
             cause = "가속기 상태 지표가 정상값이 아님"
+        elif trigger == "npu_dead":
+            cause = "NPU 가 응답하지 않음 (exporter 가 alive 0 으로 보고). 장치, 드라이버, PCI 연결 중 하나의 문제로 추정"
+            basis.add("signal")
+        elif trigger == "npu_unhealthy":
+            cause = "NPU 드라이버가 장치 상태를 비정상으로 보고 (HEALTH 가 0 이 아님)"
+            basis.add("signal")
+        from app.api.v2.accelerators import VENDOR_CONFIG
+
+        limit = VENDOR_CONFIG.get((fault.get("target") or {}).get("vendor"), {}).get("throttle_temp", THROTTLE_TEMP_C)
         temp = _peak(evidence, "temperature_celsius")
-        if temp is not None and temp >= THROTTLE_TEMP_C:
-            factors.append(f"장애 구간 최고 온도 {temp:g}°C (쓰로틀 기준 {THROTTLE_TEMP_C}°C 이상)")
+        if temp is not None and temp >= limit:
+            factors.append(f"장애 구간 최고 온도 {temp:g}°C (쓰로틀 기준 {limit}°C 이상)")
+            basis.add("metrics")
+        if _peak(evidence, "throttle_events"):
+            factors.append("장애 구간에 쓰로틀(클럭 제한) 발생")
             basis.add("metrics")
     elif kind == "workload_oom":
         cuda = next((f for f in fields if f.get("error_type") == "CUDA OOM"), None)

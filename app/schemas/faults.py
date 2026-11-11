@@ -39,7 +39,7 @@ class Fault(BaseModel):
     severity: str = Field(..., description="심각도 (critical | warning | info). 알람과 같은 구분. 고정 신호는 critical, warning 만")
     status: str = Field(..., description="상태 (active | resolved | unknown). unknown: 알람 정책이 지워져 해제 시각을 모름")
     source: str = Field(..., description="탐지 경로 (alert: 알람 정책 | signal: 고정 신호)")
-    trigger: Optional[str] = Field(None, description="탐지 근거. alert 면 알람 지표 키(예: log_oom), signal 이면 신호 키(xid | oom_killed | restart_loop | node_not_ready | vm_error)")
+    trigger: Optional[str] = Field(None, description="탐지 근거. alert 면 알람 지표 키(예: log_oom), signal 이면 신호 키(xid | oom_killed | restart_loop | npu_dead | npu_unhealthy | node_not_ready | vm_error)")
     detected_at: Optional[str] = Field(None, description="발생 시각 (ISO 8601, UTC). 고정 신호는 OOM 종료만 시각을 알고 나머지는 null")
     resolved_at: Optional[str] = Field(None, description="해제 시각. 진행 중이면 null")
     target: FaultTarget = Field(..., description="장애 대상")

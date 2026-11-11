@@ -58,7 +58,8 @@ async def list_active(cluster: Optional[str] = _CLUSTER, fault_type: Optional[st
     * `alert`: 알람 정책이 firing 인 것 중 장애로 보는 지표 (가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그,
       재시작 반복 로그, 하드웨어와 디스크 오류 로그). 사용률, 메모리 포화, SLO 알람은 장애가 아니라 빠짐
     * `signal`: 알람 정책 없이도 보는 고정 신호. `xid`(최근 1시간 XID 코드 변화), `oom_killed`(최근 1시간 OOMKilled 종료),
-      `restart_loop`(1시간 재시작 3회 이상), `node_not_ready`, `vm_error`(Nova 상태 ERROR)
+      `restart_loop`(1시간 재시작 3회 이상), `npu_dead`(Furiosa alive 0), `npu_unhealthy`(Rebellions HEALTH 가 0 이 아님),
+      `node_not_ready`, `vm_error`(Nova 상태 ERROR)
 
     장애 유형
 
