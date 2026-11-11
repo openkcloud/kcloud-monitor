@@ -249,7 +249,7 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 | `/faults/history` (`start`, `status`, `limit`) | 장애 이력. 알람 이력의 발생, 해제 기록으로 만든다 (기본 7일) |
 | `/faults/{fault_id}` | 장애 상세: 증거(`evidence`)와 원인 분석(`analysis`) |
 
-- 탐지 경로는 두 가지다. `alert` 는 알람 정책 중 장애로 보는 지표(가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그, 재시작 반복 로그, 하드웨어와 디스크 오류 로그)이고, `signal` 은 정책 없이도 보는 고정 신호(`xid`, `oom_killed`, `restart_loop`, `node_not_ready`, `vm_error`)다. 사용률, 메모리 포화, SLO 알람은 장애로 보지 않는다.
+- 탐지 경로는 두 가지다. `alert` 는 알람 정책 중 장애로 보는 지표(가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그, 재시작 반복 로그, 하드웨어와 디스크 오류 로그)이고, `signal` 은 정책 없이도 보는 고정 신호(`xid`, `oom_killed`, `restart_loop`, `npu_dead`, `npu_unhealthy`, `node_not_ready`, `vm_error`)다. NPU 는 XID 가 없어 Furiosa 는 `furiosa_npu_alive` 0, Rebellions 는 `RBLN_DEVICE_STATUS:HEALTH` 가 0 이 아닌 카드를 본다. 사용률, 메모리 포화, SLO 알람은 장애로 보지 않는다.
 - 장애 유형은 `accelerator_error`, `npu_fault`, `workload_oom`, `workload_crash_loop`, `node_not_ready`, `vm_down`, `hardware_fault`.
 - 증거는 발생 30분 전부터 10분 뒤까지의 메트릭, 관련 로그 최대 20줄(XID 코드, OOM 프로세스 같은 추출 필드 포함), 대상에서 물리서버까지의 경로와 영향 Pod 다. 종류별 수집 결과는 `evidence.collection_status` 에 있고, 일부가 빠지면 `EVIDENCE_PARTIAL` 경고가 붙는다.
 - 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`.
