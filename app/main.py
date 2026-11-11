@@ -20,6 +20,7 @@ from app.api.v2 import (
     monitoring,
     nodes,
     openstack,
+    recovery_policies,
     resource_map,
     slo,
     storage,
@@ -33,6 +34,7 @@ from app.logging_config import configure_logging
 
 from app.services import alerts as alert_service
 from app.services import metering as metering_service
+from app.services import recovery_policies as recovery_policy_service
 from app.middleware import MetricsMiddleware, RateLimitMiddleware, RequestIDMiddleware
 
 APP_VERSION = "0.2.0"
@@ -55,14 +57,19 @@ async def lifespan(app: FastAPI):
             meter_task = asyncio.create_task(metering_service.run_loop())
         except Exception as exc:
             print(f"metering store unavailable: {exc}")
+        try:
+            await recovery_policy_service.store.connect()
+        except Exception as exc:
+            print(f"recovery policy store unavailable: {exc}")
     else:
-        print("DATABASE_URL 미설정: 알람, 미터링 계측, 단가 정책, 예산 기능 비활성")
+        print("DATABASE_URL 미설정: 알람, 미터링 계측, 단가 정책, 예산, 후속 조치 정책 수정 기능 비활성")
     yield
     for task in (loop_task, meter_task):
         if task:
             task.cancel()
     await alert_service.store.close()
     await metering_service.store.close()
+    await recovery_policy_service.store.close()
     print("Application shutdown")
 
 
@@ -181,6 +188,7 @@ API_DESCRIPTION = """
 - SLO : LLM 서빙 응답 속도(TTFT, TPOT) 목표 달성률, 오류 예산, 시계열
 - Metering : 사용량(점유, 사용, 가중 시간, 전력량, 비용), 단가 정책, 월말 비용 예측, 예산 대비 현황, 가상 시나리오, 예산
 - Faults : 진행 중 장애, 장애 이력, 장애별 증거(메트릭, 로그, 영향 자원)와 원인 분석
+- Recovery Policies : 장애 유형별 후속 조치 정책(조치 절차) 설정과 관리. 권고 전용, 자동 실행 없음
 """
 
 app = FastAPI(
@@ -254,6 +262,7 @@ app.include_router(alerts.router, prefix=V2, tags=["Alerts"], dependencies=PROTE
 app.include_router(slo.router, prefix=V2, tags=["SLO"], dependencies=PROTECTED)
 app.include_router(metering.router, prefix=V2, tags=["Metering"], dependencies=PROTECTED)
 app.include_router(faults.router, prefix=V2, tags=["Faults"], dependencies=PROTECTED)
+app.include_router(recovery_policies.router, prefix=V2, tags=["Recovery Policies"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root
