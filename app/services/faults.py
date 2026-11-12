@@ -383,6 +383,9 @@ def summarize_series(name: str, result: list[dict]) -> list[dict]:
     ...                                           "values": [[1794366000, "70"], [1794366060, "NaN"], [1794366120, "88"]]}])
     [{'metric': 'temperature_celsius', 'labels': {'UUID': 'GPU-1'}, 'min': 70.0, 'max': 88.0, 'last': 88.0, \
 'points': [['2026-11-11T03:00:00+00:00', 70.0], ['2026-11-11T03:02:00+00:00', 88.0]]}]
+    >>> [s["labels"]["label"] for s in summarize_series("throttle_events", [  # 쓰로틀 사유별 시계열을 구분
+    ...     {"metric": {"device": "npu0", "label": r}, "values": [[1794366000, "0"]]} for r in ("hw_power_cap", "thermal_slowdown")])]
+    ['hw_power_cap', 'thermal_slowdown']
     """
     out = []
     for series in result[:MAX_SERIES]:
@@ -391,8 +394,9 @@ def summarize_series(name: str, result: list[dict]) -> list[dict]:
         if not points:
             continue
         values = [p[1] for p in points]
+        # label 은 Furiosa 쓰로틀 지표의 사유(hw_power_cap 등). 없으면 사유별 시계열이 같은 라벨로 보여 구분되지 않음
         labels = {k: v for k, v in series.get("metric", {}).items()
-                  if k in ("UUID", "device", "uuid", "Hostname", "hostname", "container", "condition", "node")}
+                  if k in ("UUID", "device", "uuid", "Hostname", "hostname", "container", "condition", "node", "label")}
         out.append({"metric": name, "labels": labels, "min": min(values), "max": max(values), "last": values[-1],
                     "points": points})
     return out
