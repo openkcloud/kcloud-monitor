@@ -334,7 +334,9 @@ vLLM 히스토그램(TTFT, TPOT)을 Prometheus 에서 읽어 분위수, 목표 �
 - 탐지 경로는 두 가지다. `alert` 는 알람 정책 중 장애로 보는 지표(가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그, 재시작 반복 로그, 하드웨어와 디스크 오류 로그)이고, `signal` 은 정책 없이도 보는 고정 신호(`xid`, `oom_killed`, `restart_loop`, `npu_dead`, `npu_unhealthy`, `node_not_ready`, `vm_error`)다. NPU 는 XID 가 없어 Furiosa 는 `furiosa_npu_alive` 0, Rebellions 는 `RBLN_DEVICE_STATUS:HEALTH` 가 0 이 아닌 카드를 본다. 사용률, 메모리 포화, SLO 알람은 장애로 보지 않는다.
 - 장애 유형은 `accelerator_error`, `npu_fault`, `workload_oom`, `workload_crash_loop`, `node_not_ready`, `vm_down`, `hardware_fault`.
 - 증거는 발생 30분 전부터 10분 뒤까지의 메트릭, 관련 로그 최대 20줄(XID 코드, OOM 프로세스 같은 추출 필드 포함), 대상에서 물리서버까지의 경로와 영향 Pod 다. 종류별 수집 결과는 `evidence.collection_status` 에 있고, 일부가 빠지면 `EVIDENCE_PARTIAL` 경고가 붙는다.
-- 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`.
+- NPU 장애의 로그 증거는 드라이버 패턴에 더해 오류 단어(error, fatal, panic)가 있는 줄만 남긴다. 쓰로틀 메트릭은 사유(`labels.label`)별 시계열로 나온다.
+- 영향 Pod 는 대상의 K8s 노드에서 센다. VM 장애는 같은 이름의 K8s 노드가 있는 서비스 클러스터에서 찾는다. K8s 노드가 아닌 단독 VM 은 `scope` 가 `vm` 이고 Pod 수는 null 이다. GPU 장애는 exporter 가 카드별 Pod 를 알려 주면 그 카드의 Pod 만(`scope` `accelerator`), 알려 주지 않으면 노드의 Pod 전체(`scope` `node`)다.
+- 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`. `evidence_basis` 에는 장애를 잡은 탐지 경로(`alert`, `signal`)와 판단에 쓴 증거(`logs`, `metrics`)가 들어간다.
 - `DATABASE_URL` 이 없으면 `/faults/active` 는 고정 신호만 보고(`ALERT_STORE_NOT_CONFIGURED` 경고), `/faults/history` 는 503. 고정 신호 장애는 신호가 사라지면 이력에 남지 않는다.
 
 ### Recovery Policies — 후속 조치 정책 (5)
@@ -363,7 +365,7 @@ vLLM 히스토그램(TTFT, TPOT)을 Prometheus 에서 읽어 분위수, 목표 �
 
 - 상세는 추정 원인(`probable_cause`, `confidence`), 조치 절차(`recommended_actions`, 참고 경로가 그 장애의 대상 값으로 채워짐), 영향 범위(`affected_scope`: 가속기, Pod, 워크로드, 물리서버까지의 경로), 조치 뒤 확인 방법(`verification`)을 담는다.
 - 우선순위는 장애 심각도에서 나온다. `critical` 은 `urgent`, `warning` 은 `normal`.
-- 영향 범위를 정하지 못하면 `affected_scope.status` 가 `unknown` 이고 수치는 null 이다 (0 과 구분).
+- 영향 범위를 정하지 못하면 `affected_scope.status` 가 `unknown` 이고 수치는 null 이다 (0 과 구분). 단독 VM 처럼 Pod 로 셀 수 없는 대상은 `status` 가 `ok` 여도 `pod_count`, `workloads` 가 null 이다.
 - 맞는 정책이 없는 장애는 목록에서 빠지고 `NO_POLICY_MATCHED` 경고가 붙는다. 상세는 404.
 - 검토 상태(수락, 거절)와 조치 결과는 저장하지 않는다.
 
