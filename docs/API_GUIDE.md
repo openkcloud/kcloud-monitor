@@ -1,13 +1,23 @@
 # API 사용 가이드 (v2)
 
-KCloud Monitor v2 API 가이드입니다. 현재는 **스캐폴드 단계**로, 라우팅·인증·경로 구조가 확정되어 있고 모든 엔드포인트가 스텁 응답을 반환합니다.
+KCloud Monitor v2 API 가이드입니다. `/api/v2` 아래 **155개 라우트**가 등록되어 있고, `GET /openstack/vms/{vm_id}/gpu-passthrough` 하나를 제외한 모든 엔드포인트가 실제 데이터소스(Prometheus, Loki, PostgreSQL, OpenStack API)로 동작합니다.
+
+데이터소스 설정에 따라 일부 영역은 503을 반환합니다.
+
+| 영역 | 필요한 설정 | 미설정 시 |
+|------|------------|----------|
+| 대부분의 조회 API | `PROMETHEUS_URL` | 조회 실패(`/system/health` 는 `degraded`) |
+| Logs | `LOKI_URL` | 503 |
+| Alerts | `DATABASE_URL` | 503 `ALERT_STORE_NOT_CONFIGURED` |
+| Metering · Faults · Recovery | `DATABASE_URL` | 일부 경로 503 (각 섹션 참고) |
+| OpenStack | `OPENSTACK_*` | 조회 실패 |
 
 ## 목차
 - [기본 정보](#기본-정보)
 - [인증](#인증)
 - [공통 파라미터](#공통-파라미터)
 - [공통 응답 정책](#공통-응답-정책)
-- [스텁 응답 형태](#스텁-응답-형태)
+- [미구현 엔드포인트](#미구현-엔드포인트)
 - [엔드포인트 전체 목록](#엔드포인트-전체-목록)
 - [SSE 스트리밍](#sse-스트리밍)
 
@@ -29,7 +39,7 @@ JWT Bearer 또는 `X-API-Key` 병행 인증입니다. System(`/system/*`)과 Aut
 # 1) 로그인 → JWT 발급
 curl -X POST http://localhost:8000/api/v2/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"changeme"}'
+  -d '{"username":"admin","password":"<API_AUTH_PASSWORD>"}'
 
 # 2) Bearer 토큰으로 호출
 curl -H "Authorization: Bearer <TOKEN>" http://localhost:8000/api/v2/clusters
@@ -40,9 +50,10 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `POST /auth/login` | JSON 계정으로 JWT 발급 |
-| `POST /auth/token` | HTTP Basic으로 JWT 발급 |
+| `POST /auth/login` | JSON 계정(`API_AUTH_USERNAME` / `API_AUTH_PASSWORD`)으로 JWT 발급 |
 | `GET /auth/verify` | 토큰 유효성 확인 |
+
+로그인 계정은 `.env` 의 `API_AUTH_USERNAME`, `API_AUTH_PASSWORD` 값입니다. HTTP Basic 로그인(`POST /auth/token`)은 삭제되었습니다.
 
 > 목표 구조는 API Gateway가 발급하는 JWT(RBAC/테넌트 클레임) + service-to-service JWT입니다. 현재 라우터는 Gateway 도입 전 개발용입니다.
 
@@ -77,7 +88,7 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
 
 | 필드 | 설명 |
 |------|------|
-| `status` | `success` \| `partial` \| `error` (스텁 단계: `not_implemented`) |
+| `status` | `success` \| `partial` \| `error` (미구현 엔드포인트: `not_implemented`) |
 | `observed_at` | 데이터 수집 시각 (ISO 8601) |
 | `warnings[]` | `STALE_DATA`, `PARTIAL_SOURCE`, `ESTIMATED_POWER` 등 (정상 시 생략) |
 | `partial_sources[]` | 일부 데이터소스 장애 시 실패 소스 목록 |
@@ -95,129 +106,195 @@ curl -H "X-API-Key: <KEY>" http://localhost:8000/api/v2/clusters
 
 전력 응답에는 신뢰도 필드가 추가됩니다: `source`(kepler|dcgm|ipmi|derived), `power_estimation`(direct|attributed|proportional), `attribution.method`.
 
-## 스텁 응답 형태
+## 미구현 엔드포인트
 
-구현 전까지 모든 엔드포인트는 HTTP 200 + 아래 형태를 반환합니다. 포탈/클라이언트는 이 단계에서 경로·파라미터·인증 연동을 검증할 수 있습니다.
+아래 엔드포인트는 아직 HTTP 200 + 스텁 응답(`status: not_implemented`, `warnings: ["NOT_IMPLEMENTED"]`)을 반환합니다.
+
+| 엔드포인트 | 사유 |
+|-----------|------|
+| `GET /openstack/vms/{vm_id}/gpu-passthrough` | libvirt hostdev 연동 전 |
 
 ```json
 {
   "status": "not_implemented",
-  "api": "GET /api/v2/clusters/mgmt/nodes/w1/accelerators",
-  "path_template": "/api/v2/clusters/{cluster}/nodes/{node}/accelerators",
-  "description": "노드 가속기 목록(GPU/NPU 통합, UUID 식별)",
-  "data_sources": ["Mimir(DCGM_FI_DEV_* + kcloud_furiosa_*)", "resource-map 원장"],
-  "design_ref": "sample_api.md §4.1",
+  "api": "GET /api/v2/openstack/vms/abc/gpu-passthrough",
+  "path_template": "/api/v2/openstack/vms/{vm_id}/gpu-passthrough",
+  "description": "VM GPU passthrough 확인(libvirt hostdev)",
+  "data_sources": ["libvirt(hostdev)"],
   "data": null,
   "observed_at": "2026-08-06T00:00:00Z",
-  "warnings": ["NOT_IMPLEMENTED"],
-  "params": {"limit": 100, "offset": 0, "sort_order": "asc"}
+  "warnings": ["NOT_IMPLEMENTED"]
 }
 ```
 
 ## 엔드포인트 전체 목록
 
-canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(예외: `POST /auth/*`, `POST /resource-map/discovery/trigger`).
+`/api/v2` 아래 **155 라우트**입니다. 메서드 표기가 없으면 `GET` 입니다. 정확한 파라미터와 응답 스키마는 Swagger(`/docs`)를 참고하세요.
+
+| 영역 | 수량 |
+|------|------|
+| Auth / System | 2 / 3 |
+| Clusters | 5 |
+| Nodes + Hardware(IPMI) | 9 + 3 |
+| Accelerators + Partitions | 7 + 4 |
+| 별칭(짧은 경로) | 4 |
+| Storage (Ceph) | 9 |
+| OpenStack | 10 |
+| Workloads 클러스터 범위 / 전역 | 11 / 10 |
+| Monitoring | 15 |
+| Logs | 10 |
+| Export / Resource-Map | 3 / 1 |
+| Alerts / SLO | 15 / 3 |
+| Metering / Faults / Recovery Policies / Recovery | 21 / 3 / 5 / 2 |
 
 ### Clusters (5)
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters` | 클러스터 목록 (management/service 구분) |
+| `/clusters` (`type`, `project`, `limit`, `offset`) | 클러스터 목록 (management/service 구분) |
 | `/clusters/{c}` | 클러스터 상세 |
-| `/clusters/{c}/summary` | 리소스 요약 KPI |
-| `/clusters/{c}/topology` | 계층형 토폴로지 (Node→Pod→Container→가속기) |
-| `/clusters/{c}/power` | 클러스터 전력 합계 [P1] |
+| `/clusters/{c}/resource` | 클러스터 자원 현황 |
+| `/clusters/{c}/topology` | 계층형 토폴로지 |
+| `/clusters/{c}/power` | 클러스터 가속기 전력 합계 [P1] |
 
-### Nodes (10) + Hardware/IPMI (3)
+### Nodes (9) + Hardware/IPMI (3)
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters/{c}/nodes` · `/nodes/summary` · `/nodes/{n}` | 목록 / 집계 / 상세. 목록 항목의 `utilization_percent` (호스트 가속기 사용률 평균)로 호스트맵 색상 결정 |
+| `/clusters/{c}/nodes` (`node_type` + 목록 파라미터) · `/nodes/{n}` | 노드 목록 / 상세. 목록 항목의 `utilization_percent` (호스트 가속기 사용률 평균)로 호스트맵 색상 결정 |
 | `/clusters/{c}/nodes/{n}/metrics` | CPU/MEM/Disk/Net 종합 [M1] |
-| `/clusters/{c}/nodes/{n}/power` · `/power/timeseries` | Kepler 전력 [P2] |
 | `/clusters/{c}/nodes/{n}/cpu` · `/memory` · `/storage` · `/network` | 자원별 상세 |
+| `/clusters/{c}/nodes/{n}/power` · `/power/timeseries` | 서버 전력 현재값 / 시계열 [P2] |
 | `/clusters/{c}/nodes/{n}/hardware/sensors` | IPMI 센서 전체 (물리 노드 전용) |
 | `/clusters/{c}/nodes/{n}/hardware/power` | BMC 전력 실측 [P3] |
 | `/clusters/{c}/nodes/{n}/hardware/temperature` | IPMI 온도 |
 
-### Accelerators (8) + Partitions (4)
+### Accelerators (7) + Partitions (4)
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `.../nodes/{n}/accelerators` · `/summary` · `/topology` | GPU/NPU 목록 / 집계 / NVLink·PCIe 토폴로지 |
+| `.../nodes/{n}/accelerators` · `/topology` | GPU/NPU 목록 / 가속기 간 연결 토폴로지 |
 | `.../accelerators/{id}` · `/metrics` · `/temperature` | 상세 / 실시간 메트릭 [M2] / 온도 |
-| `.../accelerators/{id}/power` · `/power/timeseries` | DCGM 전력 실측 [P4] |
+| `.../accelerators/{id}/power` · `/power/timeseries` | 가속기 전력 [P4] |
 | `.../accelerators/{id}/partitions` · `/{pid}` | 파티션(MIG/vGPU/NPU slice) 목록 / 상세 |
 | `.../partitions/{pid}/power` · `/power/timeseries` | 파티션 전력 추정 [P5] |
 
-### Storage — Ceph (10, v2 신규 도메인)
+### Storage — Ceph (9)
+
+클러스터 경로 없이 `/storage/ceph/*` 로 조회합니다.
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters/{c}/storage/ceph/summary` [S1] · `/health` [S2] | Ceph 요약 / health 상세 |
-| `/clusters/{c}/storage/ceph/capacity` [S3] · `/capacity/timeseries` [S9] | 용량 / 시계열 |
-| `/clusters/{c}/storage/ceph/osds` [S4] · `/osds/{osd_id}` [S5] | OSD 목록 / 상세 |
-| `/clusters/{c}/storage/ceph/pools` [S6] · `/pools/{pool}` [S7] | 풀 목록 / 상세 |
-| `/clusters/{c}/storage/ceph/pgs` [S8] | PG 상태 요약 |
-| `/clusters/{c}/storage/summary` [S10] | 스토리지 통합 요약 |
+| `/storage/ceph/summary` · `/health` | Ceph 요약 / 상태 점검 상세 |
+| `/storage/ceph/capacity` · `/capacity/timeseries` | 용량 / 시계열 |
+| `/storage/ceph/osds` · `/osds/{osd_id}` | OSD 목록 / 상세 |
+| `/storage/ceph/pools` · `/pools/{pool}` | 풀 목록 / 상세 |
+| `/storage/ceph/pgs` | PG 상태 요약 |
 
-### OpenStack (13, 관리 클러스터 전용)
+### OpenStack (10)
+
+클러스터 경로 없이 `/openstack/*` 로 조회합니다.
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters/{c}/openstack/summary` | 전체 현황 |
-| `/clusters/{c}/openstack/projects` · `/{id}` · `/{id}/summary` | 프로젝트(과금 단위) |
-| `/clusters/{c}/openstack/hypervisors` · `/{host}` · `/{host}/vms` | 하이퍼바이저·VM 배치 |
-| `/clusters/{c}/openstack/vms` · `/summary` · `/{vm_id}` · `/{vm_id}/metrics` | VM 목록/집계/상세/메트릭 |
-| `/clusters/{c}/openstack/vms/{vm_id}/power` | VM 전력 귀속 [P6] |
-| `/clusters/{c}/openstack/vms/{vm_id}/gpu-passthrough` | passthrough 장치 (libvirt hostdev 확정) |
+| `/openstack/projects` · `/{project_id}` | 프로젝트(과금 단위) 목록 / 상세 |
+| `/openstack/hypervisors` · `/{host}` · `/{host}/vms` | 하이퍼바이저 목록 / 상세 / 배치된 VM |
+| `/openstack/vms` · `/{vm_id}` · `/{vm_id}/metrics` | VM 목록 / 상세 / 사용량 메트릭 |
+| `/openstack/vms/{vm_id}/power` | VM 추정 전력 [P6] |
+| `/openstack/vms/{vm_id}/gpu-passthrough` | passthrough 장치 (**미구현, 스텁**) |
 
 ### Workloads — 클러스터 범위 (11)
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/clusters/{c}/workloads/pods` · `/summary` · `/{ns}/{pod}` | Pod 목록/집계/상세 |
-| `/clusters/{c}/workloads/pods/{ns}/{pod}/power` | Pod 전력 귀속 [P7] |
-| `/clusters/{c}/workloads/pods/{ns}/{pod}/containers` · `/containers/{name}/metrics` | 컨테이너 목록/메트릭 |
-| `/clusters/{c}/workloads/pods/{ns}/{pod}/accelerators` | Pod 가속기 할당 |
-| `/clusters/{c}/workloads/containers` · `/{container_id}` | 클러스터 전역 컨테이너 |
-| `/clusters/{c}/namespaces` · `/{ns}/summary` | 네임스페이스 |
+| `/clusters/{c}/workloads/pods` · `/summary` · `/{ns}/{pod}` | Pod 목록 / 집계 / 상세 |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/power` | Pod 추정 전력 [P7] |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/containers` · `/containers/{name}/metrics` | 컨테이너 목록 / 메트릭 |
+| `/clusters/{c}/workloads/pods/{ns}/{pod}/accelerators` | Pod 할당 가속기 |
+| `/clusters/{c}/workloads/containers` · `/{container_id}` | 클러스터 전역 컨테이너 목록 / 상세 |
+| `/clusters/{c}/namespaces` · `/{ns}` | 네임스페이스 목록 / 상세 |
 
-### Workloads — 전역 진입점 (11, 포탈용)
+### Workloads — 전역 진입점 (10, 포탈용)
 
-응답에 `_links.self` + `_links.canonical` 포함. 전역 목록 기본 범위는 서비스 클러스터.
+응답에 `_links.self` + `_links.canonical` 포함. 목록은 `cluster` 쿼리로 범위를 좁힐 수 있습니다.
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/workloads/pods` · `/summary` | 전 클러스터 Pod 인덱스 |
+| `/workloads/pods` · `/summary` | 전 클러스터 Pod 목록 / 집계 |
 | `/workloads/pods/{c}/{ns}/{pod}` (+ `/power`, `/containers`, `/accelerators`) | canonical 위임 |
-| `/workloads/services` · `/summary` | 논리 서비스 목록 (`service_name` 파생 그룹) |
-| `/workloads/services/{c}/{ns}/{name}` (+ `/pods`, `/power`) | 서비스 상세/소속 Pod/전력 |
+| `/workloads/services` | 논리 서비스 목록 (`service_name` 파생 그룹) |
+| `/workloads/services/{c}/{ns}/{name}` (+ `/pods`, `/power`) | 서비스 상세 / 소속 Pod / 추정 전력 합계 |
 
-### Monitoring — 횡단 집계 (10)
+### Monitoring — 횡단 집계 (15)
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/monitoring/overview` | 전체 시스템 KPI |
-| `/monitoring/power/summary` [P8] · `/breakdown` · `/timeseries` · `/efficiency` | 전력 요약/분해/시계열/효율 |
-| `/monitoring/metrics/timeseries` · `/query` [M5] | 메트릭 질의 (허용 목록 기반). timeseries에 `by=Hostname` 을 붙이면 호스트별 한 줄, step 구간 평균으로 묶여 히트맵에 바로 쓸 수 있음 |
-| `/monitoring/temperature/timeseries` | 온도 통합 시계열 |
+| `/monitoring/overview` | 전체 인프라 KPI |
+| `/monitoring/nodes/timeseries` | 노드 수 시계열 |
+| `/monitoring/power/summary` [P8] · `/timeseries` | 전력 요약 / 전체 전력 시계열 |
+| `/monitoring/power/breakdown` (`dimension=vendor\|cluster\|node\|accelerator`) | 기준별 전력 분포 |
+| `/monitoring/power/efficiency` · `/efficiency/timeseries` | 가속기 전력 효율 / 시계열 |
+| `/monitoring/accelerators/utilization` · `/utilization/timeseries` (`by=node`) | 가속기 사용률 / 시계열. `by=node` 면 호스트별 값도 반환 |
+| `/monitoring/metrics/query` · `/metrics/timeseries` (`metric`, `by=hostname\|cluster`) [M5] | 메트릭 현재값 / 시계열 (허용 목록 기반). `by=hostname` 이면 호스트별 한 줄, step 구간 평균으로 묶여 히트맵에 바로 쓸 수 있음 |
+| `/monitoring/temperature/timeseries` | 가속기 온도 시계열 |
+| `/monitoring/throttling/timeseries` (`cluster`, `node`, `acc_id`, `detail`, `bucket`) | 가속기 쓰로틀링 시계열 |
 | `/monitoring/stream/power` · `/stream/metrics` | **SSE** 실시간 스트림 |
 
-### Export (3) / Resource-Map (8) / System (3)
+### Logs — 로그 조회 (10)
+
+Loki 에 LogQL 을 보내 조회합니다. `LOKI_URL` 이 없으면 503. 공통 조건은 `start`, `end`, `limit`, `direction`(`forward`\|`backward`), `cursor`, `log_level`(`error`\|`warning`\|`info`\|`debug`).
 
 | 엔드포인트 | 설명 |
 |-----------|------|
-| `/export/power` · `/metrics` (`format=csv\|excel\|parquet`) · `/report` (`report_type=daily\|weekly\|monthly`) | 데이터/리포트 내보내기 |
-| `/resource-map/accelerators/{id}` (+ `/history`) | 가속기 계보 (GPU→VM→Pod) / 이력 |
-| `/resource-map/partitions/{pid}` · `/containers/{pod_uid}/{container}` · `/vms/{vm_uuid}` · `/physical-servers/{server_id}` | 자원별 계보 |
-| `/resource-map/relationships` | 관계 그래프 질의 |
-| `POST /resource-map/discovery/trigger` | Discovery 수동 스캔 (202) |
-| `/system/health` · `/version` · `/metrics` | 헬스 / 버전 / 자체 Prometheus 메트릭 (**공개, 실동작**) |
+| `/logs/search` (`query`, `cluster`) | 로그 검색 (LogQL) |
+| `/logs/stream` | 실시간 로그 스트림 (SSE) |
+| `/logs/export` (`format=json\|csv`) | 로그 내보내기 |
+| `/logs/labels` · `/label-values` (`label`) | 라벨 이름 / 값 목록 |
+| `/logs/volume` | 로그 볼륨 통계 |
+| `/logs/clusters/{c}/search` | 클러스터 로그 검색 |
+| `/logs/clusters/{c}/nodes/{n}/logs` | 노드 시스템 로그 |
+| `/logs/clusters/{c}/pods/{ns}/{pod}/logs` (`container`) | Pod 로그 |
+| `/logs/clusters/{c}/accelerators/{id}/logs` | 가속기 드라이버 로그 |
+
+### Export (3) / Resource-Map (1) / System (3)
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/export/power` · `/metrics` (`format=csv\|json`, 기본 `csv`) | 전력 / 메트릭 데이터 내보내기 |
+| `/export/report` (`report_type=daily\|weekly\|monthly`) | 운영 요약 리포트 |
+| `/resource-map/pods/{pod}` (`cluster`, `namespace`) | Pod → 워크로드 → 가속기 → K8s 노드 → VM → 물리서버 추적 |
+| `/system/health` · `/version` · `/metrics` | 헬스 / 버전 / 자체 Prometheus 메트릭 (**공개**) |
+
+### Alerts — 알람 (15)
+
+평가는 서버 안에서 주기적으로(`ALERT_EVAL_INTERVAL_SEC`, 기본 30초) 수행되고, API 는 정책·채널·알람 저장소를 읽고 씁니다. `DATABASE_URL` 이 없으면 모든 경로가 503 `ALERT_STORE_NOT_CONFIGURED`.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/alerts/metrics` | 알람 정책에 쓸 수 있는 지표 목록 |
+| `GET·POST /alerts/policies` · `GET·PATCH·DELETE /alerts/policies/{policy_id}` | 알람 정책 관리 |
+| `POST /alerts/policies/{policy_id}/preview` | 저장된 정책을 지금 값으로 미리 평가 |
+| `GET·POST /alerts/channels` · `PATCH·DELETE /alerts/channels/{channel_id}` | 알림 채널 관리 (`email` \| `slack` \| `webhook`) |
+| `POST /alerts/channels/{channel_id}/test` | 채널 시험 발송 |
+| `/alerts/active` (`state=pending\|firing\|resolved`) | 활성 알람 목록 (기본 pending + firing) |
+| `POST /alerts/active/{fingerprint}/ack` | 활성 알람 확인 처리 |
+| `/alerts/events` (`policy_id`, `since`, `limit`) | 알람 이력 |
+
+- 정책 종류: `resource`(가속기 메트릭), `log`(로그 단어 건수, Loki), `slo`(vLLM 서빙 지연·대기 요청 수), `composite`(조건 여러 개를 같은 클러스터에서 모두 만족).
+- 이메일 채널은 `SMTP_*` 설정이 필요합니다.
+
+### SLO — LLM 서빙 (3)
+
+vLLM 히스토그램(TTFT, TPOT)을 Prometheus 에서 읽어 분위수, 목표 달성률, 남은 오류 예산을 계산합니다. 서빙 하나는 (cluster, model) 쌍으로 구분합니다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/slo/services` (`cluster`, `window`, `ttft_target_ms`, `tpot_target_ms`, `objective_percent`) | SLO 목록 |
+| `/slo/services/{c}/{model}` · `/timeseries` | SLO 상세 / 시계열 |
 
 ### Metering — 미터링, 단가 정책, 비용 예측 (21)
 
-위 106 라우트 집계에 들어 있지 않은 추가 도메인. 서버가 매시 가속기 카드별 점유, 사용, 가중 시간과 전력량(kWh)을 계측해 사용량 레코드로 쌓고, 비용은 사용량 x 그날 유효 단가로 계산한다. 금액은 원(`_krw`), 월과 일의 경계는 KST. 지금 계측하는 자원은 가속기뿐이다.
+서버가 매시 가속기 카드별 점유, 사용, 가중 시간과 전력량(kWh)을 계측해 사용량 레코드로 쌓고, 비용은 사용량 x 그날 유효 단가로 계산한다. 금액은 원(`_krw`), 월과 일의 경계는 KST. 지금 계측하는 자원은 가속기뿐이다.
 
 | 엔드포인트 | 설명 |
 |-----------|------|
@@ -300,13 +377,14 @@ UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
 
 v1 WebSocket은 폐기되고 SSE로 통일되었습니다.
 
-- `Content-Type: text/event-stream`, 15초마다 `heartbeat` 이벤트(`observed_at`만 포함)
-- data 이벤트는 REST와 동일 응답 모델 공유 (클라이언트가 같은 타입으로 역직렬화)
-- `Last-Event-ID` 헤더로 재개 지원 (구현 예정)
+- `Content-Type: text/event-stream`, 15초마다 `heartbeat` 이벤트(`observed_at`만 포함) 다음에 데이터 이벤트 1개를 보내며, 클라이언트가 연결을 끊을 때까지 반복합니다.
+- 데이터 이벤트 이름은 `/monitoring/stream/power` 가 `power`(전력 요약), `/monitoring/stream/metrics` 가 `metric`(`metric` 으로 지정한 메트릭 현재값)입니다.
+- 조회에 실패하면 `error` 이벤트(`{"error": "poll_failed", "observed_at": ...}`)를 보내고 스트림은 계속됩니다.
+- 이벤트마다 `id` 가 붙지만, `Last-Event-ID` 헤더로 이어 받는 기능은 아직 없습니다.
 
 ```bash
 curl -N -H "Authorization: Bearer <TOKEN>" \
   http://localhost:8000/api/v2/monitoring/stream/power
 ```
 
-스텁 단계에서는 heartbeat 1회 + 스텁 이벤트 1회 송신 후 종료합니다.
+실시간 로그 스트림은 `/logs/stream` 을 사용합니다.

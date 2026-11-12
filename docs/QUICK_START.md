@@ -2,9 +2,8 @@
 
 KCloud Monitor v2의 빠른 시작 가이드입니다.
 
-> **현재 단계: 스캐폴드** — 라우팅·인증·경로 구조만 확정되어 있고, 모든 엔드포인트는
-> 정의·데이터소스·설계 참조를 담은 스텁 응답(`status: not_implemented`)을 반환합니다.
-> 포탈/클라이언트의 경로·인증 연동 검증 용도로 사용하세요.
+> `/api/v2` 아래 155개 라우트가 실제 데이터소스(Prometheus, Loki, PostgreSQL, OpenStack API)로 동작합니다.
+> 설정하지 않은 데이터소스를 쓰는 영역은 503 또는 조회 실패를 반환합니다. 영역별 조건은 [API_GUIDE.md](./API_GUIDE.md)를 참고하세요.
 
 ## 설치 및 실행
 
@@ -16,8 +15,14 @@ pip install -r requirements.txt
 
 # 2. 환경 변수
 cp .env.example .env
-# 스캐폴드 단계에서는 인증 계정(API_AUTH_*)만 조정하면 됨.
-# MIMIR_URL/DATABASE_URL/REDIS_URL/OPENSTACK_* 는 구현 시 활성화되는 placeholder.
+# .env 에서 최소한 아래 값을 수정
+#   PROMETHEUS_URL       메트릭 조회 대상 (필수, 비워 두면 서버가 기동하지 않음)
+#   API_AUTH_PASSWORD    로그인 비밀번호
+#   JWT_SECRET_KEY       JWT 서명 키
+# 필요한 영역만 추가로 설정
+#   LOKI_URL             로그 API
+#   DATABASE_URL         알람·미터링·장애·복구 저장소 (PostgreSQL)
+#   OPENSTACK_*          OpenStack API
 
 # 3. 서버 실행
 python run.py --port 8000
@@ -33,18 +38,22 @@ curl http://localhost:8000/api/v2/system/health
 ```
 
 ```json
-{"status": "healthy", "phase": "v2-scaffold", "backends": {"mimir": "not_configured", ...}}
+{"status": "healthy", "backends": {"prometheus": "connected"}, "observed_at": "..."}
 ```
 
+Prometheus 에 닿지 않으면 `status` 가 `degraded`, `backends.prometheus` 가 `unreachable` 입니다.
+
 ### 2) 로그인 → JWT
+
+`.env` 의 `API_AUTH_USERNAME` / `API_AUTH_PASSWORD` 로 로그인합니다.
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v2/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"changeme"}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+  -d '{"username":"admin","password":"<API_AUTH_PASSWORD>"}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 ```
 
-### 3) 스텁 엔드포인트 호출
+### 3) API 호출
 
 ```bash
 # 클러스터 목록
@@ -58,10 +67,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v2/monitoring/power/summary
 ```
 
-스텁 응답에는 해당 API의 정의(`description`), 구현 시 사용할 데이터소스(`data_sources`),
-설계 참조(`design_ref`)가 포함되어 있어 Swagger와 함께 API 계약을 미리 확인할 수 있습니다.
-
-### 4) SSE 스트림 (스텁: heartbeat 1회 + 스텁 이벤트 후 종료)
+### 4) SSE 스트림 (15초마다 heartbeat + 데이터 이벤트, 연결을 끊을 때까지 계속)
 
 ```bash
 curl -N -H "Authorization: Bearer $TOKEN" \
@@ -74,20 +80,16 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 - ReDoc: http://localhost:8000/redoc
 - 전체 라우트 표: [API_GUIDE.md](./API_GUIDE.md)
 
-## 테스트
-
-```bash
-pytest tests/ -v
-```
-
-route inventory(106개 고정), 인증 강제(무인증 401), 스텁 envelope, `_links.canonical`,
-SSE heartbeat를 검증합니다. 라우트를 추가/삭제하면 inventory 테스트가 실패하므로
-설계 카탈로그와 함께 갱신해야 합니다.
-
 ## Docker
+
+`docker-compose.yml` 은 API(`api`)와 PostgreSQL(`db`) 두 서비스를 띄웁니다. 아래 값이 비어 있으면 compose 가 기동을 거부하므로 `.env` 에 먼저 채워야 합니다.
+
+- `API_AUTH_USERNAME`, `API_AUTH_PASSWORD`
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (`db` 서비스용. 외부 PostgreSQL 을 쓰려면 `.env` 에 `DATABASE_URL` 을 추가하면 API 는 그쪽에 연결)
 
 ```bash
 cp .env.example .env
+# .env 수정 후
 docker-compose up -d
 curl http://localhost:8000/api/v2/system/health
 ```
@@ -97,5 +99,9 @@ curl http://localhost:8000/api/v2/system/health
 | 증상 | 원인/해결 |
 |------|----------|
 | 401 Unauthorized | 토큰 누락/만료 — `/auth/login` 재발급, 또는 `X-API-Key` 헤더(.env `API_KEY` 설정 시) |
-| 모든 응답이 `not_implemented` | 정상입니다 — 스캐폴드 단계의 계약된 동작 |
-| `/system/health`의 backends가 전부 `not_configured` | 정상입니다 — 데이터소스 클라이언트는 구현 단계에서 연결 |
+| 로그인 실패 | `.env` 의 `API_AUTH_USERNAME` / `API_AUTH_PASSWORD` 값으로 로그인했는지 확인 |
+| `/system/health` 가 `degraded` | `PROMETHEUS_URL` 이 맞는지, 서버에서 접근 가능한지 확인 |
+| `/logs/*` 가 503 | `LOKI_URL` 미설정 |
+| `/alerts/*` 가 503 `ALERT_STORE_NOT_CONFIGURED` | `DATABASE_URL`(또는 compose 의 `POSTGRES_*`) 미설정 |
+| `docker-compose up` 이 변수 오류로 중단 | `.env` 의 `API_AUTH_*`, `POSTGRES_*` 가 비어 있음 |
+| 응답이 `not_implemented` | `/openstack/vms/{vm_id}/gpu-passthrough` 는 아직 미구현 |
