@@ -143,6 +143,11 @@ async def usage_summary(p: UsageParams = Depends()):
 
     * `window`: 구간과 계측된 시간 수
     * `totals`: 점유(청구 기본), 사용, 가중, 유휴 시간, 점유 대비 실사용률(%), 전력량(kWh), 비용(원)
+
+    참고
+
+    * 점유 시간은 카드 사용률 지표가 수집된 분의 비율. 수집이 끊긴 분과 꺼진 VM 에 붙은 카드(지표 없음)는 점유로 세지 않음
+    * 프로젝트는 클러스터의 Magnum 매핑, 없으면 카드 호스트와 같은 이름의 VM 프로젝트. 물리 노드에 꽂힌 카드는 `project` null
     """
     rows, window, warnings, policies = await _usage(p)
     items = _groups(rows, policies, lambda r: (), (), warnings)
@@ -312,6 +317,7 @@ _POLICY_RULES = """
     * 409 사유: `POLICY_BACKDATED`(시작일이 오늘이거나 그 전), `POLICY_OVERLAP`(같은 자원의 다른 버전과 기간 겹침),
       `POLICY_ALREADY_EFFECTIVE`(이미 시작한 버전), `POLICY_INVALID_PERIOD`(끝이 시작보다 빠름),
       `POLICY_GAP`(이전 버전을 대신하는 버전에 종료일을 넣어 그 뒤 단가가 비게 됨. 수정에서만)
+    * 이미 예약된 미래 버전보다 앞에 시작하는 버전은 추가할 수 없음(`POLICY_OVERLAP`). 뒤 버전을 지우고 시작일 순서대로 다시 추가
 """
 
 
