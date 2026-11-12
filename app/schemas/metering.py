@@ -151,7 +151,8 @@ class WhatIfChange(BaseModel):
     """남은 기간에 바꿀 가속기 구성 1건."""
 
     vendor: Vendor = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
-    model: str = Field(..., min_length=1, description="가속기 모델 이름 조각 (예: L40S). 단가 정책과 기존 항목을 이 글자로 찾음")
+    model: str = Field(..., min_length=1, description="가속기 모델 이름 조각 (예: L40S). 단가 정책과 기존 항목을 이 글자로 찾음 "
+                                                          "(단어 단위라 A10 은 A100 에 맞지 않음)")
     cluster: Optional[str] = Field(None, description="이 클러스터 항목만 바꿈. 없으면 범위 안 같은 모델 전체")
     count: int = Field(..., ge=0, description="바꾼 뒤 장수. 0 이면 반납")
     hours_per_day: float = Field(..., ge=0, le=24, description="바꾼 뒤 하루 점유 시간 (0 ~ 24)")

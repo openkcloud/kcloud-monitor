@@ -718,8 +718,8 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
 def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePolicy]) -> tuple[dict, list[str]]:
     """남은 기간 동안 가속기 구성과 사용 시간을 바꾸면 월말 비용이 얼마가 되는지 계산.
 
-    바꾸는 항목은 vendor 가 같고 모델 이름에 change.model 이 들어 있는(cluster 를 주면 그 클러스터만) 기존 항목을
-    대체한다. 맞는 항목이 없으면 새 자원 추가로 본다. 기준선은 항목별 이동 평균.
+    바꾸는 항목은 vendor 가 같고 모델 이름에 change.model 이 단어로 들어 있는(cluster 를 주면 그 클러스터만) 기존
+    항목을 대체한다. 맞는 항목이 없으면 새 자원 추가로 본다. 기준선은 항목별 이동 평균.
 
     >>> pred = {"current": {"days_remaining": 10, "missing_days": 0, "accumulated_cost_krw": 1000},
     ...         "breakdown": [{"cluster": "l40s", "vendor": "nvidia", "model": "NVIDIA L40S",
@@ -729,6 +729,12 @@ def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePoli
     ...                date(2026, 10, 23), pol)
     >>> (r["baseline_month_end_cost_krw"], r["scenario_month_end_cost_krw"], r["savings_krw"], w)
     (2000, 1400, 600, [])
+    >>> pred["breakdown"] = [{"cluster": "c", "vendor": "nvidia", "model": m, "daily_avg_cost_krw": 100}
+    ...                      for m in ("NVIDIA A100", "NVIDIA A10")]
+    >>> pol = [PricePolicy("a10", "", "accelerator", "nvidia", "A10", 5, date(2026, 1, 1))]
+    >>> what_if(pred, [{"vendor": "nvidia", "model": "A10", "count": 1, "hours_per_day": 1}],
+    ...         date(2026, 10, 23), pol)[0]["changes"][0]["replaced_items"]  # A100 은 대체하지 않음
+    1
     """
     cur = pred["current"]
     remaining, missing, acc = cur["days_remaining"], cur["missing_days"], cur["accumulated_cost_krw"] or 0
@@ -744,7 +750,7 @@ def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePoli
         policy = find_price("accelerator", ch["vendor"], ch["model"], day, policies)
         matched = [] if policy is None else [  # 앞선 변경이 이미 대체한 항목은 다시 세지 않음
             i for i, b in enumerate(items)
-            if i not in replaced and b["vendor"] == ch["vendor"] and ch["model"].lower() in b["model"].lower()
+            if i not in replaced and b["vendor"] == ch["vendor"] and model_matches(ch["model"], b["model"])
             and (not ch.get("cluster") or b["cluster"] == ch["cluster"])]
         if policy is None:
             if "PRICE_NOT_DEFINED" not in warnings:
