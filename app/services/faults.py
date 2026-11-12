@@ -462,6 +462,17 @@ async def _pods(selector: str, via: str) -> list[dict]:
             for m in (r.get("metric", {}) for r in rows)]
 
 
+async def _k8s_cluster_of(node: str) -> Optional[str]:
+    """K8s 노드 이름이 있는 클러스터(API 이름). 없거나 여러 클러스터에 같은 이름이 있으면 None.
+
+    VM 장애는 OpenStack 지표에서 나와 cluster 라벨이 없어 mgmt 로 잡히지만, 그 VM 이 서비스 클러스터의
+    워커 노드면 영향을 받는 Pod 는 그 클러스터에 있다.
+    """
+    rows = await prometheus_client.instant(f'count by (cluster) (kube_node_info{{node="{esc(node)}"}})')
+    names = {r.get("metric", {}).get("cluster") or DEFAULT_CLUSTER_NAME for r in rows}
+    return names.pop() if len(names) == 1 else None
+
+
 async def _related(fault: dict) -> tuple[dict, str]:
     """영향 자원: 대상에서 물리서버까지의 경로와 영향을 받는 Pod. 범위를 정할 수 없으면 unknown (0 으로 채우지 않음)."""
     from app.api.v2.resource_map import trace_node, trace_pod
@@ -482,6 +493,8 @@ async def _related(fault: dict) -> tuple[dict, str]:
         node = t.get("node") or t.get("vm")  # VM 은 K8s 노드 이름과 같을 때만 Pod 를 찾을 수 있음
         if not node:
             return empty, "unknown"
+        if not t.get("node"):  # VM 대상: 같은 이름의 K8s 노드가 있는 클러스터에서 찾음
+            cluster = await _k8s_cluster_of(node) or cluster
         path = [h.model_dump(exclude_none=True) for h in await trace_node(cluster, node)]
         scope, pods = "node", None
         if t.get("accelerator_id") and t.get("vendor") == "nvidia":  # 그 카드를 쓰는 Pod 만
@@ -492,7 +505,7 @@ async def _related(fault: dict) -> tuple[dict, str]:
                 pods = [{"namespace": r["metric"].get("exported_namespace"), "pod": r["metric"].get("exported_pod"),
                          "via": "DCGM exported_pod", "workload": None} for r in rows]
         if pods is None:
-            pods = await _pods(_sel({**t, "node": node}, node="node"), "kube_pod_info.node")
+            pods = await _pods(_sel({**t, "cluster": cluster, "node": node}, node="node"), "kube_pod_info.node")
         return {"scope": scope, "path": path, "affected_pod_count": len(pods), "affected_pods": pods[:MAX_PODS]}, "ok"
     except HTTPException as exc:  # 404: Pod 가 이미 없음, 503: Prometheus 조회 실패
         return empty, "unknown" if exc.status_code == 404 else "unavailable"
