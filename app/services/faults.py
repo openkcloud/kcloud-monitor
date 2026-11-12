@@ -511,6 +511,11 @@ async def _related(fault: dict) -> tuple[dict, str]:
                 scope = "accelerator"
                 pods = [{"namespace": r["metric"].get("exported_namespace"), "pod": r["metric"].get("exported_pod"),
                          "via": "DCGM exported_pod", "workload": None} for r in rows]
+            elif await prometheus_client.instant(
+                    f'count(DCGM_FI_DEV_GPU_UTIL{{{_sel({**t, "cluster": cluster})},exported_pod!=""}})'):
+                # 이 클러스터 exporter 는 카드별 Pod 를 알려 주는데 이 카드에는 없음: 카드를 쓰는 Pod 0.
+                # 카드별 Pod 를 아예 알려 주지 않는 exporter 면 아래에서 노드의 Pod 전체로 넓힘 (scope node)
+                scope, pods = "accelerator", []
         if pods is None:
             pods = await _pods(_sel({**t, "cluster": cluster, "node": node}, node="node"), "kube_pod_info.node")
         return {"scope": scope, "path": path, "affected_pod_count": len(pods), "affected_pods": pods[:MAX_PODS]}, "ok"
