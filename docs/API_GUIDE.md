@@ -215,6 +215,30 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 | `POST /resource-map/discovery/trigger` | Discovery 수동 스캔 (202) |
 | `/system/health` · `/version` · `/metrics` | 헬스 / 버전 / 자체 Prometheus 메트릭 (**공개, 실동작**) |
 
+### Metering — 미터링, 단가 정책, 비용 예측 (21)
+
+위 106 라우트 집계에 들어 있지 않은 추가 도메인. 서버가 매시 가속기 카드별 점유, 사용, 가중 시간과 전력량(kWh)을 계측해 사용량 레코드로 쌓고, 비용은 사용량 x 그날 유효 단가로 계산한다. 금액은 원(`_krw`), 월과 일의 경계는 KST. 지금 계측하는 자원은 가속기뿐이다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/metering/usage/summary` | 기간 합계: 점유, 사용, 가중, 유휴 시간, 실사용률, 전력량, 비용 |
+| `/metering/usage/by-resource` · `/by-project` · `/by-cluster` | 자원 유형(벤더, 모델), OpenStack 프로젝트, 클러스터별 사용량과 비용 |
+| `/metering/usage/timeseries` (`step=1h\|1d`) | 사용량, 비용 시계열 |
+| `/metering/usage/details` (`limit`, `offset`) | 카드 x 1시간 사용량 레코드 원본 |
+| `/metering/policies/resource-types` | 과금 자원 유형, 청구 단위, 계약 형태 목록 |
+| `GET·POST /metering/policies` · `GET·PUT·DELETE /metering/policies/{policy_id}` | 단가 정책 관리. 덮어쓰지 않고 새 버전 추가, 시작일은 내일 이후(소급 시 409) |
+| `POST /metering/policies/simulate` | 같은 사용량에 후보 단가를 대입한 비용 비교 (저장 안 함) |
+| `/metering/predictions/monthly` (`method=moving_average\|linear_trend`) | 이번 달 누적 비용과 월말 예측, 신뢰구간, 예산 판정 |
+| `/metering/predictions/budget-status` | 예산별 누적 소진율과 월말 초과 예상 |
+| `POST /metering/predictions/what-if` | 남은 기간 가속기 구성, 사용 시간을 바꿨을 때의 월말 비용 |
+| `GET·POST /metering/budgets` · `GET·PUT·DELETE /metering/budgets/{budget_id}` | 월 예산 관리 (프로젝트, 클러스터 범위) |
+
+공통 조회 조건은 `period`(`current_month` \| `last_month`), `start`, `end`, `project`, `cluster`, `resource_type`.
+
+- `DATABASE_URL` 이 없으면 사용량, 단가 정책, 예산, 예산 현황 경로는 503 `METERING_STORE_NOT_CONFIGURED`. 월말 예측과 가상 시나리오는 Prometheus 에서 점유 시간을 바로 세는 임시 경로로 동작한다.
+- 결측은 0 으로 채우지 않는다. 계측되지 않은 구간은 `PARTIAL_HISTORY`, 프로젝트 매핑이 없으면 `NO_PROJECT_MAPPING`(`project` null), 단가가 없으면 `PRICE_NOT_DEFINED`(`unpriced_hours`) 경고가 붙는다.
+- NPU(RNGD, ATOM) 초기 단가는 공개 단가가 없어 비교 대상 GPU 의 시장 중앙값을 넣은 임시값이다. 정책의 `source` 에 근거가 적혀 있다.
+
 ### 별칭 — 단축 경로 (4)
 
 UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
