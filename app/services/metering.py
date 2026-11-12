@@ -271,31 +271,58 @@ def meter_queries(vendor: str) -> dict[str, str]:
     }
 
 
+# 쿠버네티스 없는 단독 VM 클러스터(Magnum 매핑 없음)는 카드 호스트 이름과 같은 이름의 Nova VM 의 프로젝트로 귀속한다.
+# openstack-exporter 의 VM 상태(tenant_id)에 프로젝트 정보(id, name)를 붙인 것. 범위 조회 간격(1h)마다 그 시간에 있던 VM
+VM_PROJECT_QUERY = (
+    "max by (name, project) (last_over_time(openstack_nova_server_status[1h]) * on (tenant_id) group_left(project) "
+    'max by (tenant_id, project) (label_replace(label_replace(openstack_identity_project_info, '
+    '"tenant_id", "$1", "id", "(.*)"), "project", "$1", "name", "(.*)")))')
+
+
+def vm_project_map(result: list[dict]) -> dict[str, str]:
+    """VM 이름 → 프로젝트 이름. 같은 이름의 VM 이 여러 프로젝트에 있으면 어느 쪽인지 몰라 뺀다.
+
+    >>> s = lambda n, p: {"metric": {"name": n, "project": p}, "values": [[0, "1"]]}
+    >>> vm_project_map([s("vm-a", "p1"), s("vm-a", "p1"), s("vm-b", "p1"), s("vm-b", "p2")])
+    {'vm-a': 'p1'}
+    """
+    found: dict[str, set[str]] = defaultdict(set)
+    for series in result:
+        m = series.get("metric", {})
+        if m.get("name") and m.get("project"):
+            found[m["name"]].add(m["project"])
+    return {name: next(iter(ps)) for name, ps in found.items() if len(ps) == 1}
+
+
 async def meter_range(start: datetime, end: datetime) -> tuple[list[dict], set[datetime]]:
     """[start, end) 의 1시간 구간마다 카드별 사용량 레코드와, Prometheus 에 데이터가 있던 구간 집합.
 
     Prometheus 조회 실패는 예외로 올려 그 구간을 다음 주기에 다시 계측하게 한다(빈 결과와 구분).
     수집 대상(up) 표본이 하나도 없던 구간은 사용량 0 이 아니라 결측으로 남기려고 따로 표시한다.
-    프로젝트 매핑이 없으면 project 는 null(과금 보류)이고 경고를 남긴다. 이전 값을 재사용하지 않는다.
+    프로젝트는 클러스터의 Magnum 매핑, 없으면 카드 호스트와 같은 이름의 VM 프로젝트. 둘 다 없으면 null(과금 보류)이고
+    경고를 남긴다. 이전 값을 재사용하지 않는다.
     ponytail: 보류된 레코드를 나중에 프로젝트에 다시 귀속하는 작업은 아직 없음
     """
     clusters = await cluster_discovery.get_clusters()
     projects = {c.label_value: c.openstack_project for c in clusters.values()}
     s, e = (start + timedelta(hours=1)).isoformat(), end.isoformat()
     jobs = [(v, f, q) for v in METER_SOURCES for f, q in meter_queries(v).items()]
+    jobs.append(("", "vm_projects", VM_PROJECT_QUERY))
     jobs.append(("", "covered", "sum(count_over_time(up[1h]))"))
     results = await asyncio.gather(*(
         prometheus_client.range_query(q, s, e, "1h", raise_errors=True) for _, _, q in jobs))
     covered = {datetime.fromtimestamp(float(ts), timezone.utc) - timedelta(hours=1)
                for series in results[-1] for ts, raw in series.get("values", []) if parse_finite(raw)}
-    fields = [(vendor, field, result) for (vendor, field, _), result in zip(jobs[:-1], results)]
-    return build_records(fields, projects), covered
+    fields = [(vendor, field, result) for (vendor, field, _), result in zip(jobs[:-2], results)]
+    return build_records(fields, projects, vm_project_map(results[-2])), covered
 
 
-def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str, Optional[str]]) -> list[dict]:
+def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str, Optional[str]],
+                  vm_projects: Optional[dict[str, str]] = None) -> list[dict]:
     """(벤더, 필드, 범위 조회 결과) 목록을 카드 x 1시간 사용량 레코드로 조립. 벤더마다 allocated_hours 가 먼저 와야 한다.
 
     표본 시각은 구간 끝이라 레코드 ts 는 1시간 앞. 점유는 1.0 을 넘지 않게 자르고, 전력이 없으면 NO_POWER_DATA.
+    프로젝트는 클러스터 매핑(projects)이 먼저, 없으면 카드 호스트 이름의 VM 프로젝트(vm_projects).
 
     >>> def s(v, uuid="GPU-1"):
     ...     return [{"metric": {"cluster": "l40s", "UUID": uuid, "Hostname": "n1", "modelName": "NVIDIA L40S"},
@@ -310,6 +337,8 @@ def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str,
     ('2026-11-11T02:00:00+00:00', 'p1')
     >>> build_records([("nvidia", "allocated_hours", s("1"))], {})[0]["warnings"]
     ['NO_PROJECT_MAPPING', 'NO_POWER_DATA']
+    >>> build_records([("nvidia", "allocated_hours", s("1"))], {"l40s": None}, {"n1": "p2"})[0]["project"]  # 단독 VM
+    'p2'
     """
     recs: dict[tuple, dict] = {}
     for vendor, field, result in fields:
@@ -328,7 +357,7 @@ def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str,
                 # ponytail: 한 구간 안에서 호스트, 모델 라벨이 바뀌면 시계열이 둘로 갈려 뒤의 값만 남음.
                 #           라벨 변경이 잦아지면 (cluster, id) 로만 묶고 호스트, 모델은 따로 조회
                 if field == "allocated_hours":
-                    project = projects.get(label)
+                    project = projects.get(label) or (vm_projects or {}).get(m.get(src["host"]))
                     recs[key] = {
                         "ts": hour, "resource_type": "accelerator", "resource_id": rid,
                         "cluster": label or DEFAULT_CLUSTER_NAME, "project": project, "vendor": vendor,
@@ -399,20 +428,23 @@ class UsageRow:
 async def fetch_usage(start: datetime, end: datetime) -> tuple[list[UsageRow], list[str]]:
     """DB 가 없을 때의 임시 경로. 1시간 표본 하나 = 그 시각 카드 장수 x 1시간 (점유 시간만).
 
-    벤더 하나의 조회가 실패하면 그 벤더만 빠지고 UPSTREAM_ERROR 경고를 남긴다.
+    프로젝트는 계측 경로와 같은 규칙(클러스터 매핑, 없으면 호스트 이름의 VM 프로젝트)으로 붙인다.
+    벤더 하나나 VM 프로젝트 조회가 실패하면 그 부분만 빠지고 UPSTREAM_ERROR 경고를 남긴다.
     """
     clusters = await cluster_discovery.get_clusters()
     projects = {c.label_value: c.openstack_project for c in clusters.values()}
     s, e = start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
     vendors = list(METER_SOURCES)
+    queries = [f"count by (cluster, {METER_SOURCES[v]['host']}"
+               f"{', ' + METER_SOURCES[v]['model'] if METER_SOURCES[v]['model'] else ''}) ({card_util_expr(v)})"
+               for v in vendors]
     results = await asyncio.gather(*(
-        prometheus_client.range_query(
-            f"count by (cluster{', ' + METER_SOURCES[v]['model'] if METER_SOURCES[v]['model'] else ''}) "
-            f"({card_util_expr(v)})", s, e, "1h", raise_errors=True)
-        for v in vendors), return_exceptions=True)
+        prometheus_client.range_query(q, s, e, "1h", raise_errors=True) for q in queries + [VM_PROJECT_QUERY]),
+        return_exceptions=True)
     warnings = ["UPSTREAM_ERROR"] if any(isinstance(r, Exception) for r in results) else []
+    vm_projects = {} if isinstance(results[-1], Exception) else vm_project_map(results[-1])
     rows: dict[tuple, UsageRow] = {}
-    for vendor, result in zip(vendors, results):
+    for vendor, result in zip(vendors, results[:-1]):
         if isinstance(result, Exception):
             continue
         src = METER_SOURCES[vendor]
@@ -420,14 +452,15 @@ async def fetch_usage(start: datetime, end: datetime) -> tuple[list[UsageRow], l
             m = series.get("metric", {})
             label = m.get("cluster", "")
             model = (m.get(src["model"]) if src["model"] else None) or src["model_default"]
+            project = projects.get(label) or vm_projects.get(m.get(src["host"]))
             for ts, raw in series.get("values", []):
                 cards = parse_finite(raw)
                 if not cards:
                     continue
                 day = datetime.fromtimestamp(float(ts), KST).date()
-                key = (day, label, vendor, model)
+                key = (day, label, project, vendor, model)
                 if key not in rows:
-                    rows[key] = UsageRow(day, label or DEFAULT_CLUSTER_NAME, projects.get(label), vendor, model, 0.0)
+                    rows[key] = UsageRow(day, label or DEFAULT_CLUSTER_NAME, project, vendor, model, 0.0)
                 rows[key].allocated_hours += cards
     return list(rows.values()), warnings
 
