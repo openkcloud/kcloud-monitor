@@ -111,7 +111,8 @@ class Analysis(BaseModel):
     probable_cause: str = Field(..., description="추정 원인")
     contributing_factors: list[str] = Field(default_factory=list, description="기여 요인 (과열, 메모리 한도 근접 등)")
     confidence: str = Field(..., description="확신 정도 (high: 원인을 직접 가리키는 증거 있음 | medium: 탐지 신호뿐 | low: 증거 수집이 빠져 확인 못 함)")
-    evidence_basis: list[str] = Field(default_factory=list, description="판단에 쓴 증거 종류 (signal | logs | metrics)")
+    evidence_basis: list[str] = Field(
+        default_factory=list, description="판단에 쓴 증거 종류 (alert | signal | logs | metrics). alert, signal 은 장애를 잡은 탐지 경로")
     unverified: list[str] = Field(default_factory=list, description="수집하지 못해 확인하지 못한 증거 종류")
 
 

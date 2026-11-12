@@ -583,6 +583,11 @@ def analyze(fault: dict, evidence: dict) -> dict:
     >>> a = analyze({"fault_type": "npu_fault", "trigger": "npu_unhealthy", "target": {"vendor": "rebellions"}}, ev)
     >>> (a["confidence"], a["contributing_factors"], a["evidence_basis"])  # 리벨리온 쓰로틀 기준은 90°C 라 온도는 빠짐
     ('medium', ['장애 구간에 쓰로틀(클럭 제한) 발생'], ['metrics', 'signal'])
+    >>> ev = {"metrics_snapshot": [{"metric": "temperature_celsius", "max": 40.0}], "logs_snapshot": [],
+    ...       "collection_status": {"metrics": "ok", "logs": "empty", "resource_map": "ok"}}
+    >>> analyze({"fault_type": "npu_fault", "trigger": "temperature_celsius", "source": "alert",
+    ...          "target": {"vendor": "furiosa"}}, ev)["evidence_basis"]  # 알람으로 잡은 장애는 알람이 근거
+    ['alert']
     """
     kind, trigger = fault["fault_type"], fault.get("trigger")
     fields = [e["detected_fields"] for e in evidence["logs_snapshot"] if e.get("detected_fields")]
@@ -657,6 +662,8 @@ def analyze(fault: dict, evidence: dict) -> dict:
         basis.add("signal")
     elif kind == "hardware_fault":
         cause = "커널이 하드웨어 또는 디스크 오류를 기록"
+    if fault.get("source") in ("alert", "signal"):  # 장애를 잡은 탐지(알람, 고정 신호) 자체도 원인 판단의 근거
+        basis.add(fault["source"])
 
     status = evidence["collection_status"]
     missing = [k for k in ("metrics", "logs", "resource_map") if status.get(k) in ("unavailable", "unknown")]
