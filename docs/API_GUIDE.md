@@ -239,6 +239,52 @@ canonical 99개 + 별칭 4개 + 인증 3개 = **106 라우트**. 전부 `GET`(�
 - 결측은 0 으로 채우지 않는다. 계측되지 않은 구간은 `PARTIAL_HISTORY`, 프로젝트 매핑이 없으면 `NO_PROJECT_MAPPING`(`project` null), 단가가 없으면 `PRICE_NOT_DEFINED`(`unpriced_hours`) 경고가 붙는다.
 - NPU(RNGD, ATOM) 초기 단가는 공개 단가가 없어 비교 대상 GPU 의 시장 중앙값을 넣은 임시값이다. 정책의 `source` 에 근거가 적혀 있다.
 
+### Faults — 장애 정보 분석 (3)
+
+알람 평가기의 firing 알람과 고정 PromQL 신호를 장애로 분류하고, 장애마다 증거와 원인 분석을 돌려준다. 조회 전용이다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/faults/active` (`cluster`, `fault_type`, `severity`) | 진행 중 장애. critical 먼저 |
+| `/faults/history` (`start`, `status`, `limit`) | 장애 이력. 알람 이력의 발생, 해제 기록으로 만든다 (기본 7일) |
+| `/faults/{fault_id}` | 장애 상세: 증거(`evidence`)와 원인 분석(`analysis`) |
+
+- 탐지 경로는 두 가지다. `alert` 는 알람 정책 중 장애로 보는 지표(가속기 상태 이상, 온도, 수집 중단, XID 로그, OOM 로그, 재시작 반복 로그, 하드웨어와 디스크 오류 로그)이고, `signal` 은 정책 없이도 보는 고정 신호(`xid`, `oom_killed`, `restart_loop`, `npu_dead`, `npu_unhealthy`, `node_not_ready`, `vm_error`)다. NPU 는 XID 가 없어 Furiosa 는 `furiosa_npu_alive` 0, Rebellions 는 `RBLN_DEVICE_STATUS:HEALTH` 가 0 이 아닌 카드를 본다. 사용률, 메모리 포화, SLO 알람은 장애로 보지 않는다.
+- 장애 유형은 `accelerator_error`, `npu_fault`, `workload_oom`, `workload_crash_loop`, `node_not_ready`, `vm_down`, `hardware_fault`.
+- 증거는 발생 30분 전부터 10분 뒤까지의 메트릭, 관련 로그 최대 20줄(XID 코드, OOM 프로세스 같은 추출 필드 포함), 대상에서 물리서버까지의 경로와 영향 Pod 다. 종류별 수집 결과는 `evidence.collection_status` 에 있고, 일부가 빠지면 `EVIDENCE_PARTIAL` 경고가 붙는다.
+- 원인 분석은 규칙으로 낸 추정이다. `confidence` 는 원인을 직접 가리키는 증거가 있으면 `high`, 탐지 신호뿐이면 `medium`, 증거를 수집하지 못했으면 `low`.
+- `DATABASE_URL` 이 없으면 `/faults/active` 는 고정 신호만 보고(`ALERT_STORE_NOT_CONFIGURED` 경고), `/faults/history` 는 503. 고정 신호 장애는 신호가 사라지면 이력에 남지 않는다.
+
+### Recovery Policies — 후속 조치 정책 (5)
+
+장애 유형별로 어떤 절차를 권고할지 적어 둔 정책을 관리한다. 정책은 권고 전용(`mode` 는 항상 `recommendation-only`)이고 이 API 는 조치를 실행하지 않는다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `GET·POST /recovery/policies` (`fault_type`, `enabled`) | 정책 목록, 생성 |
+| `GET·PUT·DELETE /recovery/policies/{policy_id}` | 정책 상세, 전체 교체, 삭제 |
+
+- 정책은 적용 조건(`fault_type`, `vendor_scope`, `error_codes`)과 조치 절차(`steps`)로 이뤄진다. 한 장애에 여러 정책이 맞으면 XID 코드를 지정한 정책, 벤더를 지정한 정책 순으로 우선한다.
+- 절차 단계는 `manual_review`(확인), `manual_action`(관리자가 직접 실행, `risk_level` 필수), `record_feedback`(결과 기록) 세 종류다.
+- `steps[].reference_queries` 에는 `{fault_id}`, `{cluster}`, `{node}`, `{namespace}`, `{pod}`, `{container}`, `{accelerator_id}`, `{vm_id}` 자리를 쓸 수 있고, 복구 정보를 만들 때 장애 대상 값으로 채워진다.
+- 첫 기동 때 초기 정책 7건(GPU 오류, NPU 오류, 메모리 부족 종료, 재시작 반복, 노드 NotReady, VM 비정상, 서버 하드웨어 오류)이 들어간다. `DATABASE_URL` 이 없으면 초기 정책을 읽기 전용으로 돌려주고(`RECOVERY_STORE_NOT_CONFIGURED` 경고) 생성, 수정, 삭제는 503.
+- 규칙 위반은 422, `detail.errors` 에 `RISK_LEVEL_REQUIRED`, `UNKNOWN_PLACEHOLDER` 등.
+
+### Recovery — 복구 정보 (2)
+
+진행 중 장애에 후속 조치 정책을 대입해 복구 절차와 관련 정보를 만든다. 저장하지 않고 조회할 때마다 만들며, 조치를 실행하지 않는다.
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `/recovery/recommendations` (`cluster`, `fault_type`, `priority`) | 장애별 복구 정보 요약. `urgent` 먼저 |
+| `/recovery/recommendations/{recommendation_id}` | 복구 정보 상세 |
+
+- 상세는 추정 원인(`probable_cause`, `confidence`), 조치 절차(`recommended_actions`, 참고 경로가 그 장애의 대상 값으로 채워짐), 영향 범위(`affected_scope`: 가속기, Pod, 워크로드, 물리서버까지의 경로), 조치 뒤 확인 방법(`verification`)을 담는다.
+- 우선순위는 장애 심각도에서 나온다. `critical` 은 `urgent`, `warning` 은 `normal`.
+- 영향 범위를 정하지 못하면 `affected_scope.status` 가 `unknown` 이고 수치는 null 이다 (0 과 구분).
+- 맞는 정책이 없는 장애는 목록에서 빠지고 `NO_POLICY_MATCHED` 경고가 붙는다. 상세는 404.
+- 검토 상태(수락, 거절)와 조치 결과는 저장하지 않는다.
+
 ### 별칭 — 단축 경로 (4)
 
 UUID 직접 조회용. 응답 `_links.canonical`로 정규 경로 안내.
