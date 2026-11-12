@@ -310,7 +310,8 @@ _POLICY_RULES = """
       새 버전 시작일에 자동 종료
     * 소급 금지: 시작일은 내일(KST) 이후만. 이미 시작한 버전은 수정, 삭제 불가 (지난 비용을 그때 단가로 재현하기 위함)
     * 409 사유: `POLICY_BACKDATED`(시작일이 오늘이거나 그 전), `POLICY_OVERLAP`(같은 자원의 다른 버전과 기간 겹침),
-      `POLICY_ALREADY_EFFECTIVE`(이미 시작한 버전), `POLICY_INVALID_PERIOD`(끝이 시작보다 빠름)
+      `POLICY_ALREADY_EFFECTIVE`(이미 시작한 버전), `POLICY_INVALID_PERIOD`(끝이 시작보다 빠름),
+      `POLICY_GAP`(이전 버전을 대신하는 버전에 종료일을 넣어 그 뒤 단가가 비게 됨. 수정에서만)
 """
 
 
@@ -471,15 +472,20 @@ async def update_policy(policy_id: str, body: PolicyUpdate):
 
     * `name`, `unit_price_krw` (필수), `billing_unit`, `effective_to`, `source`. 보내지 않은 선택 항목은 기본값으로 바뀜
     * 대상 자원과 시작일은 못 바꿈. 바꾸려면 삭제 후 새로 추가
+    * 이전 버전을 대신하는 버전에 종료일을 넣으려면 그 날 시작하는 다음 버전이 먼저 있어야 함 (없으면 `POLICY_GAP`)
     """
     _require_store()
     cur = await _future_policy(policy_id)
     new = replace(cur, name=body.name, billing_unit=body.billing_unit, unit_price_krw=body.unit_price_krw,
                   effective_to=body.effective_to, source=body.source)
+    rows = await store.policy_rows()
+    existing = [metering.to_policy(r) for r in rows]
     try:
-        metering.check_new_policy(new, await store.list_policies(), metering.today_kst())
+        metering.check_new_policy(new, existing, metering.today_kst())
     except PolicyConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if metering.leaves_gap(new, existing, {r["id"] for r in rows if r.get("closed_by") == policy_id}):
+        raise HTTPException(status_code=409, detail="POLICY_GAP")
     return PolicyResponse(data=await store.update_policy(new))
 
 

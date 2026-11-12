@@ -188,6 +188,27 @@ def check_new_policy(new: PricePolicy, existing: list[PricePolicy], today: date)
     return close
 
 
+def leaves_gap(new: PricePolicy, existing: list[PricePolicy], replaced_ids: set[str]) -> bool:
+    """이전 버전을 자동 종료시킨 버전에 끝을 넣으면 그 뒤로 같은 자원의 단가가 비는지. replaced_ids 는 이 버전이 닫은 버전.
+
+    새 버전 추가는 같은 경우를 겹침으로 거절하므로(check_new_policy) 수정에도 같은 규칙을 둔다.
+    끝 날에 시작하는 다음 버전이 있으면 공백이 아니다. 이전 버전이 없는 자원은 끝을 넣어도 된다.
+
+    >>> v1 = PricePolicy("v1", "", "accelerator", "nvidia", "L40S", 100, date(2026, 1, 1), date(2026, 12, 1))
+    >>> v2 = PricePolicy("v2", "", "accelerator", "nvidia", "L40S", 80, date(2026, 12, 1), date(2026, 12, 10))
+    >>> leaves_gap(v2, [v1], {"v1"}), leaves_gap(replace(v2, effective_to=None), [v1], {"v1"})
+    (True, False)
+    >>> v3 = replace(v2, id="v3", effective_from=date(2026, 12, 10), effective_to=None)
+    >>> leaves_gap(v2, [v1, v3], {"v1"}), leaves_gap(v2, [], set())
+    (False, False)
+    """
+    if new.effective_to is None or not replaced_ids:
+        return False
+    key = (new.resource_type, new.vendor, new.model.lower(), new.contract_type)
+    return not any((p.resource_type, p.vendor, p.model.lower(), p.contract_type) == key
+                   and p.effective_from == new.effective_to and p.id != new.id for p in existing)
+
+
 # ---------------------------------------------------------------------------
 # 2. 미터링 엔진
 # ---------------------------------------------------------------------------
