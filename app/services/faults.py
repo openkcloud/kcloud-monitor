@@ -436,10 +436,19 @@ async def _logs(fault: dict, node: Optional[str], start: datetime, end: datetime
     if not loki_client.configured:
         return [], "not_configured"
     t = fault["target"]
-    rx = pattern.replace("\\", "\\\\").replace('"', '\\"')
+
+    def q(rx: str) -> str:
+        return rx.replace("\\", "\\\\").replace('"', '\\"')
+
+    selector = f'{{container!="loki"}} |~ "{q(pattern)}"'
+    if fault["fault_type"] == "npu_fault":
+        # NPU 드라이버 패턴(furiosa, npu 등)은 operator 의 정상 로그까지 걸려 상한(MAX_LOGS)을 INFO 줄로 채운다.
+        # 오류 로그 알람과 같은 오류 단어, 제외 규칙으로 오류 줄만 남긴다
+        selector += (f' |~ "{q(alert_service.LOG_METRICS["log_error_count"][1])}"'
+                     f' !~ "{q(alert_service.LOG_EXCLUDE["log_error_count"])}"')
     try:
         # 커널 OOM, XID 는 노드 저널에 남으므로 Pod 가 아니라 노드로 좁힌다. Loki 자신의 쿼리 기록은 제외
-        logql = _scoped(f'{{container!="loki"}} |~ "{rx}"', cluster=t.get("cluster"), node=node or t.get("node"))
+        logql = _scoped(selector, cluster=t.get("cluster"), node=node or t.get("node"))
         resp = await loki_client.query_range(logql, start.isoformat(), end.isoformat(), MAX_LOGS)
     except HTTPException as exc:
         logger.warning("fault logs unavailable: %s", exc.detail)
