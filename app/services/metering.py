@@ -21,6 +21,7 @@ import calendar
 import json
 import logging
 import math
+import re
 import statistics
 import uuid
 from collections import defaultdict
@@ -66,7 +67,7 @@ class PricePolicy:
     name: str
     resource_type: str
     vendor: str  # 빈 문자열이면 벤더 무관
-    model: str  # 모델 이름에 들어 있는 글자. 빈 문자열이면 벤더 전체
+    model: str  # 모델 이름에 단어로 들어 있는 글자 (model_matches). 빈 문자열이면 벤더 전체
     unit_price_krw: float  # billing_unit 1단위(가속기는 1장·1시간) 단가
     effective_from: date
     effective_to: Optional[date] = None  # 이 날 전까지 유효. None 이면 계속
@@ -95,6 +96,21 @@ SEED_POLICIES: list[PricePolicy] = [
 ]
 
 
+def model_matches(fragment: str, model: str) -> bool:
+    """모델 이름 조각이 모델 이름에 단어로 들어 있는지. 대소문자 무시, 빈 조각은 모든 모델.
+
+    부분 문자열로 맞추면 A10 이 A100 에, L4 가 L40S 에 붙어 다른 카드의 단가가 조용히 쓰인다.
+    그래서 조각 앞뒤가 영문, 숫자가 아닐 때만 맞는 것으로 본다.
+
+    >>> [model_matches(f, m) for f, m in [("L40S", "NVIDIA L40S"), ("A10", "NVIDIA A100-SXM4-80GB"),
+    ...  ("A100", "NVIDIA A100-SXM4-80GB"), ("L4", "NVIDIA L40S"), ("CA22", "RBLN-CA22"), ("", "RNGD"), ("rngd", "RNGD")]]
+    [True, False, True, False, True, True, True]
+    """
+    if not fragment:
+        return True
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(fragment)}(?![A-Za-z0-9])", model, re.IGNORECASE) is not None
+
+
 def find_price(resource_type: str, vendor: str, model: str, day: date, policies: list[PricePolicy],
                contract_type: str = "on_demand") -> Optional[PricePolicy]:
     """그날 유효한 단가 정책, 없으면 None. 여러 개가 맞으면 벤더 지정, 긴 모델 지정, 늦은 시작 순으로 우선.
@@ -111,10 +127,13 @@ def find_price(resource_type: str, vendor: str, model: str, day: date, policies:
     ['a', 'b', 'c']
     >>> find_price("accelerator", "furiosa", "RNGD", date(2026, 10, 1), p).id
     'd'
+    >>> a10 = [PricePolicy("a10", "", "accelerator", "nvidia", "A10", 100, date(2026, 1, 1))]
+    >>> find_price("accelerator", "nvidia", "NVIDIA A100-SXM4-80GB", date(2026, 10, 1), a10) is None
+    True
     """
     hits = [p for p in policies
             if p.resource_type == resource_type and p.contract_type == contract_type
-            and p.vendor in ("", vendor) and p.model.lower() in model.lower()
+            and p.vendor in ("", vendor) and model_matches(p.model, model)
             and p.effective_from <= day and (p.effective_to is None or day < p.effective_to)]
     return max(hits, key=lambda p: (p.vendor != "", len(p.model), p.effective_from), default=None)
 
@@ -167,6 +186,27 @@ def check_new_policy(new: PricePolicy, existing: list[PricePolicy], today: date)
         else:
             raise PolicyConflict("POLICY_OVERLAP")
     return close
+
+
+def leaves_gap(new: PricePolicy, existing: list[PricePolicy], replaced_ids: set[str]) -> bool:
+    """이전 버전을 자동 종료시킨 버전에 끝을 넣으면 그 뒤로 같은 자원의 단가가 비는지. replaced_ids 는 이 버전이 닫은 버전.
+
+    새 버전 추가는 같은 경우를 겹침으로 거절하므로(check_new_policy) 수정에도 같은 규칙을 둔다.
+    끝 날에 시작하는 다음 버전이 있으면 공백이 아니다. 이전 버전이 없는 자원은 끝을 넣어도 된다.
+
+    >>> v1 = PricePolicy("v1", "", "accelerator", "nvidia", "L40S", 100, date(2026, 1, 1), date(2026, 12, 1))
+    >>> v2 = PricePolicy("v2", "", "accelerator", "nvidia", "L40S", 80, date(2026, 12, 1), date(2026, 12, 10))
+    >>> leaves_gap(v2, [v1], {"v1"}), leaves_gap(replace(v2, effective_to=None), [v1], {"v1"})
+    (True, False)
+    >>> v3 = replace(v2, id="v3", effective_from=date(2026, 12, 10), effective_to=None)
+    >>> leaves_gap(v2, [v1, v3], {"v1"}), leaves_gap(v2, [], set())
+    (False, False)
+    """
+    if new.effective_to is None or not replaced_ids:
+        return False
+    key = (new.resource_type, new.vendor, new.model.lower(), new.contract_type)
+    return not any((p.resource_type, p.vendor, p.model.lower(), p.contract_type) == key
+                   and p.effective_from == new.effective_to and p.id != new.id for p in existing)
 
 
 # ---------------------------------------------------------------------------
@@ -231,31 +271,58 @@ def meter_queries(vendor: str) -> dict[str, str]:
     }
 
 
+# 쿠버네티스 없는 단독 VM 클러스터(Magnum 매핑 없음)는 카드 호스트 이름과 같은 이름의 Nova VM 의 프로젝트로 귀속한다.
+# openstack-exporter 의 VM 상태(tenant_id)에 프로젝트 정보(id, name)를 붙인 것. 범위 조회 간격(1h)마다 그 시간에 있던 VM
+VM_PROJECT_QUERY = (
+    "max by (name, project) (last_over_time(openstack_nova_server_status[1h]) * on (tenant_id) group_left(project) "
+    'max by (tenant_id, project) (label_replace(label_replace(openstack_identity_project_info, '
+    '"tenant_id", "$1", "id", "(.*)"), "project", "$1", "name", "(.*)")))')
+
+
+def vm_project_map(result: list[dict]) -> dict[str, str]:
+    """VM 이름 → 프로젝트 이름. 같은 이름의 VM 이 여러 프로젝트에 있으면 어느 쪽인지 몰라 뺀다.
+
+    >>> s = lambda n, p: {"metric": {"name": n, "project": p}, "values": [[0, "1"]]}
+    >>> vm_project_map([s("vm-a", "p1"), s("vm-a", "p1"), s("vm-b", "p1"), s("vm-b", "p2")])
+    {'vm-a': 'p1'}
+    """
+    found: dict[str, set[str]] = defaultdict(set)
+    for series in result:
+        m = series.get("metric", {})
+        if m.get("name") and m.get("project"):
+            found[m["name"]].add(m["project"])
+    return {name: next(iter(ps)) for name, ps in found.items() if len(ps) == 1}
+
+
 async def meter_range(start: datetime, end: datetime) -> tuple[list[dict], set[datetime]]:
     """[start, end) 의 1시간 구간마다 카드별 사용량 레코드와, Prometheus 에 데이터가 있던 구간 집합.
 
     Prometheus 조회 실패는 예외로 올려 그 구간을 다음 주기에 다시 계측하게 한다(빈 결과와 구분).
     수집 대상(up) 표본이 하나도 없던 구간은 사용량 0 이 아니라 결측으로 남기려고 따로 표시한다.
-    프로젝트 매핑이 없으면 project 는 null(과금 보류)이고 경고를 남긴다. 이전 값을 재사용하지 않는다.
+    프로젝트는 클러스터의 Magnum 매핑, 없으면 카드 호스트와 같은 이름의 VM 프로젝트. 둘 다 없으면 null(과금 보류)이고
+    경고를 남긴다. 이전 값을 재사용하지 않는다.
     ponytail: 보류된 레코드를 나중에 프로젝트에 다시 귀속하는 작업은 아직 없음
     """
     clusters = await cluster_discovery.get_clusters()
     projects = {c.label_value: c.openstack_project for c in clusters.values()}
     s, e = (start + timedelta(hours=1)).isoformat(), end.isoformat()
     jobs = [(v, f, q) for v in METER_SOURCES for f, q in meter_queries(v).items()]
+    jobs.append(("", "vm_projects", VM_PROJECT_QUERY))
     jobs.append(("", "covered", "sum(count_over_time(up[1h]))"))
     results = await asyncio.gather(*(
         prometheus_client.range_query(q, s, e, "1h", raise_errors=True) for _, _, q in jobs))
     covered = {datetime.fromtimestamp(float(ts), timezone.utc) - timedelta(hours=1)
                for series in results[-1] for ts, raw in series.get("values", []) if parse_finite(raw)}
-    fields = [(vendor, field, result) for (vendor, field, _), result in zip(jobs[:-1], results)]
-    return build_records(fields, projects), covered
+    fields = [(vendor, field, result) for (vendor, field, _), result in zip(jobs[:-2], results)]
+    return build_records(fields, projects, vm_project_map(results[-2])), covered
 
 
-def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str, Optional[str]]) -> list[dict]:
+def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str, Optional[str]],
+                  vm_projects: Optional[dict[str, str]] = None) -> list[dict]:
     """(벤더, 필드, 범위 조회 결과) 목록을 카드 x 1시간 사용량 레코드로 조립. 벤더마다 allocated_hours 가 먼저 와야 한다.
 
     표본 시각은 구간 끝이라 레코드 ts 는 1시간 앞. 점유는 1.0 을 넘지 않게 자르고, 전력이 없으면 NO_POWER_DATA.
+    프로젝트는 클러스터 매핑(projects)이 먼저, 없으면 카드 호스트 이름의 VM 프로젝트(vm_projects).
 
     >>> def s(v, uuid="GPU-1"):
     ...     return [{"metric": {"cluster": "l40s", "UUID": uuid, "Hostname": "n1", "modelName": "NVIDIA L40S"},
@@ -270,6 +337,8 @@ def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str,
     ('2026-11-11T02:00:00+00:00', 'p1')
     >>> build_records([("nvidia", "allocated_hours", s("1"))], {})[0]["warnings"]
     ['NO_PROJECT_MAPPING', 'NO_POWER_DATA']
+    >>> build_records([("nvidia", "allocated_hours", s("1"))], {"l40s": None}, {"n1": "p2"})[0]["project"]  # 단독 VM
+    'p2'
     """
     recs: dict[tuple, dict] = {}
     for vendor, field, result in fields:
@@ -288,7 +357,7 @@ def build_records(fields: list[tuple[str, str, list[dict]]], projects: dict[str,
                 # ponytail: 한 구간 안에서 호스트, 모델 라벨이 바뀌면 시계열이 둘로 갈려 뒤의 값만 남음.
                 #           라벨 변경이 잦아지면 (cluster, id) 로만 묶고 호스트, 모델은 따로 조회
                 if field == "allocated_hours":
-                    project = projects.get(label)
+                    project = projects.get(label) or (vm_projects or {}).get(m.get(src["host"]))
                     recs[key] = {
                         "ts": hour, "resource_type": "accelerator", "resource_id": rid,
                         "cluster": label or DEFAULT_CLUSTER_NAME, "project": project, "vendor": vendor,
@@ -359,20 +428,23 @@ class UsageRow:
 async def fetch_usage(start: datetime, end: datetime) -> tuple[list[UsageRow], list[str]]:
     """DB 가 없을 때의 임시 경로. 1시간 표본 하나 = 그 시각 카드 장수 x 1시간 (점유 시간만).
 
-    벤더 하나의 조회가 실패하면 그 벤더만 빠지고 UPSTREAM_ERROR 경고를 남긴다.
+    프로젝트는 계측 경로와 같은 규칙(클러스터 매핑, 없으면 호스트 이름의 VM 프로젝트)으로 붙인다.
+    벤더 하나나 VM 프로젝트 조회가 실패하면 그 부분만 빠지고 UPSTREAM_ERROR 경고를 남긴다.
     """
     clusters = await cluster_discovery.get_clusters()
     projects = {c.label_value: c.openstack_project for c in clusters.values()}
     s, e = start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
     vendors = list(METER_SOURCES)
+    queries = [f"count by (cluster, {METER_SOURCES[v]['host']}"
+               f"{', ' + METER_SOURCES[v]['model'] if METER_SOURCES[v]['model'] else ''}) ({card_util_expr(v)})"
+               for v in vendors]
     results = await asyncio.gather(*(
-        prometheus_client.range_query(
-            f"count by (cluster{', ' + METER_SOURCES[v]['model'] if METER_SOURCES[v]['model'] else ''}) "
-            f"({card_util_expr(v)})", s, e, "1h", raise_errors=True)
-        for v in vendors), return_exceptions=True)
+        prometheus_client.range_query(q, s, e, "1h", raise_errors=True) for q in queries + [VM_PROJECT_QUERY]),
+        return_exceptions=True)
     warnings = ["UPSTREAM_ERROR"] if any(isinstance(r, Exception) for r in results) else []
+    vm_projects = {} if isinstance(results[-1], Exception) else vm_project_map(results[-1])
     rows: dict[tuple, UsageRow] = {}
-    for vendor, result in zip(vendors, results):
+    for vendor, result in zip(vendors, results[:-1]):
         if isinstance(result, Exception):
             continue
         src = METER_SOURCES[vendor]
@@ -380,14 +452,15 @@ async def fetch_usage(start: datetime, end: datetime) -> tuple[list[UsageRow], l
             m = series.get("metric", {})
             label = m.get("cluster", "")
             model = (m.get(src["model"]) if src["model"] else None) or src["model_default"]
+            project = projects.get(label) or vm_projects.get(m.get(src["host"]))
             for ts, raw in series.get("values", []):
                 cards = parse_finite(raw)
                 if not cards:
                     continue
                 day = datetime.fromtimestamp(float(ts), KST).date()
-                key = (day, label, vendor, model)
+                key = (day, label, project, vendor, model)
                 if key not in rows:
-                    rows[key] = UsageRow(day, label or DEFAULT_CLUSTER_NAME, projects.get(label), vendor, model, 0.0)
+                    rows[key] = UsageRow(day, label or DEFAULT_CLUSTER_NAME, project, vendor, model, 0.0)
                 rows[key].allocated_hours += cards
     return list(rows.values()), warnings
 
@@ -486,12 +559,13 @@ def simulate_policy(rows: list[UsageRow], policies: list[PricePolicy], candidate
 
 
 def forecast_remaining(history: list[float], remaining_days: float, method: str,
-                       confidence_percent: float) -> tuple[str, float, float, float]:
+                       confidence_percent: float) -> tuple[str, float, Optional[float], Optional[float]]:
     """완결된 일별 비용(오래된 순)으로 남은 기간 비용과 신뢰구간 계산. (실제 쓴 방법, 예측, 하한, 상한)
 
     moving_average: 일평균 x 남은 일수
     linear_trend  : 최소제곱 직선을 남은 기간 가운데 시점에서 읽은 값 x 남은 일수. 3일 미만이면 이동 평균
     구간 폭은 일별 오차를 서로 독립으로 보고 z x 표준편차 x sqrt(남은 일수 + 남은 일수^2 / 표본 수).
+    표본이 1일뿐이면 변동을 알 수 없어 하한, 상한은 None (폭 0 인 구간을 내지 않음).
 
     >>> forecast_remaining([100, 100, 100], 10, "moving_average", 90)
     ('moving_average', 1000.0, 1000.0, 1000.0)
@@ -502,6 +576,8 @@ def forecast_remaining(history: list[float], remaining_days: float, method: str,
     >>> _, mid, lo, hi = forecast_remaining([90, 110, 100, 100], 10, "moving_average", 90)
     >>> lo < mid == 1000.0 < hi
     True
+    >>> forecast_remaining([100], 10, "linear_trend", 90)
+    ('moving_average', 1000.0, None, None)
     """
     n = len(history)
     z = statistics.NormalDist().inv_cdf(0.5 + confidence_percent / 200)
@@ -512,8 +588,10 @@ def forecast_remaining(history: list[float], remaining_days: float, method: str,
         mid = max(0.0, intercept + slope * (n - 0.5 + remaining_days / 2)) * remaining_days
     else:
         method = "moving_average"
-        sd = statistics.stdev(history) if n > 1 else 0.0
         mid = statistics.fmean(history) * remaining_days
+        if n < 2:
+            return method, round(mid, 2), None, None
+        sd = statistics.stdev(history)
     half = z * sd * math.sqrt(remaining_days + remaining_days ** 2 / n)
     return method, round(mid, 2), round(max(0.0, mid - half), 2), round(mid + half, 2)
 
@@ -600,6 +678,8 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
     (None, None, ['PRICE_NOT_DEFINED'])
     >>> build_prediction(rows, now, pol, seen_days=set(days), project="p2")[1]
     ['NO_DATA']
+    >>> build_prediction(rows, now, pol, seen_days={days[-1]}, window_days=1)[0]["predicted"]["confidence_interval"] is None
+    True
     """
     local = now.astimezone(KST)
     today = local.date()
@@ -669,9 +749,9 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
             warnings.append("TREND_FALLBACK_MOVING_AVERAGE")
         # 못 본 지난 날은 추세 연장이 아니라 일평균으로 채움
         _, fill, f_lo, f_hi = forecast_remaining(history, missing, "moving_average", confidence_percent)
-        predicted = {"month_end_cost_krw": round(accumulated + fill + mid),
-                     "confidence_interval": {"low_krw": round(accumulated + f_lo + lo),
-                                             "high_krw": round(accumulated + f_hi + hi)},
+        interval = None if lo is None or f_lo is None else {"low_krw": round(accumulated + f_lo + lo),
+                                                             "high_krw": round(accumulated + f_hi + hi)}
+        predicted = {"month_end_cost_krw": round(accumulated + fill + mid), "confidence_interval": interval,
                      "confidence_percent": confidence_percent}
 
     data = {
@@ -699,8 +779,8 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
 def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePolicy]) -> tuple[dict, list[str]]:
     """남은 기간 동안 가속기 구성과 사용 시간을 바꾸면 월말 비용이 얼마가 되는지 계산.
 
-    바꾸는 항목은 vendor 가 같고 모델 이름에 change.model 이 들어 있는(cluster 를 주면 그 클러스터만) 기존 항목을
-    대체한다. 맞는 항목이 없으면 새 자원 추가로 본다. 기준선은 항목별 이동 평균.
+    바꾸는 항목은 vendor 가 같고 모델 이름에 change.model 이 단어로 들어 있는(cluster 를 주면 그 클러스터만) 기존
+    항목을 대체한다. 맞는 항목이 없으면 새 자원 추가로 본다. 기준선은 항목별 이동 평균.
 
     >>> pred = {"current": {"days_remaining": 10, "missing_days": 0, "accumulated_cost_krw": 1000},
     ...         "breakdown": [{"cluster": "l40s", "vendor": "nvidia", "model": "NVIDIA L40S",
@@ -710,6 +790,12 @@ def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePoli
     ...                date(2026, 10, 23), pol)
     >>> (r["baseline_month_end_cost_krw"], r["scenario_month_end_cost_krw"], r["savings_krw"], w)
     (2000, 1400, 600, [])
+    >>> pred["breakdown"] = [{"cluster": "c", "vendor": "nvidia", "model": m, "daily_avg_cost_krw": 100}
+    ...                      for m in ("NVIDIA A100", "NVIDIA A10")]
+    >>> pol = [PricePolicy("a10", "", "accelerator", "nvidia", "A10", 5, date(2026, 1, 1))]
+    >>> what_if(pred, [{"vendor": "nvidia", "model": "A10", "count": 1, "hours_per_day": 1}],
+    ...         date(2026, 10, 23), pol)[0]["changes"][0]["replaced_items"]  # A100 은 대체하지 않음
+    1
     """
     cur = pred["current"]
     remaining, missing, acc = cur["days_remaining"], cur["missing_days"], cur["accumulated_cost_krw"] or 0
@@ -725,7 +811,7 @@ def what_if(pred: dict, changes: list[dict], day: date, policies: list[PricePoli
         policy = find_price("accelerator", ch["vendor"], ch["model"], day, policies)
         matched = [] if policy is None else [  # 앞선 변경이 이미 대체한 항목은 다시 세지 않음
             i for i, b in enumerate(items)
-            if i not in replaced and b["vendor"] == ch["vendor"] and ch["model"].lower() in b["model"].lower()
+            if i not in replaced and b["vendor"] == ch["vendor"] and model_matches(ch["model"], b["model"])
             and (not ch.get("cluster") or b["cluster"] == ch["cluster"])]
         if policy is None:
             if "PRICE_NOT_DEFINED" not in warnings:
@@ -1108,7 +1194,8 @@ async def predict_monthly(project: Optional[str], cluster: Optional[str], method
                 data["budget"] = {"budget_id": budget["id"], "name": budget["name"],
                                   **judge_budget(data["current"]["accumulated_cost_krw"], predicted,
                                                  budget["amount_krw"], budget["alert_percent"])}
-            if save_history and data["predicted"]:
+            # 이력은 구간까지 비교하므로 구간을 내지 못한 날(표본 1일)은 남기지 않음
+            if save_history and data["predicted"] and data["predicted"]["confidence_interval"]:
                 await store.save_prediction(scope_key(project, cluster), data)
         except Exception as exc:  # 저장소 장애가 예측 응답을 막지 않게 함
             logger.warning("metering store error: %s", exc)

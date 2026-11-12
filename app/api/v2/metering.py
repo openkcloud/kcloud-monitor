@@ -143,6 +143,11 @@ async def usage_summary(p: UsageParams = Depends()):
 
     * `window`: 구간과 계측된 시간 수
     * `totals`: 점유(청구 기본), 사용, 가중, 유휴 시간, 점유 대비 실사용률(%), 전력량(kWh), 비용(원)
+
+    참고
+
+    * 점유 시간은 카드 사용률 지표가 수집된 분의 비율. 수집이 끊긴 분과 꺼진 VM 에 붙은 카드(지표 없음)는 점유로 세지 않음
+    * 프로젝트는 클러스터의 Magnum 매핑, 없으면 카드 호스트와 같은 이름의 VM 프로젝트. 물리 노드에 꽂힌 카드는 `project` null
     """
     rows, window, warnings, policies = await _usage(p)
     items = _groups(rows, policies, lambda r: (), (), warnings)
@@ -310,7 +315,9 @@ _POLICY_RULES = """
       새 버전 시작일에 자동 종료
     * 소급 금지: 시작일은 내일(KST) 이후만. 이미 시작한 버전은 수정, 삭제 불가 (지난 비용을 그때 단가로 재현하기 위함)
     * 409 사유: `POLICY_BACKDATED`(시작일이 오늘이거나 그 전), `POLICY_OVERLAP`(같은 자원의 다른 버전과 기간 겹침),
-      `POLICY_ALREADY_EFFECTIVE`(이미 시작한 버전), `POLICY_INVALID_PERIOD`(끝이 시작보다 빠름)
+      `POLICY_ALREADY_EFFECTIVE`(이미 시작한 버전), `POLICY_INVALID_PERIOD`(끝이 시작보다 빠름),
+      `POLICY_GAP`(이전 버전을 대신하는 버전에 종료일을 넣어 그 뒤 단가가 비게 됨. 수정에서만)
+    * 이미 예약된 미래 버전보다 앞에 시작하는 버전은 추가할 수 없음(`POLICY_OVERLAP`). 뒤 버전을 지우고 시작일 순서대로 다시 추가
 """
 
 
@@ -471,15 +478,20 @@ async def update_policy(policy_id: str, body: PolicyUpdate):
 
     * `name`, `unit_price_krw` (필수), `billing_unit`, `effective_to`, `source`. 보내지 않은 선택 항목은 기본값으로 바뀜
     * 대상 자원과 시작일은 못 바꿈. 바꾸려면 삭제 후 새로 추가
+    * 이전 버전을 대신하는 버전에 종료일을 넣으려면 그 날 시작하는 다음 버전이 먼저 있어야 함 (없으면 `POLICY_GAP`)
     """
     _require_store()
     cur = await _future_policy(policy_id)
     new = replace(cur, name=body.name, billing_unit=body.billing_unit, unit_price_krw=body.unit_price_krw,
                   effective_to=body.effective_to, source=body.source)
+    rows = await store.policy_rows()
+    existing = [metering.to_policy(r) for r in rows]
     try:
-        metering.check_new_policy(new, await store.list_policies(), metering.today_kst())
+        metering.check_new_policy(new, existing, metering.today_kst())
     except PolicyConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if metering.leaves_gap(new, existing, {r["id"] for r in rows if r.get("closed_by") == policy_id}):
+        raise HTTPException(status_code=409, detail="POLICY_GAP")
     return PolicyResponse(data=await store.update_policy(new))
 
 
@@ -525,7 +537,7 @@ async def predict_monthly(
     응답
 
     * `current`: 지난 일수, 남은 일수, 이번 달 누적 비용, 최근 일평균 비용
-    * `predicted`: 월말 예상 비용과 신뢰구간. 단가 있는 사용량이 없으면 `null`
+    * `predicted`: 월말 예상 비용과 신뢰구간. 단가 있는 사용량이 없으면 `null`. 신뢰구간은 완결된 날이 1일뿐이면 `null`
     * `budget`: 같은 범위 예산이 있으면 소진율(누적 기준)과 초과 예상액(예측 기준)
     * `breakdown`: 클러스터, 가속기 모델별 점유 시간, 적용 단가, 누적과 월말 비용
 

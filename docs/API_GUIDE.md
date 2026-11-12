@@ -314,6 +314,11 @@ vLLM 히스토그램(TTFT, TPOT)을 Prometheus 에서 읽어 분위수, 목표 �
 
 - `DATABASE_URL` 이 없으면 사용량, 단가 정책, 예산, 예산 현황 경로는 503 `METERING_STORE_NOT_CONFIGURED`. 월말 예측과 가상 시나리오는 Prometheus 에서 점유 시간을 바로 세는 임시 경로로 동작한다.
 - 결측은 0 으로 채우지 않는다. 계측되지 않은 구간은 `PARTIAL_HISTORY`, 프로젝트 매핑이 없으면 `NO_PROJECT_MAPPING`(`project` null), 단가가 없으면 `PRICE_NOT_DEFINED`(`unpriced_hours`) 경고가 붙는다.
+- 점유 시간은 카드 사용률 지표가 수집된 분의 비율이다. 수집이 끊긴 분과 꺼진 VM 에 붙은 카드(지표 없음)는 점유로 세지 않는다.
+- 프로젝트는 클러스터의 Magnum 매핑으로 정하고, 매핑이 없는 단독 VM 클러스터는 카드 호스트와 같은 이름의 VM 이 속한 OpenStack 프로젝트로 정한다. 물리 노드에 꽂힌 카드는 `project` null 이다.
+- 단가 정책과 가상 시나리오의 `model` 은 모델 이름에 단어로 들어 있어야 맞는다. `A10` 은 `NVIDIA A10` 에 맞고 `NVIDIA A100` 에는 맞지 않는다.
+- 단가 정책 409 사유: `POLICY_BACKDATED`, `POLICY_OVERLAP`, `POLICY_ALREADY_EFFECTIVE`, `POLICY_INVALID_PERIOD`, `POLICY_GAP`(이전 버전을 대신하는 버전에 종료일을 넣어 그 뒤 단가가 비게 되는 수정). 예약된 미래 버전보다 앞에 시작하는 버전은 추가할 수 없어, 뒤 버전을 지우고 시작일 순서대로 다시 넣는다.
+- 월말 예측의 `confidence_interval` 은 일평균 계산에 쓴 완결된 날이 1일뿐이면 `null` 이다.
 - NPU(RNGD, ATOM) 초기 단가는 공개 단가가 없어 비교 대상 GPU 의 시장 중앙값을 넣은 임시값이다. 정책의 `source` 에 근거가 적혀 있다.
 
 ### Faults — 장애 정보 분석 (3)

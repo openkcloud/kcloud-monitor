@@ -86,7 +86,8 @@ class PredictedCost(BaseModel):
     """월말 예측. 확정 금액이 아니라 남은 기간 사용 패턴 가정에 기댄 추정."""
 
     month_end_cost_krw: float = Field(..., description="월말 예측 비용(원) = 누적 + 남은 기간 예측")
-    confidence_interval: ConfidenceInterval = Field(..., description="신뢰구간. 일별 비용 변동이 클수록 넓어짐")
+    confidence_interval: Optional[ConfidenceInterval] = Field(
+        None, description="신뢰구간. 일별 비용 변동이 클수록 넓어짐. 완결된 날이 1일뿐이면 변동을 알 수 없어 null")
     confidence_percent: float = Field(..., description="신뢰수준(%)")
 
 
@@ -151,7 +152,8 @@ class WhatIfChange(BaseModel):
     """남은 기간에 바꿀 가속기 구성 1건."""
 
     vendor: Vendor = Field(..., description="가속기 벤더 (nvidia | furiosa | rebellions)")
-    model: str = Field(..., min_length=1, description="가속기 모델 이름 조각 (예: L40S). 단가 정책과 기존 항목을 이 글자로 찾음")
+    model: str = Field(..., min_length=1, description="가속기 모델 이름 조각 (예: L40S). 단가 정책과 기존 항목을 이 글자로 찾음 "
+                                                          "(단어 단위라 A10 은 A100 에 맞지 않음)")
     cluster: Optional[str] = Field(None, description="이 클러스터 항목만 바꿈. 없으면 범위 안 같은 모델 전체")
     count: int = Field(..., ge=0, description="바꾼 뒤 장수. 0 이면 반납")
     hours_per_day: float = Field(..., ge=0, le=24, description="바꾼 뒤 하루 점유 시간 (0 ~ 24)")
@@ -334,7 +336,8 @@ class PolicyBody(BaseModel):
     vendor: Literal["", "nvidia", "furiosa", "rebellions"] = Field(
         "", description="가속기 벤더 (nvidia | furiosa | rebellions). 빈 문자열이면 벤더 무관")
     model: str = Field(
-        "", description="모델 이름에 들어 있는 글자 (예: L40S, 대소문자 무시). 빈 문자열이면 벤더 전체. 여러 정책이 맞으면 긴 쪽 우선")
+        "", description="모델 이름에 단어로 들어 있는 글자 (예: L40S, 대소문자 무시. A10 은 A100 에 맞지 않음). "
+                        "빈 문자열이면 벤더 전체. 여러 정책이 맞으면 긴 쪽 우선")
     contract_type: ContractType = Field(
         "on_demand", description="계약 형태 (on_demand | reserved | spot). 지금 비용 계산은 on_demand 만 사용")
     billing_unit: BillingUnit = Field("allocated_hours", description=_DESC_BILLING_UNIT)
