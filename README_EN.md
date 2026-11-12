@@ -14,7 +14,7 @@ KCloud Monitor is a FastAPI-based REST API service for unified monitoring of AI 
 
 ## Current Status
 
-The v1 API (prototype) has been retired (`docs/temp/02-decisions/design_contracts.md` §1). **155 routes** are served under `/api/v2`.
+The v1 API (prototype) has been retired. **155 routes** are served under `/api/v2`.
 Only `GET /openstack/vms/{vm_id}/gpu-passthrough` still returns a stub response (`status: not_implemented`).
 
 - Metrics: Prometheus (`PROMETHEUS_URL`)
@@ -22,7 +22,7 @@ Only `GET /openstack/vms/{vm_id}/gpu-passthrough` still returns a stub response 
 - Alert, metering, fault and recovery store: PostgreSQL (`DATABASE_URL`)
 - VMs, hypervisors, projects: OpenStack API (`OPENSTACK_*`)
 
-Areas whose data source is not configured return 503 or a query failure. See the [API guide](docs/API_GUIDE.md) (Korean) for per-area requirements.
+`PROMETHEUS_URL` is required. Areas whose other data sources are not configured return 503, or empty data with a `NOT_CONFIGURED` warning. See the [API guide](docs/API_GUIDE.md) (Korean) for per-area requirements.
 
 ## API Structure (`/api/v2`)
 

@@ -2,15 +2,15 @@
 
 KCloud Monitor v2 API 가이드입니다. `/api/v2` 아래 **155개 라우트**가 등록되어 있고, `GET /openstack/vms/{vm_id}/gpu-passthrough` 하나를 제외한 모든 엔드포인트가 실제 데이터소스(Prometheus, Loki, PostgreSQL, OpenStack API)로 동작합니다.
 
-데이터소스 설정에 따라 일부 영역은 503을 반환합니다.
+데이터소스를 설정하지 않으면 영역별로 아래처럼 동작합니다.
 
 | 영역 | 필요한 설정 | 미설정 시 |
 |------|------------|----------|
-| 대부분의 조회 API | `PROMETHEUS_URL` | 조회 실패(`/system/health` 는 `degraded`) |
+| 대부분의 조회 API | `PROMETHEUS_URL` | 빈 값이면 서버가 기동하지 않음. 주소에 닿지 않으면 빈 결과, `/system/health` 는 `degraded` |
 | Logs | `LOKI_URL` | 503 |
 | Alerts | `DATABASE_URL` | 503 `ALERT_STORE_NOT_CONFIGURED` |
 | Metering · Faults · Recovery | `DATABASE_URL` | 일부 경로 503 (각 섹션 참고) |
-| OpenStack | `OPENSTACK_*` | 조회 실패 |
+| OpenStack | `OPENSTACK_*` | HTTP 200, `status: "partial"`, `warnings: ["NOT_CONFIGURED"]`, 빈 데이터 |
 
 ## 목차
 - [기본 정보](#기본-정보)

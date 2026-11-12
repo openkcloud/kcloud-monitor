@@ -14,7 +14,7 @@ KCloud Monitor는 AI 반도체(GPU, NPU)와 클라우드 인프라(K8s·OpenStac
 
 ## 현재 상태
 
-v1 API(프로토타입)는 종료되었고(`docs/temp/02-decisions/design_contracts.md` §1), `/api/v2` 아래 **155개 라우트**가 동작합니다.
+v1 API(프로토타입)는 종료되었고, `/api/v2` 아래 **155개 라우트**가 동작합니다.
 `GET /openstack/vms/{vm_id}/gpu-passthrough` 하나만 아직 스텁(`status: not_implemented`)을 반환합니다.
 
 - 메트릭: Prometheus (`PROMETHEUS_URL`)
@@ -22,7 +22,7 @@ v1 API(프로토타입)는 종료되었고(`docs/temp/02-decisions/design_contra
 - 알람·미터링·장애·복구 저장소: PostgreSQL (`DATABASE_URL`)
 - VM·하이퍼바이저·프로젝트: OpenStack API (`OPENSTACK_*`)
 
-설정하지 않은 데이터소스를 쓰는 영역은 503 또는 조회 실패를 반환합니다. 영역별 조건은 [API 가이드](docs/API_GUIDE.md)를 참고하세요.
+`PROMETHEUS_URL` 은 필수입니다. 나머지 데이터소스를 설정하지 않은 영역은 503을 반환하거나, `NOT_CONFIGURED` 경고와 함께 빈 데이터를 반환합니다. 영역별 조건은 [API 가이드](docs/API_GUIDE.md)를 참고하세요.
 
 ## API 구조 (`/api/v2`)
 
@@ -90,7 +90,7 @@ curl -H "Authorization: Bearer <TOKEN>" \
 | **libvirt** | GPU passthrough 확정 | 📋 미구현 |
 
 전력 계층(P1~P8)·신뢰도 표기(`power_estimation`, `attribution.method`)는
-`docs/temp/01-domain-plans/openkcloud_power_attribution_plan.md`를 따릅니다.
+[아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md#전력-계층-p1p8)를 참고하세요.
 
 ## 로드맵
 

@@ -3,7 +3,7 @@
 KCloud Monitor v2의 빠른 시작 가이드입니다.
 
 > `/api/v2` 아래 155개 라우트가 실제 데이터소스(Prometheus, Loki, PostgreSQL, OpenStack API)로 동작합니다.
-> 설정하지 않은 데이터소스를 쓰는 영역은 503 또는 조회 실패를 반환합니다. 영역별 조건은 [API_GUIDE.md](./API_GUIDE.md)를 참고하세요.
+> `PROMETHEUS_URL` 은 필수입니다. 나머지 데이터소스를 설정하지 않은 영역은 503을 반환하거나, `NOT_CONFIGURED` 경고와 함께 빈 데이터를 반환합니다. 영역별 조건은 [API_GUIDE.md](./API_GUIDE.md)를 참고하세요.
 
 ## 설치 및 실행
 
