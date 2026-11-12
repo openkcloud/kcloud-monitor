@@ -32,6 +32,7 @@ _FAULT = "GET /api/v2/faults/{fault_id}"
 _NODE_LOGS = "GET /api/v2/logs/clusters/{cluster}/nodes/{node}/logs"
 _POD_LOGS = "GET /api/v2/logs/clusters/{cluster}/pods/{namespace}/{pod}/logs"
 _POD_TRACE = "GET /api/v2/resource-map/pods/{pod}?cluster={cluster}&namespace={namespace}"
+_ACCEL = "GET /api/v2/clusters/{cluster}/accelerators/{accelerator_id}"
 
 
 def _step(name: str, action_type: str, guidance: str, queries: tuple[str, ...] = (), risk: Optional[str] = None) -> dict:
@@ -61,7 +62,8 @@ SEED_POLICIES: list[dict] = [
          steps=[
              _step("증거 확인", "manual_review", "장애 구간의 온도, 전력, 사용률과 드라이버 로그를 확인한다", (_FAULT, _NODE_LOGS)),
              _step("장치 상태 확인", "manual_review",
-                   "노드에서 벤더 도구(furiosa-smi, rbln-stat)로 카드가 보이는지, 쓰로틀 상태인지 확인한다"),
+                   "가속기 상세 API 로 상태, 온도, 쓰로틀을 보고, 노드에서 벤더 도구(furiosa-smi, rbln-stat)로 카드가 보이는지 확인한다",
+                   (_ACCEL,)),
              _step("서빙 재시작", "manual_action", "카드는 정상인데 서빙만 멈췄으면 그 카드를 쓰는 서빙 프로세스를 다시 시작한다",
                    risk="medium"),
              _step("노드 재부팅 또는 교체 요청", "manual_action", "카드가 보이지 않으면 워크로드를 옮기고 노드를 재부팅한다. 재발하면 교체를 요청한다",
