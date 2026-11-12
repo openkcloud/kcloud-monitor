@@ -334,7 +334,8 @@ class PolicyBody(BaseModel):
     vendor: Literal["", "nvidia", "furiosa", "rebellions"] = Field(
         "", description="가속기 벤더 (nvidia | furiosa | rebellions). 빈 문자열이면 벤더 무관")
     model: str = Field(
-        "", description="모델 이름에 들어 있는 글자 (예: L40S, 대소문자 무시). 빈 문자열이면 벤더 전체. 여러 정책이 맞으면 긴 쪽 우선")
+        "", description="모델 이름에 단어로 들어 있는 글자 (예: L40S, 대소문자 무시. A10 은 A100 에 맞지 않음). "
+                        "빈 문자열이면 벤더 전체. 여러 정책이 맞으면 긴 쪽 우선")
     contract_type: ContractType = Field(
         "on_demand", description="계약 형태 (on_demand | reserved | spot). 지금 비용 계산은 on_demand 만 사용")
     billing_unit: BillingUnit = Field("allocated_hours", description=_DESC_BILLING_UNIT)

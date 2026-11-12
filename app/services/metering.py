@@ -21,6 +21,7 @@ import calendar
 import json
 import logging
 import math
+import re
 import statistics
 import uuid
 from collections import defaultdict
@@ -66,7 +67,7 @@ class PricePolicy:
     name: str
     resource_type: str
     vendor: str  # 빈 문자열이면 벤더 무관
-    model: str  # 모델 이름에 들어 있는 글자. 빈 문자열이면 벤더 전체
+    model: str  # 모델 이름에 단어로 들어 있는 글자 (model_matches). 빈 문자열이면 벤더 전체
     unit_price_krw: float  # billing_unit 1단위(가속기는 1장·1시간) 단가
     effective_from: date
     effective_to: Optional[date] = None  # 이 날 전까지 유효. None 이면 계속
@@ -95,6 +96,21 @@ SEED_POLICIES: list[PricePolicy] = [
 ]
 
 
+def model_matches(fragment: str, model: str) -> bool:
+    """모델 이름 조각이 모델 이름에 단어로 들어 있는지. 대소문자 무시, 빈 조각은 모든 모델.
+
+    부분 문자열로 맞추면 A10 이 A100 에, L4 가 L40S 에 붙어 다른 카드의 단가가 조용히 쓰인다.
+    그래서 조각 앞뒤가 영문, 숫자가 아닐 때만 맞는 것으로 본다.
+
+    >>> [model_matches(f, m) for f, m in [("L40S", "NVIDIA L40S"), ("A10", "NVIDIA A100-SXM4-80GB"),
+    ...  ("A100", "NVIDIA A100-SXM4-80GB"), ("L4", "NVIDIA L40S"), ("CA22", "RBLN-CA22"), ("", "RNGD"), ("rngd", "RNGD")]]
+    [True, False, True, False, True, True, True]
+    """
+    if not fragment:
+        return True
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(fragment)}(?![A-Za-z0-9])", model, re.IGNORECASE) is not None
+
+
 def find_price(resource_type: str, vendor: str, model: str, day: date, policies: list[PricePolicy],
                contract_type: str = "on_demand") -> Optional[PricePolicy]:
     """그날 유효한 단가 정책, 없으면 None. 여러 개가 맞으면 벤더 지정, 긴 모델 지정, 늦은 시작 순으로 우선.
@@ -111,10 +127,13 @@ def find_price(resource_type: str, vendor: str, model: str, day: date, policies:
     ['a', 'b', 'c']
     >>> find_price("accelerator", "furiosa", "RNGD", date(2026, 10, 1), p).id
     'd'
+    >>> a10 = [PricePolicy("a10", "", "accelerator", "nvidia", "A10", 100, date(2026, 1, 1))]
+    >>> find_price("accelerator", "nvidia", "NVIDIA A100-SXM4-80GB", date(2026, 10, 1), a10) is None
+    True
     """
     hits = [p for p in policies
             if p.resource_type == resource_type and p.contract_type == contract_type
-            and p.vendor in ("", vendor) and p.model.lower() in model.lower()
+            and p.vendor in ("", vendor) and model_matches(p.model, model)
             and p.effective_from <= day and (p.effective_to is None or day < p.effective_to)]
     return max(hits, key=lambda p: (p.vendor != "", len(p.model), p.effective_from), default=None)
 
