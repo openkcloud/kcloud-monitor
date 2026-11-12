@@ -526,12 +526,13 @@ def simulate_policy(rows: list[UsageRow], policies: list[PricePolicy], candidate
 
 
 def forecast_remaining(history: list[float], remaining_days: float, method: str,
-                       confidence_percent: float) -> tuple[str, float, float, float]:
+                       confidence_percent: float) -> tuple[str, float, Optional[float], Optional[float]]:
     """완결된 일별 비용(오래된 순)으로 남은 기간 비용과 신뢰구간 계산. (실제 쓴 방법, 예측, 하한, 상한)
 
     moving_average: 일평균 x 남은 일수
     linear_trend  : 최소제곱 직선을 남은 기간 가운데 시점에서 읽은 값 x 남은 일수. 3일 미만이면 이동 평균
     구간 폭은 일별 오차를 서로 독립으로 보고 z x 표준편차 x sqrt(남은 일수 + 남은 일수^2 / 표본 수).
+    표본이 1일뿐이면 변동을 알 수 없어 하한, 상한은 None (폭 0 인 구간을 내지 않음).
 
     >>> forecast_remaining([100, 100, 100], 10, "moving_average", 90)
     ('moving_average', 1000.0, 1000.0, 1000.0)
@@ -542,6 +543,8 @@ def forecast_remaining(history: list[float], remaining_days: float, method: str,
     >>> _, mid, lo, hi = forecast_remaining([90, 110, 100, 100], 10, "moving_average", 90)
     >>> lo < mid == 1000.0 < hi
     True
+    >>> forecast_remaining([100], 10, "linear_trend", 90)
+    ('moving_average', 1000.0, None, None)
     """
     n = len(history)
     z = statistics.NormalDist().inv_cdf(0.5 + confidence_percent / 200)
@@ -552,8 +555,10 @@ def forecast_remaining(history: list[float], remaining_days: float, method: str,
         mid = max(0.0, intercept + slope * (n - 0.5 + remaining_days / 2)) * remaining_days
     else:
         method = "moving_average"
-        sd = statistics.stdev(history) if n > 1 else 0.0
         mid = statistics.fmean(history) * remaining_days
+        if n < 2:
+            return method, round(mid, 2), None, None
+        sd = statistics.stdev(history)
     half = z * sd * math.sqrt(remaining_days + remaining_days ** 2 / n)
     return method, round(mid, 2), round(max(0.0, mid - half), 2), round(mid + half, 2)
 
@@ -640,6 +645,8 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
     (None, None, ['PRICE_NOT_DEFINED'])
     >>> build_prediction(rows, now, pol, seen_days=set(days), project="p2")[1]
     ['NO_DATA']
+    >>> build_prediction(rows, now, pol, seen_days={days[-1]}, window_days=1)[0]["predicted"]["confidence_interval"] is None
+    True
     """
     local = now.astimezone(KST)
     today = local.date()
@@ -709,9 +716,9 @@ def build_prediction(rows: list[UsageRow], now: datetime, policies: list[PricePo
             warnings.append("TREND_FALLBACK_MOVING_AVERAGE")
         # 못 본 지난 날은 추세 연장이 아니라 일평균으로 채움
         _, fill, f_lo, f_hi = forecast_remaining(history, missing, "moving_average", confidence_percent)
-        predicted = {"month_end_cost_krw": round(accumulated + fill + mid),
-                     "confidence_interval": {"low_krw": round(accumulated + f_lo + lo),
-                                             "high_krw": round(accumulated + f_hi + hi)},
+        interval = None if lo is None or f_lo is None else {"low_krw": round(accumulated + f_lo + lo),
+                                                             "high_krw": round(accumulated + f_hi + hi)}
+        predicted = {"month_end_cost_krw": round(accumulated + fill + mid), "confidence_interval": interval,
                      "confidence_percent": confidence_percent}
 
     data = {
@@ -1154,7 +1161,8 @@ async def predict_monthly(project: Optional[str], cluster: Optional[str], method
                 data["budget"] = {"budget_id": budget["id"], "name": budget["name"],
                                   **judge_budget(data["current"]["accumulated_cost_krw"], predicted,
                                                  budget["amount_krw"], budget["alert_percent"])}
-            if save_history and data["predicted"]:
+            # 이력은 구간까지 비교하므로 구간을 내지 못한 날(표본 1일)은 남기지 않음
+            if save_history and data["predicted"] and data["predicted"]["confidence_interval"]:
                 await store.save_prediction(scope_key(project, cluster), data)
         except Exception as exc:  # 저장소 장애가 예측 응답을 막지 않게 함
             logger.warning("metering store error: %s", exc)

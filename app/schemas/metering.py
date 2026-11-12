@@ -86,7 +86,8 @@ class PredictedCost(BaseModel):
     """월말 예측. 확정 금액이 아니라 남은 기간 사용 패턴 가정에 기댄 추정."""
 
     month_end_cost_krw: float = Field(..., description="월말 예측 비용(원) = 누적 + 남은 기간 예측")
-    confidence_interval: ConfidenceInterval = Field(..., description="신뢰구간. 일별 비용 변동이 클수록 넓어짐")
+    confidence_interval: Optional[ConfidenceInterval] = Field(
+        None, description="신뢰구간. 일별 비용 변동이 클수록 넓어짐. 완결된 날이 1일뿐이면 변동을 알 수 없어 null")
     confidence_percent: float = Field(..., description="신뢰수준(%)")
 
 
