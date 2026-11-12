@@ -94,6 +94,7 @@ Thumbs.db
 .claude/
 .gemini/
 .openai/
+.omc/
 
 # Model-Specific Adapter Files (개인 세팅)
 CLAUDE.md
@@ -115,9 +116,7 @@ OPENAI*.md
 .spec/
 
 # Temporary Documentation (임시 분석)
-docs/temp
-docs/**/*.tmp.md
-docs/**/*.draft.md
+docs/**
 
 # ============================================
 # Tests
@@ -129,6 +128,9 @@ tests/tmp/
 tests/**/*.tmp.py
 tests/**/*.temp.py
 tests/**/*.draft.py
+
+# Local-only tests (미공개 테스트): tests/ 전체를 저장소에 올리지 않음
+tests/
 
 # Test Outputs & Results
 tests/**/*.tmp
