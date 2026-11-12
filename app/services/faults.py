@@ -383,6 +383,9 @@ def summarize_series(name: str, result: list[dict]) -> list[dict]:
     ...                                           "values": [[1794366000, "70"], [1794366060, "NaN"], [1794366120, "88"]]}])
     [{'metric': 'temperature_celsius', 'labels': {'UUID': 'GPU-1'}, 'min': 70.0, 'max': 88.0, 'last': 88.0, \
 'points': [['2026-11-11T03:00:00+00:00', 70.0], ['2026-11-11T03:02:00+00:00', 88.0]]}]
+    >>> [s["labels"]["label"] for s in summarize_series("throttle_events", [  # 쓰로틀 사유별 시계열을 구분
+    ...     {"metric": {"device": "npu0", "label": r}, "values": [[1794366000, "0"]]} for r in ("hw_power_cap", "thermal_slowdown")])]
+    ['hw_power_cap', 'thermal_slowdown']
     """
     out = []
     for series in result[:MAX_SERIES]:
@@ -391,8 +394,9 @@ def summarize_series(name: str, result: list[dict]) -> list[dict]:
         if not points:
             continue
         values = [p[1] for p in points]
+        # label 은 Furiosa 쓰로틀 지표의 사유(hw_power_cap 등). 없으면 사유별 시계열이 같은 라벨로 보여 구분되지 않음
         labels = {k: v for k, v in series.get("metric", {}).items()
-                  if k in ("UUID", "device", "uuid", "Hostname", "hostname", "container", "condition", "node")}
+                  if k in ("UUID", "device", "uuid", "Hostname", "hostname", "container", "condition", "node", "label")}
         out.append({"metric": name, "labels": labels, "min": min(values), "max": max(values), "last": values[-1],
                     "points": points})
     return out
@@ -432,10 +436,19 @@ async def _logs(fault: dict, node: Optional[str], start: datetime, end: datetime
     if not loki_client.configured:
         return [], "not_configured"
     t = fault["target"]
-    rx = pattern.replace("\\", "\\\\").replace('"', '\\"')
+
+    def q(rx: str) -> str:
+        return rx.replace("\\", "\\\\").replace('"', '\\"')
+
+    selector = f'{{container!="loki"}} |~ "{q(pattern)}"'
+    if fault["fault_type"] == "npu_fault":
+        # NPU 드라이버 패턴(furiosa, npu 등)은 operator 의 정상 로그까지 걸려 상한(MAX_LOGS)을 INFO 줄로 채운다.
+        # 오류 로그 알람과 같은 오류 단어, 제외 규칙으로 오류 줄만 남긴다
+        selector += (f' |~ "{q(alert_service.LOG_METRICS["log_error_count"][1])}"'
+                     f' !~ "{q(alert_service.LOG_EXCLUDE["log_error_count"])}"')
     try:
         # 커널 OOM, XID 는 노드 저널에 남으므로 Pod 가 아니라 노드로 좁힌다. Loki 자신의 쿼리 기록은 제외
-        logql = _scoped(f'{{container!="loki"}} |~ "{rx}"', cluster=t.get("cluster"), node=node or t.get("node"))
+        logql = _scoped(selector, cluster=t.get("cluster"), node=node or t.get("node"))
         resp = await loki_client.query_range(logql, start.isoformat(), end.isoformat(), MAX_LOGS)
     except HTTPException as exc:
         logger.warning("fault logs unavailable: %s", exc.detail)
@@ -458,6 +471,17 @@ async def _pods(selector: str, via: str) -> list[dict]:
             for m in (r.get("metric", {}) for r in rows)]
 
 
+async def _k8s_cluster_of(node: str) -> Optional[str]:
+    """K8s 노드 이름이 있는 클러스터(API 이름). 없거나 여러 클러스터에 같은 이름이 있으면 None.
+
+    VM 장애는 OpenStack 지표에서 나와 cluster 라벨이 없어 mgmt 로 잡히지만, 그 VM 이 서비스 클러스터의
+    워커 노드면 영향을 받는 Pod 는 그 클러스터에 있다.
+    """
+    rows = await prometheus_client.instant(f'count by (cluster) (kube_node_info{{node="{esc(node)}"}})')
+    names = {r.get("metric", {}).get("cluster") or DEFAULT_CLUSTER_NAME for r in rows}
+    return names.pop() if len(names) == 1 else None
+
+
 async def _related(fault: dict) -> tuple[dict, str]:
     """영향 자원: 대상에서 물리서버까지의 경로와 영향을 받는 Pod. 범위를 정할 수 없으면 unknown (0 으로 채우지 않음)."""
     from app.api.v2.resource_map import trace_node, trace_pod
@@ -478,7 +502,16 @@ async def _related(fault: dict) -> tuple[dict, str]:
         node = t.get("node") or t.get("vm")  # VM 은 K8s 노드 이름과 같을 때만 Pod 를 찾을 수 있음
         if not node:
             return empty, "unknown"
-        path = [h.model_dump(exclude_none=True) for h in await trace_node(cluster, node)]
+        if not t.get("node"):  # VM 대상: 같은 이름의 K8s 노드가 있는 클러스터에서 찾음
+            cluster = await _k8s_cluster_of(node) or cluster
+        hops = await trace_node(cluster, node)
+        path = [h.model_dump(exclude_none=True) for h in hops]
+        if not any(h.layer == "k8s_node" and h.status == "ok" for h in hops):
+            # K8s 노드가 아니면(쿠버네티스 없는 단독 VM, 지운 VM) Pod 로 영향을 셀 수 없어 0 이 아니라 null.
+            # VM 까지 찾았으면 범위는 VM, 경로를 하나도 못 찾았으면 unknown
+            vm_ok = any(h.layer == "vm" and h.status == "ok" for h in hops)
+            return ({"scope": "vm" if vm_ok else None, "path": path, "affected_pod_count": None, "affected_pods": None},
+                    "ok" if any(h.status == "ok" for h in hops) else "unknown")
         scope, pods = "node", None
         if t.get("accelerator_id") and t.get("vendor") == "nvidia":  # 그 카드를 쓰는 Pod 만
             rows = await prometheus_client.instant(
@@ -487,8 +520,13 @@ async def _related(fault: dict) -> tuple[dict, str]:
                 scope = "accelerator"
                 pods = [{"namespace": r["metric"].get("exported_namespace"), "pod": r["metric"].get("exported_pod"),
                          "via": "DCGM exported_pod", "workload": None} for r in rows]
+            elif await prometheus_client.instant(
+                    f'count(DCGM_FI_DEV_GPU_UTIL{{{_sel({**t, "cluster": cluster})},exported_pod!=""}})'):
+                # 이 클러스터 exporter 는 카드별 Pod 를 알려 주는데 이 카드에는 없음: 카드를 쓰는 Pod 0.
+                # 카드별 Pod 를 아예 알려 주지 않는 exporter 면 아래에서 노드의 Pod 전체로 넓힘 (scope node)
+                scope, pods = "accelerator", []
         if pods is None:
-            pods = await _pods(_sel({**t, "node": node}, node="node"), "kube_pod_info.node")
+            pods = await _pods(_sel({**t, "cluster": cluster, "node": node}, node="node"), "kube_pod_info.node")
         return {"scope": scope, "path": path, "affected_pod_count": len(pods), "affected_pods": pods[:MAX_PODS]}, "ok"
     except HTTPException as exc:  # 404: Pod 가 이미 없음, 503: Prometheus 조회 실패
         return empty, "unknown" if exc.status_code == 404 else "unavailable"
@@ -545,6 +583,11 @@ def analyze(fault: dict, evidence: dict) -> dict:
     >>> a = analyze({"fault_type": "npu_fault", "trigger": "npu_unhealthy", "target": {"vendor": "rebellions"}}, ev)
     >>> (a["confidence"], a["contributing_factors"], a["evidence_basis"])  # 리벨리온 쓰로틀 기준은 90°C 라 온도는 빠짐
     ('medium', ['장애 구간에 쓰로틀(클럭 제한) 발생'], ['metrics', 'signal'])
+    >>> ev = {"metrics_snapshot": [{"metric": "temperature_celsius", "max": 40.0}], "logs_snapshot": [],
+    ...       "collection_status": {"metrics": "ok", "logs": "empty", "resource_map": "ok"}}
+    >>> analyze({"fault_type": "npu_fault", "trigger": "temperature_celsius", "source": "alert",
+    ...          "target": {"vendor": "furiosa"}}, ev)["evidence_basis"]  # 알람으로 잡은 장애는 알람이 근거
+    ['alert']
     """
     kind, trigger = fault["fault_type"], fault.get("trigger")
     fields = [e["detected_fields"] for e in evidence["logs_snapshot"] if e.get("detected_fields")]
@@ -619,6 +662,8 @@ def analyze(fault: dict, evidence: dict) -> dict:
         basis.add("signal")
     elif kind == "hardware_fault":
         cause = "커널이 하드웨어 또는 디스크 오류를 기록"
+    if fault.get("source") in ("alert", "signal"):  # 장애를 잡은 탐지(알람, 고정 신호) 자체도 원인 판단의 근거
+        basis.add(fault["source"])
 
     status = evidence["collection_status"]
     missing = [k for k in ("metrics", "logs", "resource_map") if status.get(k) in ("unavailable", "unknown")]

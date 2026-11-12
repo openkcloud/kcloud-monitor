@@ -79,7 +79,9 @@ class AffectedPod(BaseModel):
 class RelatedResources(BaseModel):
     """장애가 영향을 주는 자원."""
 
-    scope: Optional[str] = Field(None, description="영향 범위를 정한 기준 (pod | accelerator | node). 정하지 못했으면 null")
+    scope: Optional[str] = Field(
+        None, description="영향 범위를 정한 기준 (pod | accelerator | node | vm). vm 은 K8s 노드가 아닌 VM 이라 Pod 를 셀 수 없음 "
+                          "(affected_pod_count null). 정하지 못했으면 null")
     path: list[TraceHop] = Field(default_factory=list, description="대상에서 물리서버까지의 단계. `/resource-map/pods/{pod}` 의 path 와 같은 형식")
     affected_pod_count: Optional[int] = Field(None, description="영향을 받는 Pod 수 (실행 중, 대기 중). 범위를 정하지 못했으면 null (0건과 구분)")
     affected_pods: Optional[list[AffectedPod]] = Field(None, description="영향을 받는 Pod, 최대 100개. 범위를 정하지 못했으면 null")
@@ -109,7 +111,8 @@ class Analysis(BaseModel):
     probable_cause: str = Field(..., description="추정 원인")
     contributing_factors: list[str] = Field(default_factory=list, description="기여 요인 (과열, 메모리 한도 근접 등)")
     confidence: str = Field(..., description="확신 정도 (high: 원인을 직접 가리키는 증거 있음 | medium: 탐지 신호뿐 | low: 증거 수집이 빠져 확인 못 함)")
-    evidence_basis: list[str] = Field(default_factory=list, description="판단에 쓴 증거 종류 (signal | logs | metrics)")
+    evidence_basis: list[str] = Field(
+        default_factory=list, description="판단에 쓴 증거 종류 (alert | signal | logs | metrics). alert, signal 은 장애를 잡은 탐지 경로")
     unverified: list[str] = Field(default_factory=list, description="수집하지 못해 확인하지 못한 증거 종류")
 
 
