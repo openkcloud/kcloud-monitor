@@ -113,7 +113,8 @@ def build_recommendation(fault: dict, policy: dict, evidence: dict, analysis: di
             "accelerators": [fault["target"]["accelerator_id"]] if fault["target"].get("accelerator_id") else [],
             "pod_count": related.get("affected_pod_count") if known else None,
             "pods": pods if known else None,
-            "workloads": sorted({p["workload"] for p in pods or [] if p.get("workload")}) if known else None,
+            # Pod 로 셀 수 없는 범위(단독 VM)면 워크로드도 빈 목록이 아니라 null
+            "workloads": sorted({p["workload"] for p in pods if p.get("workload")}) if known and pods is not None else None,
             "path": related.get("path", []),
         },
         "verification": {

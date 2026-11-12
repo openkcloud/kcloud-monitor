@@ -495,7 +495,14 @@ async def _related(fault: dict) -> tuple[dict, str]:
             return empty, "unknown"
         if not t.get("node"):  # VM 대상: 같은 이름의 K8s 노드가 있는 클러스터에서 찾음
             cluster = await _k8s_cluster_of(node) or cluster
-        path = [h.model_dump(exclude_none=True) for h in await trace_node(cluster, node)]
+        hops = await trace_node(cluster, node)
+        path = [h.model_dump(exclude_none=True) for h in hops]
+        if not any(h.layer == "k8s_node" and h.status == "ok" for h in hops):
+            # K8s 노드가 아니면(쿠버네티스 없는 단독 VM, 지운 VM) Pod 로 영향을 셀 수 없어 0 이 아니라 null.
+            # VM 까지 찾았으면 범위는 VM, 경로를 하나도 못 찾았으면 unknown
+            vm_ok = any(h.layer == "vm" and h.status == "ok" for h in hops)
+            return ({"scope": "vm" if vm_ok else None, "path": path, "affected_pod_count": None, "affected_pods": None},
+                    "ok" if any(h.status == "ok" for h in hops) else "unknown")
         scope, pods = "node", None
         if t.get("accelerator_id") and t.get("vendor") == "nvidia":  # 그 카드를 쓰는 Pod 만
             rows = await prometheus_client.instant(
