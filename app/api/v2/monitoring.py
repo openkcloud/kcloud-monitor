@@ -789,7 +789,7 @@ async def get_throttling_timeseries(
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (선택, 없으면 전체)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (선택, 없으면 전체)
+    * `node`: 노드 이름, 예 `gpu-node-1` (선택, 없으면 전체)
     * `acc_id`: 가속기 ID (선택, 없으면 전체)
     * `detail`: `true` 면 카드별 시계열(`series`)도 반환 (기본 `false`, `summary` 만)
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 10일)
