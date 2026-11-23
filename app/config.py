@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = Field(
         None, description="PostgreSQL — 알람 저장소(정책/채널/활성 알람/이력), resource-map 원장(예정)"
     )
+    # ── 수집 관리 ─────────────────────────────────────────────────────────
+    COLLECTION_MANAGED_TARGETS: str = Field(
+        "", description="API 로 수집 주기와 필터를 바꿔도 되는 수집 대상 ID(콤마 구분). 비우면 전부 잠금"
+    )
+    COLLECTION_CONFIRM_TIMEOUT_MIN: int = Field(
+        10, ge=1, description="수집 정책 적용 후 이 시간(분) 안에 확정하지 않으면 자동으로 되돌림"
+    )
+    K8S_API_URL: Optional[str] = Field(
+        None, description="관리 클러스터 Kubernetes API 주소 (예: https://host:6443). Pod 안에서 돌면 생략 가능"
+    )
+    K8S_TOKEN: Optional[str] = Field(None, description="수집 설정 3종만 고칠 수 있는 서비스 계정 토큰")
+    K8S_CA_FILE: Optional[str] = Field(None, description="Kubernetes API 인증서 검증용 CA 파일 경로")
+    K8S_VERIFY_TLS: bool = Field(True, description="K8S_CA_FILE 이 없을 때 TLS 인증서 검증 여부")
     # ── 알람 ──────────────────────────────────────────────────────────────
     ALERT_EVAL_INTERVAL_SEC: int = Field(30, ge=5, description="알람 정책 평가 주기(초)")
     ALERT_REPEAT_INTERVAL_MIN: int = Field(240, ge=1, description="firing 유지 중 재알림 간격(분)")
