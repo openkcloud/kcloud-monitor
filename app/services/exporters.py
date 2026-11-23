@@ -3,7 +3,7 @@ KCloud Monitor v2 — Export 도메인 서비스.
 
 Prometheus range_query 결과를 전력/메트릭 내보내기용 행(row)으로 직렬화하고,
 csv(stdlib)로 CSV 문자열을 만든다. pandas/openpyxl/pyarrow 등 외부 의존 없음
-(csv/json만 지원 — .omc/plans/remaining-domains-plan.md §1-A, §5-D).
+(csv/json만 지원).
 """
 import csv
 import io

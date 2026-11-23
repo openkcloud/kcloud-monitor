@@ -145,7 +145,7 @@ async def get_overview(request: Request):
     healthy_count = sum(counts["up"] for counts in cluster_map.values())
     accelerator_count = sum(counts["total"] for counts in cluster_map.values())
 
-    # 2. 클러스터 discovery 기반 관리/서비스 구분 집계 [§4.7]
+    # 2. 클러스터 discovery 기반 관리/서비스 구분 집계
     clusters_info = await cluster_discovery.get_clusters()
     cluster_counts = ClusterCounts(
         total=len(clusters_info),

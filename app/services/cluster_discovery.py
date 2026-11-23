@@ -57,7 +57,7 @@ class ClusterInfo:
     utilization_query: Optional[str] = None
     temperature_query: Optional[str] = None
     power_query: Optional[str] = None
-    # 관리/서비스 클러스터 구분 (docs/API_RESTRUCTURE_PLAN.md §4.1)
+    # 관리/서비스 클러스터 구분
     type: str = "service"  # "management" | "service"
     parent_cluster: Optional[str] = None  # 서비스 클러스터의 부모 관리 클러스터명(mgmt). 관리 클러스터는 None
     has_openstack: bool = False  # 관리 클러스터만 True (OpenStack Keystone/Nova 연동 대상)

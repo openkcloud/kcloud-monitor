@@ -109,8 +109,6 @@ curl -H "Authorization: Bearer <TOKEN>" \
 | [아키텍처 개요](docs/ARCHITECTURE_OVERVIEW.md) | 6계층 자원 모델·데이터소스·전력 계층 P1~P8·resource-map |
 | [NPU 수집 설정](docs/PROMETHEUS_NPU_SETUP.md) | Furiosa exporter + hwmon 수집 환경 |
 
-> 상세 설계 SoT(설계서·의사결정 기록)는 내부 문서 `docs/temp/`(git 미추적)에서 관리하며, 확정 내용만 `docs/`로 반영합니다.
-
 ### 🔧 기술 스택
 
 - **Framework**: FastAPI 0.119+, Python 3.12
