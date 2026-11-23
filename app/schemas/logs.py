@@ -1,9 +1,9 @@
 """
-로그 API v2 Pydantic 스키마 (OPT.003 §3-1, §3-2).
+로그 API v2 Pydantic 스키마 (OPT.003).
 
 공통 응답 정책(docs/API_GUIDE.md):
   - observed_at, warnings[] 동일
-  - 로그 응답은 data[] + pagination 구조 (sample_api §11)
+  - 로그 응답은 data[] + pagination 구조
 """
 from typing import Any, Optional
 

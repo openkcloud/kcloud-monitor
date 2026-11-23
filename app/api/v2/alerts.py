@@ -275,7 +275,7 @@ async def create_policy(body: PolicyCreate):
     * `threshold`: 임계값 숫자 (조건 1개일 때 필수)
     * `window_min`: `log`, `slo` 지표만, 건수를 세거나 p95 를 계산하는 기간(분) (기본 `5`)
     * `duration`: 이 시간 동안 계속되면 발생, `5m` 처럼 숫자 + `m` (기본 `0m`, 즉시)
-    * `selector`: 감시 대상, `cluster=l40s,node=innogrid-l40s` (기본 전체)
+    * `selector`: 감시 대상, `cluster=l40s,node=gpu-node-1` (기본 전체)
     * `log` 지표의 `selector` 예: `cluster=l40s,container=vllm-slo` (`unit` 은 systemd 유닛)
     * `slo` 지표의 `selector` 예: `cluster=l40s,model=qwen2.5-3b`
     * 조건 2개 이상이면 `selector` 는 `cluster`, `unit`, `container` 만 가능
@@ -614,7 +614,7 @@ async def ack_alert(fingerprint: str):
     입력 예시
 
     * `POST /api/v2/alerts/active/log-001:mgmt/*/*/ack`
-    * `POST /api/v2/alerts/active/res-003:l40s/innogrid-l40s/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/ack`
+    * `POST /api/v2/alerts/active/res-003:l40s/gpu-node-1/GPU-00000000-0000-0000-0000-000000000001/ack`
 
     입력 옵션
 

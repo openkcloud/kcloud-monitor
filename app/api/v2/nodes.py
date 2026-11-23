@@ -347,12 +347,12 @@ async def get_node(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -438,12 +438,12 @@ async def get_node_metrics(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/metrics`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/metrics`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -509,12 +509,12 @@ async def get_node_cpu(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/cpu`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/cpu`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -577,12 +577,12 @@ async def get_node_memory(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/memory`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/memory`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -640,12 +640,12 @@ async def get_node_storage(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/storage`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/storage`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -707,12 +707,12 @@ async def get_node_network(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/network`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/network`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -771,12 +771,12 @@ async def get_node_power(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/power`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -820,13 +820,13 @@ async def get_node_power_timeseries(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power/timeseries`
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/power/timeseries?period=6h&step=1m`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/power/timeseries`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/power/timeseries?period=6h&step=1m`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
     * `end`: 종료 시각, ISO 8601 (선택, 기본 현재)
@@ -885,12 +885,12 @@ async def get_hardware_sensors(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/sensors`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/hardware/sensors`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -940,12 +940,12 @@ async def get_hardware_power(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/power`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/hardware/power`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -985,12 +985,12 @@ async def get_hardware_temperature(request: Request, cluster: str, node: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/hardware/temperature`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/hardware/temperature`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 

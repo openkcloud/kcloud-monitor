@@ -56,7 +56,7 @@ class PolicyCreate(BaseModel):
     )
     selector: str = Field(
         "",
-        description="감시 대상 (예: cluster=l40s,node=innogrid-l40s), 비우면 전체, log 는 cluster, unit, container, slo 는 cluster, model, 조건 2개 이상이면 cluster, unit, container 만 사용",
+        description="감시 대상 (예: cluster=l40s,node=gpu-node-1), 비우면 전체, log 는 cluster, unit, container, slo 는 cluster, model, 조건 2개 이상이면 cluster, unit, container 만 사용",
     )
     severity: Annotated[Severity, _lower] = Field("warning", description="심각도 (info | warning | critical), 대소문자 무시")
     channels: list[ChannelType] = Field(

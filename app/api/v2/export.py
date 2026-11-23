@@ -27,7 +27,7 @@ _SUPPORTED_FORMATS = ("csv", "json")
 
 
 def _check_format(format: str) -> None:
-    """csv|json 이외 포맷 요청 시 400. excel/parquet 등은 의존성 미도입(§5-D)으로 차단."""
+    """csv|json 이외 포맷 요청 시 400. excel/parquet 등은 의존성 미도입으로 차단."""
     if format not in _SUPPORTED_FORMATS:
         raise HTTPException(
             status_code=400,

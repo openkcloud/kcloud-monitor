@@ -439,13 +439,13 @@ async def list_accelerators(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators`
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators?limit=10&offset=0`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators?limit=10&offset=0`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
     * `limit`: 한 번에 받을 최대 개수 `1` ~ `1000` (기본 `100`)
     * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
 
@@ -499,12 +499,12 @@ async def get_accelerators_topology(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/topology`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/topology`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
 
     응답
 
@@ -550,13 +550,13 @@ async def get_accelerator(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
 
     응답
 
@@ -597,13 +597,13 @@ async def get_accelerator_metrics(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/metrics`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/metrics`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
 
     응답
 
@@ -666,13 +666,13 @@ async def get_accelerator_power(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/power`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
 
     응답
 
@@ -711,14 +711,14 @@ async def get_accelerator_power_timeseries(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power/timeseries`
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/power/timeseries?period=6h&step=1m`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/power/timeseries`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/power/timeseries?period=6h&step=1m`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
     * `end`: 종료 시각, ISO 8601 (선택, 기본 현재)
@@ -775,13 +775,13 @@ async def get_accelerator_temperature(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/temperature`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/temperature`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
 
     응답
 
@@ -827,13 +827,13 @@ async def list_partitions(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/partitions`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `limit`: 한 번에 받을 최대 개수 `1` ~ `1000` (기본 `100`)
     * `offset`: 건너뛸 개수, 페이지 이동용 (기본 `0`)
 
@@ -860,13 +860,13 @@ async def get_partition(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/partitions/1`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `partition_id`: 파티션 ID (경로, 필수)
 
     응답
@@ -892,13 +892,13 @@ async def get_partition_power(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1/power`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/partitions/1/power`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `partition_id`: 파티션 ID (경로, 필수)
 
     응답
@@ -936,13 +936,13 @@ async def get_partition_power_timeseries(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/nodes/innogrid-l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1/power/timeseries`
+    * `GET /api/v2/clusters/l40s/nodes/gpu-node-1/accelerators/GPU-00000000-0000-0000-0000-000000000001/partitions/1/power/timeseries`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `node`: 노드 이름, 예 `innogrid-l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `node`: 노드 이름, 예 `gpu-node-1` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `partition_id`: 파티션 ID (경로, 필수)
     * `period`: 조회 기간, 예 `30m`, `1h`, `7d` (기본 `1h`, 최대 `10d`)
     * `start`: 시작 시각, ISO 8601 (선택, 없으면 현재에서 `period` 만큼 이전)
@@ -987,12 +987,12 @@ async def get_accelerator_alias(request: Request, cluster: str, acc_id: str):
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc`
+    * `GET /api/v2/clusters/l40s/accelerators/GPU-00000000-0000-0000-0000-000000000001`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
 
     응답
 
@@ -1038,12 +1038,12 @@ async def get_partition_alias(
 
     입력 예시
 
-    * `GET /api/v2/clusters/l40s/accelerators/GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc/partitions/1`
+    * `GET /api/v2/clusters/l40s/accelerators/GPU-00000000-0000-0000-0000-000000000001/partitions/1`
 
     입력 옵션
 
     * `cluster`: 클러스터 이름, 예 `l40s` (경로, 필수)
-    * `acc_id`: 가속기 ID, 예 `GPU-fe5ba66d-6f1b-2c68-182f-16a8507a89cc` (경로, 필수)
+    * `acc_id`: 가속기 ID, 예 `GPU-00000000-0000-0000-0000-000000000001` (경로, 필수)
     * `partition_id`: 파티션 ID (경로, 필수)
 
     응답

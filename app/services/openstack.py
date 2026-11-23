@@ -4,7 +4,7 @@ KCloud Monitor v2 — OpenStack (Keystone/Nova) 클라이언트.
 용도: 물리 하이퍼바이저 ↔ VM 배치 ↔ 가속기(flavor PCI alias 또는 Cyborg device profile) 매핑 조회.
 데이터소스: Keystone v3(인증), Nova compute API.
 
-설계 주의 (docs/API_RESTRUCTURE_PLAN.md §4.3):
+설계 주의:
   - 생성자에서 절대 raise 하지 않는다. 크리덴셜 없으면 configured=False 로 두고
     앱은 정상 기동한다. 미설정/실패 시 호출부는 NOT_CONFIGURED / UPSTREAM_ERROR 로 처리.
   - Keystone catalog의 nova/placement URL은 내부 DNS(*.svc.cluster.local)라 외부에서
