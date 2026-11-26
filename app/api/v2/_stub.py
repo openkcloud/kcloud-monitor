@@ -9,8 +9,6 @@ from typing import Iterable
 
 from fastapi import Request
 
-DESIGN_DOC = "docs/temp/04-reference/sample_api.md"
-
 
 def stub(request: Request, description: str, *, sources: Iterable[str] = ()) -> dict:
     route = request.scope.get("route")
@@ -20,7 +18,6 @@ def stub(request: Request, description: str, *, sources: Iterable[str] = ()) -> 
         "path_template": getattr(route, "path_format", None),
         "description": description,
         "data_sources": list(sources),
-        "design_ref": DESIGN_DOC,
         "data": None,
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "warnings": ["NOT_IMPLEMENTED"],

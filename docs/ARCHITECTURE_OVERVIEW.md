@@ -27,7 +27,7 @@ KCloud Monitor는 OpenKCloud 관측 플랫폼의 6개 서비스(Monitor / Logger
 **핵심 원칙**:
 - GPU/NPU는 물리 서버에 부착(`attached_to`)되고, VM으로 패스스루(`passthrough_to`)되며, 최종적으로 컨테이너에 할당(`allocated_to`)됩니다.
 - 서비스 클러스터는 Magnum이 OpenStack **프로젝트** 단위로 생성합니다(프로젝트 = 과금 단위).
-- OpenStack 경로(`/openstack/`)는 관리 클러스터에만 존재합니다.
+- OpenStack 자원은 관리 클러스터에만 존재하며, 클러스터 경로 없이 `/openstack/*` 로 조회합니다.
 
 ```
 Physical Server (L0) ──── GPU/NPU (LA)
@@ -47,13 +47,15 @@ Physical Server (L0) ──── GPU/NPU (LA)
 
 v1은 단일 Prometheus만 사용했습니다. v2는 멀티 클러스터 + OpenStack을 다루므로 다중 백엔드로 확장합니다.
 
-| 백엔드 | 용도 | 질의 |
-|--------|------|------|
-| **Mimir** | 중앙 메트릭 저장소 — 각 클러스터의 Alloy가 remote_write (전환기에는 기존 Prometheus 지정 가능) | PromQL |
-| **PostgreSQL** | resource-map 원장(자원 계보·이력) — 메트릭 라벨은 조회 차원일 뿐, 원장이 SoT | SQL |
-| **Redis(+Streams)** | 캐시 + 서비스 간 이벤트 버스 | — |
-| **OpenStack API / libvirt** | VM·하이퍼바이저·프로젝트 메타데이터, GPU passthrough 확정, 전력 귀속 매핑 | REST/libvirt |
-| **K8s API** | 클러스터별 메타데이터 보조 | REST |
+| 백엔드 | 용도 | 질의 | 상태 |
+|--------|------|------|------|
+| **Prometheus** | 메트릭 조회 (`PROMETHEUS_URL`). 클러스터는 `cluster` 라벨로 구분 | PromQL | ✅ 사용 중 |
+| **Loki** | 로그 검색·스트림, 로그 알람 (`LOKI_URL`) | LogQL | ✅ 사용 중 |
+| **PostgreSQL** | 알람 정책·이력, 미터링, 장애 이력, 후속 조치 정책 (`DATABASE_URL`). resource-map 원장(자원 계보·이력)도 여기에 둘 예정 | SQL | ✅ 사용 중 |
+| **OpenStack API** | VM·하이퍼바이저·프로젝트 메타데이터, VM 전력 귀속 매핑 (`OPENSTACK_*`) | REST | ✅ 사용 중 |
+| **Mimir** | 중앙 메트릭 저장소 — 각 클러스터의 Alloy가 remote_write. PromQL 호환이라 `PROMETHEUS_URL` 로 지정 | PromQL | 📋 목표 구조 |
+| **Redis(+Streams)** | 캐시 + 서비스 간 이벤트 버스 | — | 📋 목표 구조 |
+| **libvirt** | GPU passthrough 확정 | — | 📋 미구현 |
 
 수집 exporter(클러스터 측): DCGM(GPU), Furiosa Metrics Exporter(NPU), Kepler(전력), node-exporter, ipmi-exporter(BMC), kube-state-metrics, cAdvisor, rook-ceph-mgr/exporter(`ceph_*`).
 
@@ -76,8 +78,8 @@ v1은 단일 Prometheus만 사용했습니다. v2는 멀티 클러스터 + OpenS
 | P3 | 노드 (IPMI BMC) | **실측** | `/clusters/{c}/nodes/{n}/hardware/power` |
 | P4 | 가속기 (DCGM) | **실측** | `.../accelerators/{id}/power` |
 | P5 | 파티션 (MIG/vGPU) | 비례 추정 | `.../partitions/{pid}/power` |
-| P6 | OpenStack VM | 귀속(QEMU CPU time) | `.../openstack/vms/{vm_id}/power` |
-| P7 | Pod | 귀속(Kepler / VM 재배분) | `.../workloads/pods/{ns}/{pod}/power` |
+| P6 | OpenStack VM | 귀속(QEMU CPU time) | `/openstack/vms/{vm_id}/power` |
+| P7 | Pod | 귀속(Kepler / VM 재배분) | `/clusters/{c}/workloads/pods/{ns}/{pod}/power` |
 | P8 | 시스템 전체 | 집계 | `/monitoring/power/summary` |
 
 모든 전력 응답은 신뢰도를 표기합니다:
@@ -90,7 +92,11 @@ v1은 단일 Prometheus만 사용했습니다. v2는 멀티 클러스터 + OpenS
 
 ## Resource-Map (자원 계보)
 
-GPU→VM→Pod 교차 추적을 위한 원장입니다. attachment 확정 근거는 우선순위를 따릅니다:
+GPU→VM→Pod 교차 추적을 위한 원장입니다.
+
+현재는 `GET /resource-map/pods/{pod}` 하나가 구현되어 있으며, 원장 없이 Prometheus 라벨(`kube_pod_info`, `kube_node_info.system_uuid`, `openstack_nova_server_status`)을 이어 붙여 Pod → 워크로드 → 가속기 → K8s 노드 → VM → 물리서버를 추적합니다. 아래 우선순위에 따른 원장 기반 확정은 구현 예정입니다.
+
+attachment 확정 근거는 우선순위를 따릅니다:
 
 | 순위 | 소스 | 용도 |
 |------|------|------|
@@ -115,10 +121,12 @@ GPU→VM→Pod 교차 추적을 위한 원장입니다. attachment 확정 근거
 
 | 구성 요소 | 상태 |
 |-----------|------|
-| v2 라우팅·인증·경로 구조 (106 라우트) | ✅ 확정 (스텁 응답) |
+| v2 라우팅·인증·경로 구조 (155 라우트) | ✅ 동작 |
 | 미들웨어 (Request-ID, 자체 메트릭, 레이트리밋, CORS) | ✅ 동작 |
-| System 헬스/버전/메트릭 | ✅ 실동작 |
-| 데이터소스 클라이언트 (Mimir/PostgreSQL/Redis/OpenStack) | 📋 설정 placeholder만 |
-| 도메인별 조회 로직, resource-map 원장, 전력 귀속 recording rules | 📋 미구현 |
-
-v1 구현(DCGM/Kepler/IPMI PromQL 로직, 익스포터 등)은 git 이력에 보존되어 있어 실제 구현 시 재사용합니다.
+| System 헬스/버전/메트릭 | ✅ 동작 |
+| Clusters·Nodes·Accelerators·Storage(Ceph)·OpenStack·Workloads·Monitoring·Export 조회 | ✅ 동작 |
+| Logs(Loki)·Alerts·SLO·Metering·Faults·Recovery | ✅ 동작 |
+| 데이터소스 클라이언트 (Prometheus/Loki/PostgreSQL/OpenStack) | ✅ 동작 |
+| VM GPU passthrough 확인 (libvirt) | 📋 미구현 (스텁 응답) |
+| resource-map 원장(가속기·VM 계보, 이력, Discovery), 전력 귀속 recording rules | 📋 미구현 |
+| Mimir·Redis 연동 | 📋 목표 구조 |
