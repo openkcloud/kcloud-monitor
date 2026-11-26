@@ -13,6 +13,7 @@ from app.api.v2 import (
     alerts,
     auth,
     clusters,
+    collection,
     export,
     faults,
     logs,
@@ -34,6 +35,7 @@ from app.config import settings
 from app.logging_config import configure_logging
 
 from app.services import alerts as alert_service
+from app.services import collection as collection_service
 from app.services import metering as metering_service
 from app.services import recovery_policies as recovery_policy_service
 from app.middleware import MetricsMiddleware, RateLimitMiddleware, RequestIDMiddleware
@@ -46,13 +48,19 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.LOG_LEVEL)
     print("KCloud Monitor API v2 - Starting up")
     print(f"Version: {APP_VERSION} | Docs: /docs | Metrics: /api/v2/system/metrics")
-    loop_task = meter_task = None
+    loop_task = meter_task = collection_task = None
     if settings.DATABASE_URL:
         try:
             await alert_service.store.connect()
             loop_task = asyncio.create_task(alert_service.run_loop())
         except Exception as exc:  # DB 가 아직 안 떠도 조회 API 는 살아야 함
             print(f"alert store unavailable: {exc}")
+        if alert_service.store.ready:
+            try:
+                await collection_service.store.connect(alert_service.store.pool)
+                collection_task = asyncio.create_task(collection_service.run_loop())
+            except Exception as exc:  # 수집 정책 테이블을 못 만들어도 나머지 API 는 살아야 함
+                print(f"collection store unavailable: {exc}")
         try:
             await metering_service.store.connect()
             meter_task = asyncio.create_task(metering_service.run_loop())
@@ -63,11 +71,12 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             print(f"recovery policy store unavailable: {exc}")
     else:
-        print("DATABASE_URL 미설정: 알람, 미터링 계측, 단가 정책, 예산, 후속 조치 정책 수정 기능 비활성")
+        print("DATABASE_URL 미설정: 알람, 미터링 계측, 단가 정책, 예산, 후속 조치 정책 수정, 수집 정책 관리 기능 비활성")
     yield
-    for task in (loop_task, meter_task):
+    for task in (loop_task, meter_task, collection_task):
         if task:
             task.cancel()
+    collection_service.store.close()
     await alert_service.store.close()
     await metering_service.store.close()
     await recovery_policy_service.store.close()
@@ -109,6 +118,7 @@ API_DESCRIPTION = """
 - `NO_DATA_LIBVIRT` : VM 가상화 계층(libvirt) 사용량 없음
 - `NO_POWER_DATA` : 노드, Pod, 서비스 전력 없음
 - `NO_HOST` : VM이 배치된 물리 서버 미확인
+- `METRIC_NOT_FOUND` : 수집 정책에서 빼려는 메트릭이 그 수집 대상에 없음
 - `NO_LOG_SOURCE`, `NO_NODE_LOGS`, `NO_CLUSTER_LOGS` : 가속기 드라이버 로그, 노드 로그, 클러스터 로그 없음
 
 외부 연동
@@ -171,6 +181,12 @@ API_DESCRIPTION = """
 - `/metering/usage/*`, `/metering/policies`(자원 유형 목록 제외), `/metering/budgets`, `/metering/predictions/budget-status` 는
   저장소(DB) 설정이 없으면 503, `detail` 에 METERING_STORE_NOT_CONFIGURED
 
+## 수집 정책
+- `/monitoring/collection/policies` 경로는 서버에 저장소(DB) 설정이 없으면 모두 503, `detail` 에 COLLECTION_STORE_NOT_CONFIGURED
+- 정책 저장과 미리보기는 실제 수집 설정을 바꾸지 않음
+- 적용(`apply`)은 서버의 허용 목록에 있는 수집 대상만 가능. 적용 후 정해진 시간 안에 확정(`confirm`)하지 않거나 수집이 줄면 자동으로 원래 설정 복구
+- 적용, 확정, 되돌리기는 Kubernetes 접속 정보가 없으면 503, `detail` 에 K8S_NOT_CONFIGURED
+
 ## 태그 구성
 - Authentication : 토큰 발급과 검증
 - System : 서비스 헬스, 버전, 서버 자체 메트릭
@@ -179,7 +195,7 @@ API_DESCRIPTION = """
 - Accelerators : 가속기 목록, 상세, 실시간 메트릭, 전력, 온도, 파티션
 - Workloads : 클러스터를 지정한 Pod, 컨테이너, 네임스페이스 조회
 - Workloads Global : 클러스터 구분 없이 전체 Pod, 서비스 조회
-- Monitoring : 전체 현황, 전력 요약과 효율, 사용률, 쓰로틀링, 메트릭 시계열, 실시간 스트림(SSE)
+- Monitoring : 전체 현황, 전력 요약과 효율, 사용률, 쓰로틀링, 메트릭 시계열, 실시간 스트림(SSE), 수집 대상별 수집 주기와 저장량, 수집 정책
 - Storage : Ceph 상태, 용량, OSD, 풀, PG
 - OpenStack : 물리 서버(하이퍼바이저), VM, 프로젝트, VM 사용량과 추정 전력
 - Logs : Loki 기반 로그 검색, 라벨, 실시간 스트리밍
@@ -266,6 +282,7 @@ app.include_router(metering.router, prefix=V2, tags=["Metering"], dependencies=P
 app.include_router(faults.router, prefix=V2, tags=["Faults"], dependencies=PROTECTED)
 app.include_router(recovery_policies.router, prefix=V2, tags=["Recovery Policies"], dependencies=PROTECTED)
 app.include_router(recovery.router, prefix=V2, tags=["Recovery"], dependencies=PROTECTED)
+app.include_router(collection.router, prefix=V2, tags=["Monitoring"], dependencies=PROTECTED)
 
 # ============================================================================
 # Root

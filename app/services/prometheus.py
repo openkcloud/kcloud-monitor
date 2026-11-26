@@ -51,6 +51,22 @@ class PrometheusClient:
             logger.warning("Prometheus instant query error: %s — query=%r", exc, query)
             return []
 
+    async def active_targets(self) -> Optional[list[dict]]:
+        """Prometheus 가 직접 가져오는(pull) 수집 대상 목록.
+
+        GET {base_url}/api/v1/targets?state=active
+        성공 시 data.activeTargets, 오류 시 None (빈 목록과 구분).
+        """
+        url = f"{self.base_url}/api/v1/targets"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(url, params={"state": "active"})
+                r.raise_for_status()
+                return r.json()["data"]["activeTargets"]
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            logger.warning("Prometheus targets error: %s", exc)
+            return None
+
     async def range_query(
         self,
         query: str,
